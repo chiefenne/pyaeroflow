@@ -88,9 +88,17 @@ def vorticity(grad):
 
 
 def _source(model, nu_tilde, vort, distance, grad_sq, switch):
-    """SA source with the transition model's intermittency (cell-local)."""
+    """SA source with the transition model's intermittency (cell-local).
+
+    gamma is frozen in every linearisation (Picard on gamma, as SU2 does):
+    the residual uses its current value, but neither the Newton-Krylov JVP
+    nor the first-order source Jacobian differentiates it. Both square roots
+    of the BCM formula have unbounded slope (at onset and as nu_t -> 0), so
+    the exact derivative makes the linear systems stiff and the Newton steps
+    erratic.
+    """
     nu = kinematic_viscosity(model)
-    gamma = intermittency(model, nu_tilde, vort, distance)
+    gamma = jax.lax.stop_gradient(intermittency(model, nu_tilde, vort, distance))
     return sa.source(
         nu_tilde,
         nu,
@@ -259,7 +267,8 @@ def source_blocks(model, geom, bc, w):
     # operator: a positive dP/d nu_tilde larger than the pseudo-time
     # diagonal makes the implicit step unstable at large CFL (seen with the
     # BCM model, whose laminar state is only weakly damped). The residual
-    # and the Newton-Krylov JVP are exact; this is the first-order
+    # is exact and the Newton-Krylov JVP exact up to the frozen intermittency
+    # (see _source); this is the first-order
     # Jacobian used for pseudo-time steps and as preconditioner.
     blocks = jnp.zeros((w.shape[0], 4, 4))
     return blocks.at[:, NT, NT].set(-geom.area * jnp.minimum(d_src, 0.0))

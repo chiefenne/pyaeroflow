@@ -20,6 +20,12 @@
 - The SA source Jacobian in the first-order system keeps only its negative
   (damping) part; the positive production derivative made the 96 × 64 BCM
   plate diverge in ν̃ at CFL 10³.
+- The BCM intermittency is frozen in every linearisation (Picard on γ, as
+  SU2): the residual is unchanged, but neither the Newton-Krylov JVP nor the
+  first-order source Jacobian differentiates γ. Both square roots of the BCM
+  formula have unbounded slope (at onset and as ν_t → 0, dγ/d(ν_t/ν) ≈ 6500
+  at ν_t/ν = 3·10⁻⁷), which made the E387 linear systems stiff (GMRES
+  counts near 200) and the Newton steps erratic.
 - Verified on the TMR plate at Re_L = 5·10⁵: laminar at Tu 0.1 %, transition
   at Re_x = 1.2·10⁵ at Tu 3.3 % (T3A); `docs/validation.md` section 7,
   example `examples/cases/flat_plate_transition.toml`. The discrete problem
