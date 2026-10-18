@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from aerojax.cases import tmr_flat_plate as tp
+from pyaeroflow.cases import tmr_flat_plate as tp
 
 
 def test_turbulent_plate_coarse():

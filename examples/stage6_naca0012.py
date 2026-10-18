@@ -14,9 +14,9 @@ from pathlib import Path
 
 import numpy as np
 
-from aerojax.cases import naca0012
-from aerojax.io import write_vtu
-from aerojax.physics import rans
+from pyaeroflow.cases import naca0012
+from pyaeroflow.io import write_vtu
+from pyaeroflow.physics import rans
 
 OUT = Path(__file__).parent / "output"
 COLORS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100")

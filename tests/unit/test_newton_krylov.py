@@ -5,10 +5,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from aerojax.driver import IncompressibleProblem
-from aerojax.mesh import rectangle
-from aerojax.physics import incompressible as inc
-from aerojax.solver import (
+from pyaeroflow.driver import IncompressibleProblem
+from pyaeroflow.mesh import rectangle
+from pyaeroflow.physics import incompressible as inc
+from pyaeroflow.solver import (
     LinearSettings,
     PseudoTimeSettings,
     factorize,
@@ -99,7 +99,7 @@ def test_matrix_free_gmres_solves_sparse_system():
 
 
 def test_nk_settings_in_config():
-    from aerojax.config import resolve
+    from pyaeroflow.config import resolve
 
     raw = {
         "mesh": {"file": "m.su2"},

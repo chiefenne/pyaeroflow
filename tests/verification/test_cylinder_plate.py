@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from aerojax.cases import cylinder, flat_plate
+from pyaeroflow.cases import cylinder, flat_plate
 
 
 def test_blasius_ode():

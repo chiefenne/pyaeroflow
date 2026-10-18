@@ -4,7 +4,7 @@ import tomllib
 
 import pytest
 
-from aerojax.config import ConfigError, load_case, resolve
+from pyaeroflow.config import ConfigError, load_case, resolve
 
 MINIMAL = {
     "mesh": {"file": "m.su2"},

@@ -1,7 +1,7 @@
 """Stage 6 validation on the PyAero NACA 0012 meshes: polar and C_p vs experiment.
 
 Runs the fully turbulent polar at Re = 6e6 (alpha 0, 4, 8, 10, 12 as a
-restart chain) with ``aerojax polar`` on the 113-points-per-side mesh
+restart chain) with ``pyaeroflow polar`` on the 113-points-per-side mesh
 (100k cells, ~30 minutes on two cores) and on the 472-points-per-side mesh
 (295k cells, several times longer), and plots both against Ladson's tripped
 data (NASA TM 4074) and the TMR SA values, and the C_p at alpha = 10 against
@@ -33,7 +33,7 @@ TMR = {0.0: (0.0, 0.0081925), 10.0: (1.0909, 0.012311), 15.0: (1.5461, 0.021237)
 
 def data(name):
     """Return packaged experimental data as a structured array."""
-    path = files("aerojax.cases") / "data" / name
+    path = files("pyaeroflow.cases") / "data" / name
     # Two comment lines (source) precede the header.
     return np.genfromtxt(path, delimiter=",", names=True, skip_header=2)
 
@@ -51,7 +51,14 @@ def main():
         runs = HERE / "cases" / "output" / name
         if "--plot-only" not in sys.argv and (name, label, colour) in selected:
             case = HERE / "cases" / f"{name}.toml"
-            args = [sys.executable, "-m", "aerojax.cli", "polar", str(case), "--alpha"]
+            args = [
+                sys.executable,
+                "-m",
+                "pyaeroflow.cli",
+                "polar",
+                str(case),
+                "--alpha",
+            ]
             subprocess.run(args + [f"{a:g}" for a in ANGLES], check=True)
         csv = runs / f"{name}.polar.csv"
         if not csv.exists():

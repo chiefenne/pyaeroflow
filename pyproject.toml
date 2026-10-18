@@ -3,9 +3,9 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aerojax"
+name = "pyaeroflow"
 version = "0.7.2"
-description = "2D unstructured cell-centred finite-volume Navier-Stokes/RANS solver in Python/JAX with SU2-based numerics (companion to PyAero)"
+description = "PyAeroFlow: 2D unstructured cell-centred finite-volume Navier-Stokes/RANS solver in JAX with SU2-based numerics (companion to PyAero)"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -23,16 +23,16 @@ plot = ["matplotlib>=3.8"]
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [project.urls]
-Repository = "https://github.com/chiefenne/aerojax"
+Repository = "https://github.com/chiefenne/pyaeroflow"
 
 [project.scripts]
-aerojax = "aerojax.cli:main"
+pyaeroflow = "pyaeroflow.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-aerojax = ["cases/data/*.csv"]
+pyaeroflow = ["cases/data/*.csv"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

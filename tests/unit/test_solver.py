@@ -5,9 +5,9 @@ import jax.numpy as jnp
 import numpy as np
 import scipy.sparse as sp
 
-from aerojax.mesh import rectangle
-from aerojax.numerics import build_geometry
-from aerojax.solver import (
+from pyaeroflow.mesh import rectangle
+from pyaeroflow.numerics import build_geometry
+from pyaeroflow.solver import (
     PseudoTimeSettings,
     divergence,
     first_order_jacobian,

@@ -7,7 +7,7 @@
 # Reynolds number the upper surface has a laminar separation bubble around
 # mid-chord; the transition location in the summary (max nu_t/nu > 1) and
 # the wall CSV (cp, cf, nu_t_ratio_max) show where the model puts it.
-# Polar: aerojax polar examples/cases/e387_transition.toml --alpha -2 0 2 4 6 8
+# Polar: pyaeroflow polar examples/cases/e387_transition.toml --alpha -2 0 2 4 6 8
 # The freestream nu_tilde must be laminar (nu_tilde/nu = 0.1), see
 # docs/pyaero.md section 7.1.
 

@@ -2,6 +2,12 @@
 
 ## Unreleased (0.8) – Transition, step 1: SA-BCM
 
+- Renamed from `aerojax` to `pyaeroflow`: repository
+  github.com/chiefenne/pyaeroflow (the old URL redirects), package, import,
+  command and conda environment, all lower case. PyAeroFlow is the written
+  name in titles, prose and the log header. Case files, meshes and result
+  files are unchanged. Reinstall with
+  `pip uninstall aerojax && pip install -e .`.
 - BCM transition model (Cakmakcioglu et al., 2020 revision, SU2 form):
   `physics.transition.model = "bcm"` with `turbulence_intensity` (fraction,
   defaults to the inflow table's `intensity`). Algebraic intermittency
@@ -30,7 +36,7 @@
   converged solution converged the limited problem three orders further than
   the unlimited one and every Newton step after the release was rejected. The
   reference residual is now re-evaluated when the operator changes.
-- `aerojax polar` restarts from the lower angle when two computed angles are
+- `pyaeroflow polar` restarts from the lower angle when two computed angles are
   equally near.
 - Measured on the 295k-cell mesh (alpha 4, 65 iterations): SuperLU 1059 s,
   UMFPACK ~13.5 s per factorization instead of 20 s, PARDISO 570 s with a
@@ -100,10 +106,10 @@
 
 ## 0.7 – Restarts, polars, validation on the PyAero mesh (2026-10-15)
 
-- Restart files (`<name>.restart.npz`, `initial.restart`) and `aerojax polar`
+- Restart files (`<name>.restart.npz`, `initial.restart`) and `pyaeroflow polar`
   (angle sweep as a restart chain, merged `<name>.polar.csv`).
 - Prescribed transition per angle of attack (`physics.transition.by_alpha`,
-  interpolated to the case's angle, used by `aerojax polar`); `ramp` blends
+  interpolated to the case's angle, used by `pyaeroflow polar`); `ramp` blends
   the SA production in over a length.
 - Validation of the fully turbulent NACA 0012 polar on the PyAero y⁺ = 1
   mesh against Ladson (NASA TM 4074) and of the C_p at 10° against Gregory
@@ -115,7 +121,7 @@
 
 ## 0.6 – Stage 6: NACA 0012 (2026-10-15)
 
-- Airfoil O-grid generator (`aerojax.mesh.airfoil`): TMR NACA 0012
+- Airfoil O-grid generator (`pyaeroflow.mesh.airfoil`): TMR NACA 0012
   definition, cosine surface spacing with a small blunt trailing edge
   (0.14 % chord: the fan of nearly flat cells of a sharp trailing edge is
   unstable at high Reynolds numbers), marching along smoothed normals
@@ -126,7 +132,7 @@
   boundary layer unlimited, and the reconstruction diverges on the curved
   nose. Newton–Krylov switch at a fixed iteration
   (`newton_krylov.switch_at_iteration`) in addition to the residual drop.
-- Case R2 (`aerojax.cases.naca0012`): C_L, C_D (pressure/viscous), C_M, C_p
+- Case R2 (`pyaeroflow.cases.naca0012`): C_L, C_D (pressure/viscous), C_M, C_p
   and C_f at Re 6e6 vs the TMR SA values. 256 x 128 O-grid (33k cells):
   C_L -0.008 / 1.076 / 1.536 at α = 0 / 10 / 15° (TMR 0 / 1.0909 / 1.5461),
   viscous drag close to TMR, pressure drag too high on the coarse O-grid
@@ -149,7 +155,7 @@
 - PyAero mesh of the NACA 0012 (`examples/meshes/naca0012_pyaero_50k.su2`,
   C-type, 52k cells) read and run as is; its wall spacing suits laminar
   flow (y⁺ ≈ 900 at Re 6e6, see docs/requirements.md).
-- Documentation: `docs/pyaero.md`, the PyAero-to-aerojax workflow (first
+- Documentation: `docs/pyaero.md`, the PyAero-to-PyAeroFlow workflow (first
   layer from y⁺, farfield distance, case file, log, limits).
 - Examples: `examples/stage6_naca0012.py`, TOML cases
   `examples/cases/naca0012_rans.toml` and `naca0012_pyaero_euler.toml`.
@@ -185,7 +191,7 @@
   2uⁿ − uⁿ⁻¹, large starting pseudo-CFL, Newton–Krylov from the first inner
   iteration, inner residual drop relative to R*(uⁿ). 1–2 inner iterations per
   step in smooth flow. `IncompressibleProblem.solve_unsteady`,
-  `aerojax.solver.solve_unsteady`, `DualTimeSettings`.
+  `pyaeroflow.solver.solve_unsteady`, `DualTimeSettings`.
 - Case file: `[time] mode = "unsteady"`, `scheme`, `time_step`, `end_time`,
   `inner_iterations`, `inner_residual_drop`, `inner_cfl`.
 - Output (D45): unsteady log and history layouts (one line per time step with
@@ -245,13 +251,13 @@
   check (R3); walls as slip walls in Euler mode (R5).
 - Solver: block pseudo-time term, SER with minimum CFL growth factor (D35),
   first-order start (D36), explicit Runge–Kutta reference mode (D25).
-- Python API: `aerojax.driver.IncompressibleProblem` with function-valued
+- Python API: `pyaeroflow.driver.IncompressibleProblem` with function-valued
   boundary values (D41).
 - TOML case files (D27–D33): schema with defaults, validation with
   suggestions, resolved configuration with comments, dimensional input and
   internal non-dimensionalisation (D51), Reynolds-number input (D31).
 - Output: `.log` (console and file), history CSV, VTU fields (D45).
-- CLI: `aerojax run case.toml`, `aerojax check case.toml`.
+- CLI: `pyaeroflow run case.toml`, `pyaeroflow check case.toml`.
 - Mesh: `.su2` writer, x-clustering in the rectangle generator.
 - Verification: V1 Couette to round-off (quad, triangle, mixed), V2
   Poiseuille order 1.9–2.1 on four mesh types, B3 cavity vs Ghia et al.
@@ -260,7 +266,7 @@
 
 ## 0.1 – Stage 1: operators and implicit machinery (2026-10-14)
 
-- Finite-volume geometry as JAX arrays (`aerojax.numerics.build_geometry`).
+- Finite-volume geometry as JAX arrays (`pyaeroflow.numerics.build_geometry`).
 - Weighted least-squares gradients on the vertex-neighbour stencil with
   boundary-face values, weights 1/d^q (D22).
 - MUSCL reconstruction and the Venkatakrishnan–Wang limiter (D23).
@@ -271,7 +277,7 @@
 - Direct sparse LU (D32) and implicit pseudo-time stepping with SER CFL
   control and rejection safeguards (D35).
 - Model problem: steady scalar convection–diffusion with an exact exponential
-  solution (`aerojax.physics.convection_diffusion`, `aerojax.cases`).
+  solution (`pyaeroflow.physics.convection_diffusion`, `pyaeroflow.cases`).
 - Verification: observed order 1.9–2.1 on the two finest of four levels for
   quadrilateral, triangle, polygon and mixed meshes (regular and perturbed);
   convergence by 11 orders of magnitude in 17–29 iterations.

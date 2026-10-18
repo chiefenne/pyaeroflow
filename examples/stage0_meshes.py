@@ -12,8 +12,8 @@ from pathlib import Path
 
 import numpy as np
 
-from aerojax.io import write_vtu
-from aerojax.mesh import rectangle
+from pyaeroflow.io import write_vtu
+from pyaeroflow.mesh import rectangle
 
 OUT = Path(__file__).parent / "output"
 CELL_TYPES = ("quad", "triangle", "polygon", "mixed")
@@ -57,7 +57,7 @@ def plot(meshes):
     except ImportError:
         print("matplotlib not installed: no plot")
         return
-    from aerojax.plotting import plot_mesh
+    from pyaeroflow.plotting import plot_mesh
 
     rows, cols = len(VARIANTS), len(CELL_TYPES)
     fig, axes = plt.subplots(rows, cols, figsize=(4.2 * cols, 3.1 * rows))

@@ -2,7 +2,7 @@
 
 import pytest
 
-from aerojax.mesh import rectangle
+from pyaeroflow.mesh import rectangle
 
 matplotlib = pytest.importorskip("matplotlib")
 matplotlib.use("Agg")
@@ -11,7 +11,7 @@ matplotlib.use("Agg")
 def test_plot_mesh(tmp_path):
     import matplotlib.pyplot as plt
 
-    from aerojax.plotting import plot_mesh
+    from pyaeroflow.plotting import plot_mesh
 
     mesh = rectangle(4, 3, cell_type="mixed")
     ax = plot_mesh(mesh)

@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from aerojax.cases import cavity
+from pyaeroflow.cases import cavity
 
 
 def deviations(r):

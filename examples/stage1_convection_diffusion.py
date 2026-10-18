@@ -14,9 +14,9 @@ from pathlib import Path
 
 import numpy as np
 
-from aerojax.cases import convection_diffusion as case
-from aerojax.io import write_vtu
-from aerojax.physics.convection_diffusion import ConvectionDiffusion
+from pyaeroflow.cases import convection_diffusion as case
+from pyaeroflow.io import write_vtu
+from pyaeroflow.physics.convection_diffusion import ConvectionDiffusion
 
 OUT = Path(__file__).parent / "output"
 LEVELS = (8, 16, 32, 64)

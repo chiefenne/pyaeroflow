@@ -13,8 +13,8 @@ from pathlib import Path
 
 import numpy as np
 
-from aerojax.cases import cylinder, flat_plate
-from aerojax.io import write_vtu
+from pyaeroflow.cases import cylinder, flat_plate
+from pyaeroflow.io import write_vtu
 
 OUT = Path(__file__).parent / "output"
 COLORS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100")
@@ -108,7 +108,7 @@ def plot(euler, dfg, plate):
             r.cp[order],
             color=COLORS[k],
             lw=2,
-            label=f"aerojax O-grid {nt}x{nr}",
+            label=f"PyAeroFlow O-grid {nt}x{nr}",
         )
     th = np.linspace(-np.pi, np.pi, 361)
     ax.plot(
@@ -154,7 +154,7 @@ def plot(euler, dfg, plate):
 
     ax = axes[1, 0]
     x = plate.x
-    ax.plot(x, plate.cf, color=COLORS[0], lw=2, label="aerojax")
+    ax.plot(x, plate.cf, color=COLORS[0], lw=2, label="PyAeroFlow")
     ax.plot(
         x[x > 0.02],
         plate.cf_blasius[x > 0.02],
@@ -178,7 +178,7 @@ def plot(euler, dfg, plate):
         color=COLORS[0],
         mfc="white",
         ms=6,
-        label=f"aerojax, x = {plate.x_profile}",
+        label=f"PyAeroFlow, x = {plate.x_profile}",
     )
     ax.plot(plate.u_blasius, plate.eta, "-", color="0.3", lw=1.5, label="Blasius f'(η)")
     ax.set(xlabel="u / U", ylabel="η = y √(U / (ν x))", title="B1: velocity profile")

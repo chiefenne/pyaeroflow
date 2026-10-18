@@ -4,8 +4,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from aerojax.mesh import rectangle
-from aerojax.numerics import (
+from pyaeroflow.mesh import rectangle
+from pyaeroflow.numerics import (
     boundary_face_gradient,
     build_geometry,
     interior_face_gradient,

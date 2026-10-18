@@ -16,8 +16,8 @@ from pathlib import Path
 
 import numpy as np
 
-from aerojax.cases import cavity, channel
-from aerojax.io import write_vtu
+from pyaeroflow.cases import cavity, channel
+from pyaeroflow.io import write_vtu
 
 OUT = Path(__file__).parent / "output"
 COLORS = ("#2a78d6", "#eb6834", "#1baf7a")
@@ -79,7 +79,7 @@ def plot(cavities, pois):
             np.column_stack((np.full_like(y, 0.5), y)),
             np.column_stack((y, np.full_like(y, 0.5))),
         )
-        label = f"aerojax Re {re} ({mesh.n_cells} cells)"
+        label = f"PyAeroFlow Re {re} ({mesh.n_cells} cells)"
         ax1.plot(u_line, y, color=COLORS[k], lw=2, label=label)
         ax1.plot(
             r.ghia_u,
@@ -105,7 +105,9 @@ def plot(cavities, pois):
 
     mesh = pois.problem.mesh
     yc = mesh.cell_centroid[:, 1]
-    ax3.plot(pois.w[:, 1], yc, ".", color=COLORS[0], ms=4, label="aerojax, cell values")
+    ax3.plot(
+        pois.w[:, 1], yc, ".", color=COLORS[0], ms=4, label="PyAeroFlow, cell values"
+    )
     ys = np.linspace(0.0, 1.0, 100)
     ax3.plot(
         1.0 / (2 * 0.1) * ys * (1 - ys), ys, "-", color="0.3", lw=1.5, label="exact"

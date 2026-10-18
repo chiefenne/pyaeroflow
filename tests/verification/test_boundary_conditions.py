@@ -3,12 +3,12 @@
 import numpy as np
 import pytest
 
-from aerojax.cases import channel
-from aerojax.driver import IncompressibleProblem
-from aerojax.mesh import rectangle
-from aerojax.physics import forces as fz
-from aerojax.physics import incompressible as inc
-from aerojax.solver import PseudoTimeSettings
+from pyaeroflow.cases import channel
+from pyaeroflow.driver import IncompressibleProblem
+from pyaeroflow.mesh import rectangle
+from pyaeroflow.physics import forces as fz
+from pyaeroflow.physics import incompressible as inc
+from pyaeroflow.solver import PseudoTimeSettings
 
 
 def test_couette_wall_forces_and_skin_friction():

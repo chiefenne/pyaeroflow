@@ -1,9 +1,9 @@
-# aerojax – Case configuration
+# PyAeroFlow – Case configuration
 
 **Status:** implemented for steady and unsteady laminar, Euler and RANS (SA-neg) cases (stage 6). Keys of
 later stages are listed here for completeness and rejected by the validator
 with a pointer to the stage. The schema of record is
-`src/aerojax/config/schema.py`; `aerojax check case.toml` prints the resolved
+`src/pyaeroflow/config/schema.py`; `pyaeroflow check case.toml` prints the resolved
 configuration with every default.
 
 
@@ -198,7 +198,7 @@ case file (D42).
 | `mode` | `"none"` \| `"prescribed"` | `"none"` | `"none"` = fully turbulent | D15 |
 | `model` | `"none"` \| `"bcm"` | `"none"` | Transition model (L3, step 1). `"bcm"`: the algebraic intermittency of Cakmakcioglu, Bas, Mura & Kaynak (2020 revision, as in SU2) multiplies the SA production: γ = 1 − exp(−√T₁ − √T₂) with T₁ from the vorticity Reynolds number d²Ω/ν against Menter's critical Re_θ(Tu) and T₂ = 50 ν_t/ν; SA runs without the f_t2 term (SA-noft2-BCM). Combines with `mode = "prescribed"` (both factors multiply). Needs a laminar freestream: inflow `turbulence = { nu_tilde_ratio = 0.1 }` or `{ turbulent_viscosity_ratio = 2.8e-7, intensity = … }` — with the fully turbulent value 3 the second term makes γ = 0.96 everywhere (a notice says so). Output: `intermittency` field in the VTU, `nu_t_ratio_max` in the wall CSV, transition locations in the summary | L3 |
 | `turbulence_intensity` | float | inflow table | Freestream turbulence intensity Tu as a fraction (0.001 = 0.1 %) for the transition model; default: the `intensity` of an inflow turbulence table. Free flight 0.0005–0.001, wind tunnels 0.001–0.01, the T3A plate 0.033. The model's critical Re_θ = 803.73 (100 Tu + 0.6067)^−1.027 is printed in the log | L3 |
-| `boundary`, `ramp`, `by_alpha` | string, float (m), array of tables | – | Transition locations per angle of attack: `by_alpha = [{ alpha = 0, upper = 0.45, lower = 0.45 }, …]` (deg; metres from the leading edge, XFOIL's `xtr` times the chord), interpolated linearly to the case's angle (`reference.angle_of_attack`, by default the farfield value; end rows held beyond the table) and turned into two `laminar_region` entries on `boundary` with the given `ramp`. Used by `aerojax polar` per angle | D15 |
+| `boundary`, `ramp`, `by_alpha` | string, float (m), array of tables | – | Transition locations per angle of attack: `by_alpha = [{ alpha = 0, upper = 0.45, lower = 0.45 }, …]` (deg; metres from the leading edge, XFOIL's `xtr` times the chord), interpolated linearly to the case's angle (`reference.angle_of_attack`, by default the farfield value; end rows held beyond the table) and turned into two `laminar_region` entries on `boundary` with the given `ramp`. Used by `pyaeroflow polar` per angle | D15 |
 | `laminar_region` | array of tables | – | Regions where SA production is switched off, e.g. `[{ boundary = "airfoil", side = "upper", x_max = 0.35 }]`: cells whose nearest wall face belongs to `boundary` (required), optionally only on one `side` (`"upper"`: the fluid lies above the wall, `"lower"`: below) and within `x_min`, `x_max`, `y_min`, `y_max` (m); `ramp` (m) blends the production in linearly over that distance inside each bound instead of a hard cut, which keeps the SA source differentiable at the transition front | D15 |
 
 ### `[fluid]`
@@ -223,7 +223,7 @@ Either explicit values or `from_boundary`, not both.
 | `pressure` | float | – | Gauge pressure in Pa | D16 |
 | `turbulence` | table | ν̃/ν = 3 | See [Turbulence values](#turbulence-values) | D16, D33 |
 | `from_boundary` | string | name of the farfield boundary, if exactly one exists | Uniform field equal to the state of this boundary | D28 |
-| `restart` | path | – | Restart file `<name>.restart.npz` of a previous run on the same mesh (relative to the case file); overrides `velocity`/`pressure`/`from_boundary` for the field. The mesh is checked by a fingerprint; a laminar restart used for a RANS case keeps the default ν̃. `aerojax polar case.toml --alpha 0 4 8` runs an angle sweep as a restart chain and writes `<name>.polar.csv` | D45 |
+| `restart` | path | – | Restart file `<name>.restart.npz` of a previous run on the same mesh (relative to the case file); overrides `velocity`/`pressure`/`from_boundary` for the field. The mesh is checked by a fingerprint; a laminar restart used for a RANS case keeps the default ν̃. `pyaeroflow polar case.toml --alpha 0 4 8` runs an angle sweep as a restart chain and writes `<name>.polar.csv` | D45 |
 
 If `[initial]` is missing and the case has no single farfield boundary, the
 case is rejected with a message asking for `[initial]`.

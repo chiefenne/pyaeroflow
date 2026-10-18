@@ -16,8 +16,8 @@ from pathlib import Path
 
 import numpy as np
 
-from aerojax.cases import cylinder, taylor_green
-from aerojax.io import write_pvd, write_vtu
+from pyaeroflow.cases import cylinder, taylor_green
+from pyaeroflow.io import write_pvd, write_vtu
 
 OUT = Path(__file__).parent / "output"
 COLORS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100")

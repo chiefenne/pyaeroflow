@@ -3,9 +3,9 @@
 import numpy as np
 import pytest
 
-from aerojax.cases import naca0012
-from aerojax.mesh import airfoil_ogrid, airfoil_points, naca0012_ogrid
-from aerojax.mesh import naca0012 as thickness
+from pyaeroflow.cases import naca0012
+from pyaeroflow.mesh import airfoil_ogrid, airfoil_points, naca0012_ogrid
+from pyaeroflow.mesh import naca0012 as thickness
 
 
 def test_airfoil_geometry_and_ogrid():
@@ -54,10 +54,10 @@ def test_naca0012_medium(alpha):
 
 
 def euler_lift(mesh, vortex, alpha=10.0):
-    from aerojax.driver import IncompressibleProblem
-    from aerojax.physics import forces as fz
-    from aerojax.physics import incompressible as inc
-    from aerojax.solver import PseudoTimeSettings
+    from pyaeroflow.driver import IncompressibleProblem
+    from pyaeroflow.physics import forces as fz
+    from pyaeroflow.physics import incompressible as inc
+    from pyaeroflow.solver import PseudoTimeSettings
 
     a = np.radians(alpha)
     conditions = {
@@ -104,7 +104,7 @@ def test_naca0012_pyaero_mesh_alpha10():
     C_L -0.9 %, viscous drag +1.6 %, pressure drag +13 % vs TMR; about 8 min."""
     from pathlib import Path
 
-    from aerojax.mesh import read_su2
+    from pyaeroflow.mesh import read_su2
 
     mesh = read_su2(
         Path(__file__).parents[2] / "examples/meshes/naca0012_pyaero_100k_y1.su2"

@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from aerojax.cases import channel
-from aerojax.physics import incompressible as inc
+from pyaeroflow.cases import channel
+from pyaeroflow.physics import incompressible as inc
 
 
 @pytest.mark.parametrize(

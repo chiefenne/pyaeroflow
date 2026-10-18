@@ -1,4 +1,4 @@
-# From a PyAero mesh to an aerojax result
+# From a PyAero mesh to a PyAeroFlow result
 
 This page is the workflow for airfoil cases: mesh settings in PyAero that the
 solver depends on, the case file, what to look at in the log and the output,
@@ -205,8 +205,8 @@ Notes on the choices:
 ## 4. Running and reading the log
 
 ```
-aerojax check case.toml      # validates, prints every setting with its default
-aerojax run case.toml        # writes <name>.log, .history.csv, .vtu, .wall_<boundary>.csv
+pyaeroflow check case.toml      # validates, prints every setting with its default
+pyaeroflow run case.toml        # writes <name>.log, .history.csv, .vtu, .wall_<boundary>.csv
 ```
 
 The log (also readable with `tail -f`) has these parts:
@@ -260,7 +260,7 @@ from it (same mesh, checked by a fingerprint). An angle-of-attack sweep is
 one command:
 
 ```
-aerojax polar examples/cases/naca0012_pyaero_rans.toml --alpha 0 4 8 10 12
+pyaeroflow polar examples/cases/naca0012_pyaero_rans.toml --alpha 0 4 8 10 12
 ```
 
 Each angle restarts from the previous one (about 35 instead of 44
@@ -354,7 +354,7 @@ How to fill the table:
    angle of attack).
 3. The case's angle of attack (`reference.angle_of_attack`, by default the
    farfield value) picks the row, with linear interpolation between rows and
-   the end rows held beyond the table. `aerojax polar` re-resolves the case
+   the end rows held beyond the table. `pyaeroflow polar` re-resolves the case
    per angle, so one table serves the whole sweep; the generated regions
    appear in `<name>.resolved.toml`.
 

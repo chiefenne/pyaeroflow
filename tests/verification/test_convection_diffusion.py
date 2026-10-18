@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from aerojax.cases import convection_diffusion as case
-from aerojax.physics.convection_diffusion import ConvectionDiffusion
+from pyaeroflow.cases import convection_diffusion as case
+from pyaeroflow.physics.convection_diffusion import ConvectionDiffusion
 
 LEVELS = (8, 16, 32, 64)
 MODEL = ConvectionDiffusion()

@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from aerojax.mesh import MeshError, read_su2
+from pyaeroflow.mesh import MeshError, read_su2
 
 # Same layout as PyAero's writer: NPOIN before NELEM, trailing indices.
 MIXED_MESH = """\

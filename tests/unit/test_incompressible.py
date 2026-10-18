@@ -5,10 +5,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from aerojax.driver import IncompressibleProblem
-from aerojax.mesh import rectangle
-from aerojax.numerics import build_geometry, lsq_gradient
-from aerojax.physics import incompressible as inc
+from pyaeroflow.driver import IncompressibleProblem
+from pyaeroflow.mesh import rectangle
+from pyaeroflow.numerics import build_geometry, lsq_gradient
+from pyaeroflow.physics import incompressible as inc
 
 
 def test_abs_preconditioned_jacobian_matches_eigendecomposition():

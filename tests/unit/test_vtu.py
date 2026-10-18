@@ -6,8 +6,8 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import pytest
 
-from aerojax.io import write_vtu
-from aerojax.mesh import rectangle
+from pyaeroflow.io import write_vtu
+from pyaeroflow.mesh import rectangle
 
 _DTYPES = {"Float64": np.float64, "Int64": np.int64, "UInt8": np.uint8}
 

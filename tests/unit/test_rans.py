@@ -4,13 +4,13 @@ import jax
 import numpy as np
 import pytest
 
-from aerojax.config import resolve
-from aerojax.driver import IncompressibleProblem
-from aerojax.mesh import rectangle, split_boundary
-from aerojax.numerics.wall_distance import mesh_wall_distance, wall_distance
-from aerojax.physics import incompressible as inc
-from aerojax.physics import spalart_allmaras as sa
-from aerojax.run import run_case, turbulence_values
+from pyaeroflow.config import resolve
+from pyaeroflow.driver import IncompressibleProblem
+from pyaeroflow.mesh import rectangle, split_boundary
+from pyaeroflow.numerics.wall_distance import mesh_wall_distance, wall_distance
+from pyaeroflow.physics import incompressible as inc
+from pyaeroflow.physics import spalart_allmaras as sa
+from pyaeroflow.run import run_case, turbulence_values
 
 
 def test_sa_eddy_viscosity_conversions():
@@ -213,8 +213,8 @@ directory = "out"
 
 
 def test_run_case_rans(tmp_path):
-    from aerojax.cases.tmr_flat_plate import plate_mesh
-    from aerojax.mesh import write_su2
+    from pyaeroflow.cases.tmr_flat_plate import plate_mesh
+    from pyaeroflow.mesh import write_su2
 
     write_su2(tmp_path / "plate.su2", plate_mesh(24, 6, 24, reynolds=1.0e5))
     (tmp_path / "plate.toml").write_text(PLATE_TOML)
@@ -239,8 +239,8 @@ def test_run_case_bcm_transition(tmp_path):
     """The BCM model through the case file: Tu from the inflow table, log
     rows, intermittency in the VTU and the wall CSV, transition location in
     the summary."""
-    from aerojax.cases.tmr_flat_plate import plate_mesh
-    from aerojax.mesh import write_su2
+    from pyaeroflow.cases.tmr_flat_plate import plate_mesh
+    from pyaeroflow.mesh import write_su2
 
     toml = (
         PLATE_TOML.replace(

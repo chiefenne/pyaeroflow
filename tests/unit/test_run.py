@@ -5,9 +5,9 @@ import tomllib
 import numpy as np
 import pytest
 
-from aerojax.cli import main
-from aerojax.mesh import rectangle, write_su2
-from aerojax.run import run_case
+from pyaeroflow.cli import main
+from pyaeroflow.mesh import rectangle, write_su2
+from pyaeroflow.run import run_case
 
 COUETTE = """
 [case]
@@ -185,8 +185,8 @@ directory = "out"
 
 
 def test_polar_runs_a_restart_chain(tmp_path):
-    from aerojax.mesh import annulus
-    from aerojax.run import run_polar
+    from pyaeroflow.mesh import annulus
+    from pyaeroflow.run import run_polar
 
     write_su2(tmp_path / "annulus.su2", annulus(32, 8, outer_radius=10.0, growth=1.3))
     (tmp_path / "cyl.toml").write_text(POLAR)

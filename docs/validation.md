@@ -20,7 +20,7 @@ October 2026, v0.7.1; section 7 from the 0.8 development).
 | 4 | DFG 2D-2 shedding | validation | Schäfer & Turek 1996 | same |
 | 5 | turbulent flat plate | validation | NASA TMR, SA | `examples/stage5_rans.py` |
 | 6 | NACA 0012, Re 6·10⁶ | validation | Ladson 1988, Gregory & O'Reilly 1970, NASA TMR | `examples/stage6_pyaero_validation.py` |
-| 7 (0.8) | BCM transition, flat plate | verification/validation | Blasius, ERCOFTAC T3A | `tests/verification/test_rans_plate.py`, `aerojax run examples/cases/flat_plate_transition.toml` |
+| 7 (0.8) | BCM transition, flat plate | verification/validation | Blasius, ERCOFTAC T3A | `tests/verification/test_rans_plate.py`, `pyaeroflow run examples/cases/flat_plate_transition.toml` |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
 the scripts write) is not tracked.

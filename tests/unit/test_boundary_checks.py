@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from aerojax.mesh import Mesh, MeshError
+from pyaeroflow.mesh import Mesh, MeshError
 
 # 2 x 1 quads on [0, 2] x [0, 1]; nodes 0-2 bottom row, 3-5 top row.
 NODES = np.array([[0, 0], [1, 0], [2, 0], [0, 1], [1, 1], [2, 1]], dtype=float)

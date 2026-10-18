@@ -14,9 +14,9 @@ from pathlib import Path
 import numpy as np
 from scipy.interpolate import LinearNDInterpolator
 
-from aerojax.cases import tmr_flat_plate as tp
-from aerojax.io import write_vtu
-from aerojax.physics import rans
+from pyaeroflow.cases import tmr_flat_plate as tp
+from pyaeroflow.io import write_vtu
+from pyaeroflow.physics import rans
 
 OUT = Path(__file__).parent / "output"
 COLORS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100")
@@ -79,7 +79,7 @@ def plot(runs):
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
     ax = axes[0]
     for k, ((nxp, ny), r) in enumerate(runs.items()):
-        ax.plot(r.x, r.cf, color=COLORS[k], lw=2, label=f"aerojax {nxp}x{ny}")
+        ax.plot(r.x, r.cf, color=COLORS[k], lw=2, label=f"PyAeroFlow {nxp}x{ny}")
     ref = r.reference
     ax.plot([0.97], [ref["cf_097"]], "k*", ms=12, label="TMR SA, x = 0.97")
     x = np.linspace(0.05, 2.0, 100)
@@ -108,7 +108,7 @@ def plot(runs):
         color=COLORS[0],
         mfc="white",
         ms=5,
-        label="aerojax, x = 0.97",
+        label="PyAeroFlow, x = 0.97",
     )
     yp = np.geomspace(1.0, 3000.0, 100)
     ax.semilogx(yp[yp < 12], yp[yp < 12], "--", color="0.3", lw=1, label="u+ = y+")

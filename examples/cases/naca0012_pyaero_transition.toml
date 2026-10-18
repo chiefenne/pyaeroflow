@@ -25,7 +25,7 @@ by_alpha = [                      # transition locations in m from the leading
   { alpha = 0.0, upper = 0.45, lower = 0.45 },   # edge (XFOIL xtr times the
   { alpha = 4.0, upper = 0.30, lower = 0.60 },   # chord), interpolated to the
   { alpha = 8.0, upper = 0.10, lower = 0.75 },   # case's angle of attack; also
-]                                 # used by "aerojax polar". PLACEHOLDER values:
+]                                 # used by "pyaeroflow polar". PLACEHOLDER values:
                                   # replace by XFOIL's e^N results for your case.
 
 [fluid]

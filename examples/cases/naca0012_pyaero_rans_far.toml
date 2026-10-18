@@ -5,7 +5,7 @@
 # point-vortex farfield correction. Same numerics as naca0012_pyaero_rans.toml
 # (D54); the two cases differ only in the farfield distance (5 vs 25 chords)
 # and separate the farfield influence from the rest. Polar:
-#   aerojax polar examples/cases/naca0012_pyaero_rans_far.toml --alpha 0 4 8 10 12
+#   pyaeroflow polar examples/cases/naca0012_pyaero_rans_far.toml --alpha 0 4 8 10 12
 # Result: CL within 0.5 % of the 5-chord mesh, pressure drag 24 % higher at
 # 10 deg (0.00852 vs 0.00687; TMR 0.00606) - the farfield distance is not
 # the cause of the pressure-drag excess. Table in docs/pyaero.md, section 8.

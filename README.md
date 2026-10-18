@@ -1,8 +1,10 @@
-# aerojax
+# PyAeroFlow
 
 2D unstructured cell-centred finite-volume Navier–Stokes/RANS solver in
-Python/JAX, developed as a companion to
+JAX, developed as a companion to
 [PyAero](https://github.com/chiefenne/PyAero).
+Command and package: `pyaeroflow`. Formerly named *aerojax* (renamed in 0.8;
+not related to other projects of that name).
 
 **Status:** stage 6 of the [stage plan](docs/requirements.md#7-stage-plan-d53):
 steady and unsteady laminar, inviscid and RANS (Spalart–Allmaras, SA-neg)
@@ -23,20 +25,20 @@ directly).
 
 ## Installation
 
-aerojax needs a conda environment from conda-forge. On Intel Macs this is the
+PyAeroFlow needs a conda environment from conda-forge. On Intel Macs this is the
 only source of `jaxlib`.
 
 ```
 conda env create -f environment.yml
-conda activate aerojax
+conda activate pyaeroflow
 pip install -e . --no-deps
 ```
 
 ## Running a case
 
 ```
-aerojax check case.toml        # validate, print the resolved configuration
-aerojax run case.toml          # solve; writes <name>.log, .history.csv, .vtu
+pyaeroflow check case.toml        # validate, print the resolved configuration
+pyaeroflow run case.toml          # solve; writes <name>.log, .history.csv, .vtu
 ```
 
 Example case files are in `examples/cases/` (generate their meshes first with
@@ -44,7 +46,7 @@ Example case files are in `examples/cases/` (generate their meshes first with
 meshes of the NACA 0012: 5- and 25-chord tunnels with 113 points per
 airfoil side, and a 5-chord tunnel with 472). The case-file reference is
 [docs/configuration.md](docs/configuration.md); the same setup is available
-from Python through `aerojax.driver.IncompressibleProblem`.
+from Python through `pyaeroflow.driver.IncompressibleProblem`.
 
 ## Tests and examples
 

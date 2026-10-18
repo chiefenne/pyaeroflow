@@ -5,8 +5,8 @@ python examples/cases/make_meshes.py
 
 from pathlib import Path
 
-from aerojax.cases.tmr_flat_plate import plate_mesh
-from aerojax.mesh import annulus, naca0012_ogrid, rectangle, write_su2
+from pyaeroflow.cases.tmr_flat_plate import plate_mesh
+from pyaeroflow.mesh import annulus, naca0012_ogrid, rectangle, write_su2
 
 HERE = Path(__file__).parent
 

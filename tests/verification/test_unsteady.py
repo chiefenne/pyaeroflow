@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from aerojax.cases import cylinder, taylor_green
-from aerojax.solver import bdf_coefficients
+from pyaeroflow.cases import cylinder, taylor_green
+from pyaeroflow.solver import bdf_coefficients
 
 
 def test_bdf_coefficients():

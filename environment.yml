@@ -1,11 +1,11 @@
-# Tested environment for aerojax: exact versions from conda-forge.
+# Tested environment for PyAeroFlow: exact versions from conda-forge.
 #
 #   conda env create -f environment.yml
-#   conda activate aerojax
+#   conda activate pyaeroflow
 #   pip install -e . --no-deps
 #
 # On Intel macOS, conda-forge is the only source of jaxlib (no PyPI wheels).
-name: aerojax
+name: pyaeroflow
 channels:
   - conda-forge
 dependencies:
