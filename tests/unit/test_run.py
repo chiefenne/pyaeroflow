@@ -155,6 +155,8 @@ def test_restart_file_round_trip(case_dir):
     (case_dir / "restart.toml").write_text(text)
     second = run_case(case_dir / "restart.toml", console=False)
     assert second.converged and second.history["iteration"][-1] <= 5
+    log = (second.output_dir / "couette_restart.log").read_text()
+    assert "initial state from restart file" in log and restart.name in log
     np.testing.assert_allclose(second.w, first.w, atol=1e-9)
 
 

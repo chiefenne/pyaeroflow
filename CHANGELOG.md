@@ -37,6 +37,14 @@
   in `docs/validation.md` section 7: α = 0–6° converge and agree with the
   measurement to 0.015–0.028 in C_L, 5.3 % in C_D, 3.8 % in |c_m|; α = −2°
   and 8° do not converge in 400 iterations.
+- Proportional SER CFL control, opt-in with `solver.cfl.control = "ser"`
+  (D55): factor (m_old/m_new)^p of the per-equation measure clipped to
+  [0.3, 2], no minimum growth; in the Newton–Krylov phase hold from 10 and
+  halve above 30 GMRES iterations instead of the adaptive cap. Used by the
+  E387 case; the default stays `growth`.
+- The log names the restart file a run starts from (Notices), and how many
+  variables it supplies; the misleading notice "initial.restart given:
+  velocity/from_boundary only set the pin" is gone.
 - Documentation fix: C_M is positive counter-clockwise, which is nose-down
   for flow in +x; the docs said nose-up. The solver output is unchanged.
 

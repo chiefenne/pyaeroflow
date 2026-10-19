@@ -265,7 +265,17 @@ def setup(config, mesh=None):
         nu_tilde = tv.chi * mu_nd / rho_nd
     w0 = problem.initial_state(velocity, pressure, nu_tilde)
     if init["restart"] is not None:
-        w0 = load_restart(config.resolve_path(init["restart"]), mesh, w0)
+        restart = config.resolve_path(init["restart"])
+        w0, n_read = load_restart(restart, mesh, w0)
+        source = (
+            f"boundary '{init['from_boundary']}'"
+            if init["from_boundary"] is not None
+            else "initial.velocity/pressure"
+        )
+        note = f"initial state from restart file {_display_path(restart)}"
+        if n_read < w0.shape[1]:
+            note += f" ({n_read} of {w0.shape[1]} variables; the rest from {source})"
+        config.notices.append(note)
     problem.turbulence_values = turbulence
     return problem, scaling, w0, mesh
 
@@ -300,7 +310,16 @@ def load_restart(path, mesh, w_default):
     n = min(w.shape[1], w_default.shape[1])
     w0 = np.array(w_default, dtype=float)
     w0[:, :n] = w[:, :n]
-    return w0
+    return w0, n
+
+
+def _display_path(path):
+    """``path`` relative to the working directory if below it, else absolute."""
+    path = Path(path).resolve()
+    try:
+        return str(path.relative_to(Path.cwd()))
+    except ValueError:
+        return str(path)
 
 
 def run_case(path, console=True, mesh=None):
@@ -358,6 +377,12 @@ def _pseudo_time_settings(cfg):
         growth_factor=solver["cfl"]["growth_factor"],
         cut_factor=solver["cfl"]["cut_factor"],
         reject_factor=solver["cfl"]["reject_factor"],
+        cfl_control=solver["cfl"]["control"],
+        ser_exponent=solver["cfl"]["ser_exponent"],
+        ser_ratio_min=solver["cfl"]["ser_ratio_min"],
+        ser_ratio_max=solver["cfl"]["ser_ratio_max"],
+        ser_gmres_hold=solver["cfl"]["ser_gmres_hold"],
+        ser_gmres_reduce=solver["cfl"]["ser_gmres_reduce"],
         max_iterations=solver["max_iterations"],
         residual_drop=solver["residual_drop"],
         first_order_iterations=cfg["numerics"]["first_order_iterations"],
@@ -755,8 +780,16 @@ def _mode_rows(cfg):
             (
                 "pseudo-time",
                 f"CFL start {cfl['start']:g}, max {cfl['max_approximate']:.0e} "
-                f"before Newton-Krylov and {cfl['max']:.0e} with it, growth x"
-                f"{cfl['growth_factor']:g}, cut x{cfl['cut_factor']:g}; stop after "
+                f"before Newton-Krylov and {cfl['max']:.0e} with it, "
+                + (
+                    f"SER (measure ratio)^{cfl['ser_exponent']:g} in "
+                    f"[{cfl['ser_ratio_min']:g}, {cfl['ser_ratio_max']:g}], hold from "
+                    f"{cfl['ser_gmres_hold']} and halve above "
+                    f"{cfl['ser_gmres_reduce']} GMRES iterations"
+                    if cfl["control"] == "ser"
+                    else f"growth x{cfl['growth_factor']:g}"
+                )
+                + f", cut x{cfl['cut_factor']:g}; stop after "
                 f"{solver['residual_drop']:g} orders or {solver['max_iterations']} "
                 "iterations",
             ),

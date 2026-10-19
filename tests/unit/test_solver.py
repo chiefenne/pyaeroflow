@@ -123,6 +123,18 @@ def test_ser_raises_cfl_while_residual_falls():
     assert np.all(np.diff(h["cfl"][1:]) > 0.0)
 
 
+def test_proportional_ser_bounds_the_cfl_factor():
+    """control = ser (D55): CFL factor per accepted step within [0.3, 2]."""
+    residual, jacobian, time_term, u0 = scalar_problem(1.5)
+    settings = PseudoTimeSettings(cfl_control="ser", residual_drop=10.0)
+    result = solve_steady(residual, jacobian, time_term, u0, settings)
+    h = result.history
+    assert result.converged and np.all(h["accepted"])
+    factor = h["cfl"][2:] / h["cfl"][1:-1]
+    assert np.all(factor <= 2.0 + 1e-12) and np.all(factor >= 0.3 - 1e-12)
+    assert factor.max() > 1.0
+
+
 def test_reference_residual_follows_an_operator_change():
     """A callback that changes the residual operator (limiter release) must
     not leave the acceptance test comparing against the old operator's

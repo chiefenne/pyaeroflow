@@ -29,6 +29,16 @@ under the same condition); during a slow transient SER alone would keep it
 small. Safeguards: if the linear solve fails, the update is not finite, or the
 residual grows by more than ``reject_factor``, the update is rejected and the
 CFL number is multiplied by ``cut_factor``.
+
+``cfl_control = "ser"`` replaces this growth control by proportional SER on
+the per-equation convergence measure m (D54, D55):
+
+    CFL_n = CFL_(n-1) * clip((m_(n-1) / m_n)^p, ratio_min, ratio_max),
+
+without a minimum growth, and in the Newton-Krylov phase modulated by the
+GMRES effort of the step instead of the adaptive cap: full factor below
+``ser_gmres_hold`` iterations, at most 1 (hold) up to ``ser_gmres_reduce``,
+at most 0.5 above.
 """
 
 from dataclasses import dataclass
@@ -123,6 +133,21 @@ class PseudoTimeSettings:
         1 = every iteration.
     refactor_cfl_ratio : float
         CFL growth since the last factorization that forces a new one.
+    cfl_control : {"growth", "ser"}
+        CFL control: ``growth`` (SER on the RMS norm with at least
+        ``growth_factor`` per accepted iteration, adaptive cap from the
+        GMRES effort) or ``ser`` (proportional SER on the per-equation
+        measure, GMRES-modulated; D55).
+    ser_exponent : float
+        Exponent p of the SER ratio (``cfl_control = "ser"``).
+    ser_ratio_min, ser_ratio_max : float
+        Bounds of the CFL factor per accepted iteration (``ser``).
+    ser_gmres_hold : int
+        Newton-Krylov steps with at least this many GMRES iterations do not
+        raise the CFL (``ser``).
+    ser_gmres_reduce : int
+        Newton-Krylov steps with more GMRES iterations than this halve the
+        CFL at least (``ser``).
     linear : LinearSettings
         Sparse linear solver of phase 1 and preconditioner of phase 2.
     """
@@ -149,6 +174,12 @@ class PseudoTimeSettings:
     nk_cfl_adapt_iterations: int = 60
     nk_forcing: bool = True
     line_search_steps: int = 2
+    cfl_control: str = "growth"
+    ser_exponent: float = 1.0
+    ser_ratio_min: float = 0.3
+    ser_ratio_max: float = 2.0
+    ser_gmres_hold: int = 10
+    ser_gmres_reduce: int = 30
     linear: LinearSettings = LinearSettings()
 
 
@@ -365,14 +396,28 @@ def solve_steady(
         hist["newton_krylov"].append(use_nk)
         hist["linear_iterations"].append(lin_its)
         if accepted:
-            ratio = norm_abs / max(abs_new, tiny)
-            if ratio > 1.0:
-                ratio = max(ratio, s.growth_factor)
+            ser = s.cfl_control == "ser"
+            if ser:
+                # Proportional SER on the per-equation measure (D55); the
+                # scales are those before this step, so the ratio is the
+                # worst equation's own progress.
+                m_new = measure(r_new)
+                ratio = (norm / max(m_new, tiny)) ** s.ser_exponent
+                ratio = min(max(ratio, s.ser_ratio_min), s.ser_ratio_max)
+                if use_nk and lin_its > s.ser_gmres_reduce:
+                    ratio = min(ratio, 0.5)
+                elif use_nk and lin_its >= s.ser_gmres_hold:
+                    ratio = min(ratio, 1.0)
+            else:
+                ratio = norm_abs / max(abs_new, tiny)
+                if ratio > 1.0:
+                    ratio = max(ratio, s.growth_factor)
             if use_nk:
-                if lin_its >= s.nk_cfl_adapt_iterations:
-                    cfl_cap = max(cfl * 0.25, s.cfl_start)
-                elif lin_its <= s.nk_cfl_adapt_iterations // 4:
-                    cfl_cap = min(cfl_cap * 4.0, s.cfl_max)
+                if not ser:
+                    if lin_its >= s.nk_cfl_adapt_iterations:
+                        cfl_cap = max(cfl * 0.25, s.cfl_start)
+                    elif lin_its <= s.nk_cfl_adapt_iterations // 4:
+                        cfl_cap = min(cfl_cap * 4.0, s.cfl_max)
                 stale = lin_its > s.nk_cfl_adapt_iterations // 4
             # Cap the CFL while the Newton-Krylov switch is pending: a huge
             # pseudo-time step with the approximate Jacobian does not converge.

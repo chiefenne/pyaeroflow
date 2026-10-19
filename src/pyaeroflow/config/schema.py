@@ -299,6 +299,41 @@ SCHEMA = {
             "explicit": Opt(
                 "float", 1.0, "CFL number of the explicit Runge-Kutta mode", minimum=0.0
             ),
+            "control": Opt(
+                "string",
+                "growth",
+                "CFL control: growth (SER with at least growth_factor, adaptive "
+                "cap from the GMRES effort) or ser (proportional SER on the "
+                "per-equation measure, GMRES-modulated)",
+                choices=("growth", "ser"),
+            ),
+            "ser_exponent": Opt(
+                "float", 1.0, "Exponent of the SER ratio (control = ser)", minimum=0.0
+            ),
+            "ser_ratio_min": Opt(
+                "float",
+                0.3,
+                "Lower bound of the CFL factor per accepted iteration (ser)",
+                minimum=0.0,
+            ),
+            "ser_ratio_max": Opt(
+                "float",
+                2.0,
+                "Upper bound of the CFL factor per accepted iteration (ser)",
+                minimum=1.0,
+            ),
+            "ser_gmres_hold": Opt(
+                "int",
+                10,
+                "Newton steps with this many GMRES iterations or more hold the CFL (ser)",
+                minimum=1,
+            ),
+            "ser_gmres_reduce": Opt(
+                "int",
+                30,
+                "Newton steps with more GMRES iterations than this halve the CFL (ser)",
+                minimum=1,
+            ),
         },
         "newton_krylov": {
             "enabled": Opt(
