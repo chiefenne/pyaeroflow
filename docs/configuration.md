@@ -290,7 +290,7 @@ Needed for force and moment coefficients, and for `fluid.reynolds_number`.
 | Key | Type | Default | Description | # |
 |-----|------|---------|-------------|---|
 | `length` | float | `1.0`; req. with `fluid.reynolds_number` | Reference length (e.g. chord, channel height) in m | D31 |
-| `moment_center` | [float, float] | `[0.25 · length, 0.0]` | Moment reference point in m; C_M positive counter-clockwise (nose-up for flow in +x) | |
+| `moment_center` | [float, float] | `[0.25 · length, 0.0]` | Moment reference point in m; C_M positive counter-clockwise, which is nose-down for flow in +x (the usual aerodynamic c_m, nose-up positive, is −C_M) | |
 | `vortex_correction` | bool | `false` | Point-vortex farfield correction (P10): the farfield state is the freestream plus the velocity induced by a vortex at `moment_center` whose circulation follows from the lift on `output.force_boundaries` (Γ = L/(ρU), updated with under-relaxation 0.5 every iteration), pressure from Bernoulli. NASA TMR recommends it for farfields nearer than ~500 chords; on a 10-chord O-grid it removes the farfield error of the lift to 0.1 % (Euler, 10°), on PyAero's 3.5-chord C-mesh it recovers about half of the gap to a 500-chord domain |
 | `velocity` | float | farfield velocity, if exactly one farfield boundary; otherwise req. with `fluid.reynolds_number` | Reference velocity in m/s | D28, D31 |
 | `angle_of_attack` | float | farfield angle of attack if exactly one farfield boundary, else 0 | Defines the drag (along the flow) and lift directions | D28 |

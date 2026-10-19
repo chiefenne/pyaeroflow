@@ -33,7 +33,12 @@
   (noted in the docs). Planned next: SA-AFT, SST, Langtry–Menter γ-Re_θ.
 - Eppler 387 validation case `examples/cases/e387_transition.toml` on the
   PyAero mesh `examples/meshes/e387_pyaero_y1.su2` (209k cells, 481 points per
-  side, first cell 2e-4 c) against NASA TM 4062, Re 2·10⁵, Tu 0.1 %.
+  side, first cell 2e-4 c) against NASA TM 4062, Re 2·10⁵, Tu 0.1 %. Results
+  in `docs/validation.md` section 7: α = 0–6° converge and agree with the
+  measurement to 0.015–0.028 in C_L, 5.3 % in C_D, 3.8 % in |c_m|; α = −2°
+  and 8° do not converge in 400 iterations.
+- Documentation fix: C_M is positive counter-clockwise, which is nose-down
+  for flow in +x; the docs said nose-up. The solver output is unchanged.
 
 ## 0.7.2 – Speed: lagged factorization, PARDISO/UMFPACK, Jacobian pattern (2026-10-17)
 

@@ -3,7 +3,8 @@
 # (C-type, 209k quads, 481 points per side, first cell 2e-4 chords, tunnel
 # 5 chords top/bottom, outlet 25 chords). Reference: McGhee, Walker &
 # Millard, NASA TM 4062 (1988), Langley LTPT, Re 2e5, Tu ~ 0.1 %: lift,
-# drag (wake rake) and oil-flow transition/separation locations. At this
+# drag (wake rake) and oil-flow laminar-separation/turbulent-reattachment
+# locations (no transition location is measured). At this
 # Reynolds number the upper surface has a laminar separation bubble around
 # mid-chord; the transition location in the summary (max nu_t/nu > 1) and
 # the wall CSV (cp, cf, nu_t_ratio_max) show where the model puts it.

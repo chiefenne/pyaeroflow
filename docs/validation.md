@@ -147,7 +147,9 @@ mesh, 500-chord farfield, frozen limiter) reproduces the same lift (1.076
 at 10° on 256 × 128) and serves the test suite; its drag at 0° is 13 %
 high for the same reason as the 113-point PyAero mesh.
 
-## 7. BCM transition on the flat plate
+## 7. BCM transition: flat plate and Eppler 387
+
+### Flat plate
 
 The SA-noft2-BCM model (`physics.transition.model = "bcm"`, section 7.1 of
 `docs/pyaero.md`) on the TMR plate domain at Re_L = 5·10⁵, laminar
@@ -170,6 +172,48 @@ transition location depends on the start-up path (Re_x = 0.75·10⁵ or
 (as PyAero's y⁺ ≈ 1 meshes do) and compare two start-ups when a transition
 location matters.
 
+### Eppler 387 at Re 2·10⁵, Tu 0.1 %
+
+`examples/cases/e387_transition.toml` on PyAero's C-mesh
+`examples/meshes/e387_pyaero_y1.su2` (209k quads, first cell 2·10⁻⁴ c,
+farfield 5 c above and below, point-vortex correction), run with
+`pyaeroflow polar`: α = 4° from freestream, the other angles restarted from
+the neighbouring one. Reference: Langley LTPT, McGhee, Walker & Millard
+(1988), NASA TM 4062: c_l, c_d (wake rake) and c_m about c/4 from fig. 17(c)
+(tunnel-wall corrections applied; the angles are the corrected ones),
+turbulence level 0.06–0.18 % (the case uses 0.1 %), and the oil-flow
+laminar separation (LS) and turbulent reattachment (TR) of table III. The
+measurements give no transition location. c_m is nose-up positive, i.e. the
+solver's C_M with the opposite sign.
+
+| α | C_L | ref. | C_D | ref. | c_m | ref. | ν_t/ν > 1 at x | oil flow LS / TR |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 0.3805 | 0.352 | 0.00996 | 0.0105 | −0.0796 | −0.0782 | 0.669 | 0.48 / 0.74 |
+| 2 | 0.5956 | 0.574 | 0.01118 | 0.0118 | −0.0787 | −0.0794 | 0.609 | 0.43 / 0.67 |
+| 4 | 0.8075 | 0.785 | 0.01293 | 0.0133 | −0.0778 | −0.0803 | 0.555 | 0.40 / 0.62 |
+| 6 | 1.0136 | 0.999 | 0.01509 | 0.0144 | −0.0760 | −0.0790 | 0.497 | 0.37 / 0.55 |
+| −2 | 0.173–0.178 \* | 0.156 | 0.0114–0.0125 \* | 0.0133 | – | −0.0814 | 0.58, lower 0.15 \* | 0.53 / 0.80 |
+| 8 | 1.10–1.20 \* | 1.182 | 0.019–0.035 \* | 0.0174 | – | −0.0751 | 0.04 \* | natural transition at 0.32 |
+
+\* not converged in 400 iterations; ranges over iterations 150–400, the
+location from the last iteration. The reference angles are −1.99, 0.01,
+2.04, 3.99, 6.04 and 8.03°; the difference to the computed angles (at most
+0.04°, about 0.004 in C_L) is not removed.
+
+For the converged angles C_L is 0.015–0.028 above the measurement (lift
+slope 0.107 against 0.109 per degree between 0° and 4°), C_D is within
+5.3 % and |c_m| within 3.8 %. The location where ν_t/ν first exceeds 1 lies
+0.05–0.07 c upstream of the measured reattachment at every angle. At 4° the
+wall C_f changes sign at x = 0.401 (laminar separation, measured 0.40) and
+at x = 0.686 (reattachment, measured 0.62). This is one grid and one
+farfield distance; neither was varied.
+
+At α = −2° and 8° the iteration does not converge: the transition location
+keeps moving and the forces drift slowly (8°: C_D 0.019–0.035; −2°: a
+lower-surface transition appears at x = 0.15). Whether the discrete problem
+has no stable steady state there, or the linearisation with frozen
+intermittency (CHANGELOG 0.8) cannot reach it, is open.
+
 ## References
 
 - Ghia, U., Ghia, K. N., Shin, C. T. (1982): High-Re solutions for
@@ -187,3 +231,6 @@ location matters.
   characteristics of NACA 0012 aerofoil section, including the effects of
   upper-surface roughness simulating hoar frost. NPL Aero Report 1308 /
   ARC R&M 3726.
+- McGhee, R. J., Walker, B. S., Millard, B. F. (1988): Experimental results
+  for the Eppler 387 airfoil at low Reynolds numbers in the Langley
+  low-turbulence pressure tunnel. NASA TM 4062.
