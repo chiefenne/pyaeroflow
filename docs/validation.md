@@ -8,22 +8,29 @@ example script from the repository root; the numbers are from the runs
 behind the figures (iMac 2019, 3.6 GHz 8-core Intel Core i9, 32 GB,
 October 2026, v0.7.1; section 7 from the 0.8 development).
 
+Click a case to jump to its section; each section ends with a link back here.
+
+<a id="stage-table"></a>
+
 | stage | case | type | reference | script |
 |---|---|---|---|---|
-| 1 | convection–diffusion | verification | manufactured exact solution | `examples/stage1_convection_diffusion.py` |
-| 2 | Poiseuille flow | verification | exact profile | `examples/stage2_laminar.py --re1000` |
-| 2 | lid-driven cavity | validation | Ghia, Ghia & Shin 1982 | same |
-| 3 | inviscid cylinder | verification | potential flow | `examples/stage3_benchmarks.py` |
-| 3 | laminar flat plate | validation | Blasius | same |
-| 3 | DFG 2D-1 cylinder | validation | Schäfer & Turek 1996 | same |
-| 4 | Taylor–Green vortex | verification | exact decaying solution | `examples/stage4_unsteady.py --medium` |
-| 4 | DFG 2D-2 shedding | validation | Schäfer & Turek 1996 | same |
-| 5 | turbulent flat plate | validation | NASA TMR, SA | `examples/stage5_rans.py` |
-| 6 | NACA 0012, Re 6·10⁶ | validation | Ladson 1988, Gregory & O'Reilly 1970, NASA TMR | `examples/stage6_pyaero_validation.py` |
-| 7 (0.8) | BCM transition, flat plate | verification/validation | Blasius, ERCOFTAC T3A | `tests/verification/test_rans_plate.py`, `pyaeroflow run examples/cases/flat_plate_transition.toml` |
+| 1 | [convection–diffusion](#sec-1) | verification | manufactured exact solution | `examples/stage1_convection_diffusion.py` |
+| 2 | [Poiseuille flow](#sec-2) | verification | exact profile | `examples/stage2_laminar.py --re1000` |
+| 2 | [lid-driven cavity](#sec-2) | validation | Ghia, Ghia & Shin 1982 | same |
+| 3 | [inviscid cylinder](#sec-3) | verification | potential flow | `examples/stage3_benchmarks.py` |
+| 3 | [laminar flat plate](#sec-3) | validation | Blasius | same |
+| 3 | [DFG 2D-1 cylinder](#sec-3) | validation | Schäfer & Turek 1996 | same |
+| 4 | [Taylor–Green vortex](#sec-4) | verification | exact decaying solution | `examples/stage4_unsteady.py --medium` |
+| 4 | [DFG 2D-2 shedding](#sec-4) | validation | Schäfer & Turek 1996 | same |
+| 5 | [turbulent flat plate](#sec-5) | validation | NASA TMR, SA | `examples/stage5_rans.py` |
+| 6 | [NACA 0012, Re 6·10⁶](#sec-6) | validation | Ladson 1988, Gregory & O'Reilly 1970, NASA TMR | `examples/stage6_pyaero_validation.py` |
+| 7 (0.8) | [BCM transition, flat plate](#sec-7-plate) | verification/validation | Blasius, ERCOFTAC T3A | `tests/verification/test_rans_plate.py`, `pyaeroflow run examples/cases/flat_plate_transition.toml` |
+| 7 (0.8) | [BCM transition, Eppler 387](#sec-7-e387) | validation | McGhee, Walker & Millard 1988 (NASA TM 4062) | `pyaeroflow polar examples/cases/e387_transition.toml --alpha 4 6 8 2 0 -2` |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
 the scripts write) is not tracked.
+
+<a id="sec-1"></a>
 
 ## 1. Order of accuracy: convection–diffusion
 
@@ -35,6 +42,10 @@ orders 2.08 (quadrilaterals), 1.94 (triangles), 1.91 (polygons), 2.11
 (mixed). The residual drops eleven orders in 21–28 pseudo-time iterations.
 
 ![convection–diffusion](figures/stage1_convection_diffusion.png)
+
+[↑ back to table](#stage-table)
+
+<a id="sec-2"></a>
 
 ## 2. Laminar flow: Poiseuille and lid-driven cavity
 
@@ -49,6 +60,10 @@ Lid-driven cavity against Ghia, Ghia & Shin (1982), centre-line profiles:
 | 1000 | 128 × 128 | 59 | 0.0055 | 0.0168 |
 
 ![laminar](figures/stage2_laminar.png)
+
+[↑ back to table](#stage-table)
+
+<a id="sec-3"></a>
 
 ## 3. Inviscid cylinder, Blasius plate, DFG 2D-1
 
@@ -71,6 +86,10 @@ reference c_D 5.5795, c_L 0.01062, Δp 0.11752):
 | triangles | 8 868 | 5.5541 (−0.45 %) | 0.01050 | 0.11564 (−1.6 %) | 33 |
 
 ![benchmarks](figures/stage3_benchmarks.png)
+
+[↑ back to table](#stage-table)
+
+<a id="sec-4"></a>
 
 ## 4. Unsteady: Taylor–Green vortex and DFG 2D-2 shedding
 
@@ -100,6 +119,10 @@ minutes); three inner Newton–Krylov iterations per step in both.
 
 ![unsteady](figures/stage4_unsteady.png)
 
+[↑ back to table](#stage-table)
+
+<a id="sec-5"></a>
+
 ## 5. Turbulent flat plate (SA-neg) against NASA TMR
 
 The TMR "2DZP" flat plate, Re_L = 5·10⁶, fully turbulent, SA-neg,
@@ -114,6 +137,10 @@ The law of the wall at x = 0.97 (right panel) follows u⁺ = y⁺ in the
 sublayer and the log law with κ = 0.41, B = 5.0 up to y⁺ ≈ 10³.
 
 ![flat plate](figures/stage5_rans.png)
+
+[↑ back to table](#stage-table)
+
+<a id="sec-6"></a>
 
 ## 6. NACA 0012 at Re 6·10⁶
 
@@ -147,7 +174,13 @@ mesh, 500-chord farfield, frozen limiter) reproduces the same lift (1.076
 at 10° on 256 × 128) and serves the test suite; its drag at 0° is 13 %
 high for the same reason as the 113-point PyAero mesh.
 
+[↑ back to table](#stage-table)
+
+<a id="sec-7"></a>
+
 ## 7. BCM transition: flat plate and Eppler 387
+
+<a id="sec-7-plate"></a>
 
 ### Flat plate
 
@@ -171,6 +204,10 @@ transition location depends on the start-up path (Re_x = 0.75·10⁵ or
 96-cell plate it does not. Resolve the laminar part of the boundary layer
 (as PyAero's y⁺ ≈ 1 meshes do) and compare two start-ups when a transition
 location matters.
+
+[↑ back to table](#stage-table)
+
+<a id="sec-7-e387"></a>
 
 ### Eppler 387 at Re 2·10⁵, Tu 0.1 %
 
@@ -213,6 +250,8 @@ keeps moving and the forces drift slowly (8°: C_D 0.019–0.035; −2°: a
 lower-surface transition appears at x = 0.15). Whether the discrete problem
 has no stable steady state there, or the linearisation with frozen
 intermittency (CHANGELOG 0.8) cannot reach it, is open.
+
+[↑ back to table](#stage-table)
 
 ## References
 
