@@ -18,7 +18,7 @@ import numpy as np
 
 from pyaeroflow import __version__
 from pyaeroflow.config import Resolved, load_case, resolve
-from pyaeroflow.driver import INFLOW_TYPES, IncompressibleProblem
+from pyaeroflow.driver import GAMMA_DIAGNOSTICS, INFLOW_TYPES, IncompressibleProblem
 from pyaeroflow.io import HistoryWriter, RunLog, StepHistoryWriter, write_pvd, write_vtu
 from pyaeroflow.mesh import Mesh, read_su2
 from pyaeroflow.physics import forces as fz
@@ -407,7 +407,14 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir):
     force_boundaries = cfg["output"]["force_boundaries"]
     monitor = Monitor(config, problem, scaling) if force_boundaries else None
     coeff_names = ("CL", "CD", "CM") if monitor else ()
-    history = HistoryWriter(out_dir / f"{name}.history.csv", names, coeff_names)
+    tr_cfg = cfg["physics"]["transition"]
+    diagnose = cfg["output"]["transition_diagnostics"]
+    history = HistoryWriter(
+        out_dir / f"{name}.history.csv",
+        names,
+        coeff_names,
+        GAMMA_DIAGNOSTICS if diagnose else (),
+    )
     extra_names = (("NK", "GMRES") if implicit else ()) + tuple(
         (c, 11) for c in coeff_names
     )
@@ -426,7 +433,19 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir):
         extra += tuple(f"{c:.5f}" for c in coeffs)
         drop = max(0.0, -np.log10(max(info.get("measure", 1.0), np.finfo(float).tiny)))
         log.iteration(it, residuals, cfl, accepted, extra, info.pop("note", ""), drop)
-        history.row(it, residuals, cfl, accepted, log.elapsed, nk, lin, coeffs)
+        history.row(
+            it,
+            residuals,
+            cfl,
+            accepted,
+            log.elapsed,
+            nk,
+            lin,
+            coeffs,
+            info.pop("transition_diagnostics", ("",) * len(GAMMA_DIAGNOSTICS))
+            if diagnose
+            else (),
+        )
         if interval and it and it % interval == 0:
             _write_fields(out_dir / f"{name}_{it:06d}.vtu", mesh, w, scaling, problem)
 
@@ -450,6 +469,8 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir):
             freeze_limiter_after_residual_drop=freeze["after_residual_drop"],
             vortex=vortex,
             release_limiter=freeze["release"],
+            gamma_relaxation=tr_cfg["relaxation"],
+            gamma_diagnostics=diagnose,
         )
     else:
         result = problem.solve_explicit(
@@ -874,6 +895,14 @@ def _log_setup(log, config, problem, scaling, mesh):
                     f"Re_theta_t = {re_theta_t:.0f}",
                 )
             )
+            omega = config["physics"]["transition"]["relaxation"]
+            if omega < 1.0:
+                rows.append(
+                    (
+                        "intermittency",
+                        f"under-relaxed, omega = {omega:g} (steady runs)",
+                    )
+                )
         log.table(rows)
         bcm = problem.model.transition == "bcm"
         for name, v in tv.items():

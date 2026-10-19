@@ -26,6 +26,12 @@
   formula have unbounded slope (at onset and as ν_t → 0, dγ/d(ν_t/ν) ≈ 6500
   at ν_t/ν = 3·10⁻⁷), which made the E387 linear systems stiff (GMRES
   counts near 200) and the Newton steps erratic.
+- `physics.transition.relaxation` (ω in (0, 1], steady runs): the residual uses
+  a lagged BCM intermittency advanced by ω (γ_model − γ) per accepted
+  iteration, which turns the one-step R_ν jumps at the onset threshold (E387
+  α = 8 with SER: 2-order jumps every ~125 iterations) into a ramp. Same
+  converged state. `output.transition_diagnostics` adds γ statistics and the
+  location of the largest γ change and |R_ν| to the history CSV.
 - Verified on the TMR plate at Re_L = 5·10⁵: laminar at Tu 0.1 %, transition
   at Re_x = 1.2·10⁵ at Tu 3.3 % (T3A); `docs/validation.md` section 7,
   example `examples/cases/flat_plate_transition.toml`. The discrete problem

@@ -79,6 +79,15 @@ SCHEMA = {
                 "turbulence table",
                 minimum=0.0,
             ),
+            "relaxation": Opt(
+                "float",
+                1.0,
+                "Under-relaxation omega in (0, 1] of the transition intermittency "
+                "in steady runs: gamma += omega (gamma_model - gamma) per accepted "
+                "iteration, so onset ramps in over ~1/omega iterations; 1 = off. "
+                "The converged state is that of the unrelaxed model",
+                minimum=0.0,
+            ),
             "laminar_region": Opt(
                 "table_list",
                 None,
@@ -447,6 +456,13 @@ SCHEMA = {
             None,
             "Boundaries over which forces and moments are integrated; "
             "default: all walls",
+        ),
+        "transition_diagnostics": Opt(
+            "bool",
+            False,
+            "Add intermittency statistics to the steady history CSV (cells with "
+            "gamma > 0.01, cells that switched, largest change and |R_nu| with "
+            "their cell centres); needs physics.transition.model",
         ),
         "verbosity": Opt(
             "string", "normal", "Log detail", choices=("normal", "detailed")

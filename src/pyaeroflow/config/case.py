@@ -400,6 +400,15 @@ def _consistency(data, explicit, problems, notices, path):
                 problems.append(f"{dotted}.side: must be 'upper' or 'lower'")
     elif tr["laminar_region"]:
         notices.append("physics.transition.laminar_region ignored: mode = none")
+    if data["output"]["transition_diagnostics"] and tr["model"] == "none":
+        problems.append("output.transition_diagnostics needs a transition model")
+    if not 0.0 < tr["relaxation"] <= 1.0:
+        problems.append("physics.transition.relaxation must be in (0, 1]")
+    elif tr["relaxation"] < 1.0:
+        if tr["model"] == "none":
+            problems.append("physics.transition.relaxation needs a transition model")
+        if data["time"]["mode"] == "unsteady":
+            problems.append("physics.transition.relaxation is for steady runs only")
     if tr["model"] != "none":
         if not rans:
             problems.append("physics.transition.model needs physics.model = rans")

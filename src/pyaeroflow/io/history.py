@@ -12,9 +12,11 @@ class HistoryWriter:
     path : Path
     residual_names : sequence of str
         One column ``residual_<name>`` per variable.
+    diagnostic_names : sequence of str
+        Extra columns after the coefficients (transition diagnostics).
     """
 
-    def __init__(self, path, residual_names, coefficient_names=()):
+    def __init__(self, path, residual_names, coefficient_names=(), diagnostic_names=()):
         self.path = Path(path)
         self._file = open(self.path, "w", newline="")
         self._writer = csv.writer(self._file)
@@ -27,6 +29,7 @@ class HistoryWriter:
                 "newton_krylov",
                 "linear_iterations",
                 *coefficient_names,
+                *diagnostic_names,
                 "time_s",
             ]
         )
@@ -41,6 +44,7 @@ class HistoryWriter:
         newton_krylov=False,
         linear=0,
         coefficients=(),
+        diagnostics=(),
     ):
         """Write one row."""
         self._writer.writerow(
@@ -52,6 +56,7 @@ class HistoryWriter:
                 int(newton_krylov),
                 int(linear),
                 *(f"{c:.8e}" for c in coefficients),
+                *(f"{d:.6e}" if isinstance(d, float) else d for d in diagnostics),
                 f"{elapsed:.3f}",
             ]
         )

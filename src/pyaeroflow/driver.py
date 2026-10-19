@@ -58,6 +58,24 @@ class FarfieldVortex:
         self.gamma = 0.0
 
 
+# Per-iteration transition diagnostics of :meth:`IncompressibleProblem.solve`:
+# cells with gamma > 0.01, area-weighted sum of gamma, cells whose model
+# intermittency changed by more than 0.05 since the last accepted iteration,
+# the largest change and its cell centre (x, y), the largest |R_nu| and its
+# cell centre. Coordinates are non-dimensional (divided by the length scale).
+GAMMA_DIAGNOSTICS = (
+    "gamma_cells",
+    "gamma_area",
+    "gamma_jumped",
+    "gamma_dmax",
+    "gamma_dmax_x",
+    "gamma_dmax_y",
+    "rnu_max",
+    "rnu_max_x",
+    "rnu_max_y",
+)
+
+
 class IncompressibleProblem:
     """An incompressible flow case on a mesh.
 
@@ -241,17 +259,29 @@ class IncompressibleProblem:
         """Artificial compressibility beta^2 for the current state."""
         return inc.beta_squared(self.model, np.asarray(w)[:, :3], self.bc)
 
-    def residual(self, w, beta2, order=None, psi=None):
-        """R(w) for the current beta^2, spatial order and frozen limiter."""
+    def residual(self, w, beta2, order=None, psi=None, gamma=None):
+        """R(w) for the current beta^2, spatial order and frozen limiter.
+
+        ``gamma`` is a given transition intermittency (see :meth:`solve`).
+        """
         order = self.model.spatial_order if order is None else order
+        extra = {} if gamma is None else {"gamma": gamma}
         return np.asarray(
             self.physics.residual(
-                self.model, self.geom, self.bc, jnp.asarray(w), order, beta2, psi
+                self.model,
+                self.geom,
+                self.bc,
+                jnp.asarray(w),
+                order,
+                beta2,
+                psi,
+                **extra,
             )
         )
 
-    def jvp(self, w, dw, beta2, psi=None):
+    def jvp(self, w, dw, beta2, psi=None, gamma=None):
         """Exact dR/dw @ dw of the second-order residual (``jax.jvp``)."""
+        extra = {} if gamma is None else {"gamma": gamma}
         return np.asarray(
             self.physics.residual_jvp(
                 self.model,
@@ -262,6 +292,7 @@ class IncompressibleProblem:
                 self.model.spatial_order,
                 beta2,
                 psi,
+                **extra,
             )
         )
 
@@ -459,6 +490,8 @@ class IncompressibleProblem:
         freeze_limiter_after_residual_drop=None,
         vortex=None,
         release_limiter=False,
+        gamma_relaxation=None,
+        gamma_diagnostics=False,
     ):
         """Implicit pseudo-time solution (D25, D35).
 
@@ -472,22 +505,64 @@ class IncompressibleProblem:
         (unlimited second order after a limited start-up): for smooth
         high-Reynolds-number flows the limiter only costs accuracy in the
         boundary layer once the transient has passed.
+
+        With ``gamma_relaxation`` = omega < 1 (transition model) the
+        intermittency in the residual is a lagged field, advanced after every
+        accepted iteration by gamma += omega (gamma_model(w) - gamma): a cell
+        crossing the onset threshold ramps its production on over about
+        1 / omega iterations instead of in one step. The converged state is
+        that of the unrelaxed model. ``gamma_diagnostics`` stores per-iteration
+        intermittency statistics (:data:`GAMMA_DIAGNOSTICS`) in the callback's
+        ``info["transition_diagnostics"]``.
         """
         w0 = self.initial_state() if w0 is None else w0
-        state = {"beta2": self.beta2(w0), "psi": None}
+        state = {"beta2": self.beta2(w0), "psi": None, "gamma": None, "model": None}
+        relax = (
+            gamma_relaxation is not None
+            and gamma_relaxation < 1.0
+            and self.model.transition != "none"
+        )
+        track = relax or (gamma_diagnostics and self.model.transition != "none")
+        if track:
+            state["model"] = self.physics.intermittency_field(
+                self.model, self.geom, self.bc, jnp.asarray(w0)
+            )
+            if relax:
+                state["gamma"] = state["model"]
         uses_limiter = self.model.limiter != "none" and self.model.spatial_order == 2
 
         def residual(w):
             state["beta2"] = self.beta2(w)
-            return self.residual(w, state["beta2"], psi=state["psi"])
+            return self.residual(
+                w, state["beta2"], psi=state["psi"], gamma=state["gamma"]
+            )
 
         def residual_startup(w):
             state["beta2"] = self.beta2(w)
-            return self.residual(w, state["beta2"], order=1)
+            return self.residual(w, state["beta2"], order=1, gamma=state["gamma"])
+
+        def transition_step(it, w):
+            """Advance the lagged intermittency, record the diagnostics."""
+            g_model = self.physics.intermittency_field(
+                self.model, self.geom, self.bc, jnp.asarray(w)
+            )
+            change = np.abs(np.asarray(g_model - state["model"]))
+            state["model"] = g_model
+            if relax and it > 0:
+                state["gamma"] = state["gamma"] + gamma_relaxation * (
+                    g_model - state["gamma"]
+                )
+                on_iteration.info["residual_changed"] = True
+            if gamma_diagnostics:
+                on_iteration.info["transition_diagnostics"] = self._gamma_diagnostics(
+                    w, g_model, change, state
+                )
 
         def on_iteration(it, w, residuals, cfl, accepted):
             if vortex is not None and accepted:
                 self.apply_farfield_vortex(vortex, w)
+            if track and accepted:
+                transition_step(it, w)
             if uses_limiter and state["psi"] is None and accepted:
                 # Orders of the per-equation convergence measure (D54), the
                 # same quantity that decides the Newton-Krylov switch.
@@ -527,7 +602,32 @@ class IncompressibleProblem:
             settings or PseudoTimeSettings(),
             residual_startup=residual_startup,
             callback=on_iteration,
-            jvp=lambda w, dw: self.jvp(w, dw, state["beta2"], state["psi"]),
+            jvp=lambda w, dw: self.jvp(
+                w, dw, state["beta2"], state["psi"], state["gamma"]
+            ),
+        )
+
+    def _gamma_diagnostics(self, w, g_model, change, state):
+        """Values of :data:`GAMMA_DIAGNOSTICS` for the accepted state ``w``."""
+        c, area = self.mesh.cell_centroid, self.mesh.cell_area
+        g = np.asarray(g_model)
+        i = int(np.argmax(change))
+        r_nu = np.abs(
+            self.residual(w, state["beta2"], psi=state["psi"], gamma=state["gamma"])[
+                :, rans.NT
+            ]
+        )
+        j = int(np.argmax(r_nu))
+        return (
+            int(np.count_nonzero(g > 0.01)),
+            float(np.sum(g * area)),
+            int(np.count_nonzero(change > 0.05)),
+            float(change[i]),
+            float(c[i, 0]),
+            float(c[i, 1]),
+            float(r_nu[j]),
+            float(c[j, 0]),
+            float(c[j, 1]),
         )
 
     def mass(self):

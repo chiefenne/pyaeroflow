@@ -235,10 +235,8 @@ def test_run_case_rans(tmp_path):
     )
 
 
-def test_run_case_bcm_transition(tmp_path):
-    """The BCM model through the case file: Tu from the inflow table, log
-    rows, intermittency in the VTU and the wall CSV, transition location in
-    the summary."""
+def _bcm_plate(tmp_path, transition="", output=""):
+    """Run the BCM flat-plate case; ``transition`` / ``output`` add case keys."""
     from pyaeroflow.cases.tmr_flat_plate import plate_mesh
     from pyaeroflow.mesh import write_su2
 
@@ -246,7 +244,7 @@ def test_run_case_bcm_transition(tmp_path):
         PLATE_TOML.replace(
             '[physics.transition]\nmode = "prescribed"\n'
             'laminar_region = [{ boundary = "plate", side = "upper", x_max = 0.05 }]\n',
-            '[physics.transition]\nmodel = "bcm"\n',
+            f'[physics.transition]\nmodel = "bcm"\n{transition}',
         )
         .replace(
             "turbulence = { kinetic_energy = 0.0015, length_scale = 0.01 }",
@@ -263,8 +261,17 @@ def test_run_case_bcm_transition(tmp_path):
     )
     assert toml.count("intensity = 0.033") == 2
     write_su2(tmp_path / "plate.su2", plate_mesh(48, 12, 48, reynolds=5.0e5))
+    if output:
+        toml = toml.replace("[output]\n", f"[output]\n{output}")
     (tmp_path / "plate.toml").write_text(toml)
-    result = run_case(tmp_path / "plate.toml", console=False)
+    return run_case(tmp_path / "plate.toml", console=False)
+
+
+def test_run_case_bcm_transition(tmp_path):
+    """The BCM model through the case file: Tu from the inflow table, log
+    rows, intermittency in the VTU and the wall CSV, transition location in
+    the summary."""
+    result = _bcm_plate(tmp_path)
     assert result.converged
     log = (tmp_path / "out" / "plate.log").read_text()
     assert "bcm (SA-noft2), Tu = 3.3 %" in log and "Re_theta_t = 198" in log
@@ -278,6 +285,43 @@ def test_run_case_bcm_transition(tmp_path):
     assert "intermittency" in (tmp_path / "out" / "plate.vtu").read_text(
         errors="ignore"
     )
+
+
+def test_bcm_relaxed_intermittency_and_diagnostics(tmp_path):
+    """Under-relaxed gamma converges to the unrelaxed transition location and
+    the diagnostics columns reach the history CSV."""
+    ref = tmp_path / "ref"
+    ref.mkdir()
+    _bcm_plate(ref)
+    run = tmp_path / "relaxed"
+    run.mkdir()
+    result = _bcm_plate(run, "relaxation = 0.3\n", "transition_diagnostics = true\n")
+    assert result.converged
+    log = (run / "out" / "plate.log").read_text()
+    assert "under-relaxed, omega = 0.3" in log
+    h = np.genfromtxt(run / "out" / "plate.history.csv", delimiter=",", names=True)
+    for col in ("gamma_cells", "gamma_jumped", "gamma_dmax_x", "rnu_max_y"):
+        assert col in h.dtype.names
+    assert h["gamma_cells"][-1] > 0 and h["gamma_dmax"][-1] < 1e-3
+    w_ref = np.genfromtxt(
+        ref / "out" / "plate.wall_plate.csv", delimiter=",", names=True
+    )
+    w_rel = np.genfromtxt(
+        run / "out" / "plate.wall_plate.csv", delimiter=",", names=True
+    )
+    np.testing.assert_allclose(
+        w_rel["nu_t_ratio_max"], w_ref["nu_t_ratio_max"], rtol=2e-2, atol=1e-3
+    )
+
+
+def test_bcm_relaxation_config_rules():
+    plate = {**RANS_MINIMAL, "physics": {"model": "rans", "transition": {}}}
+    plate["physics"]["transition"] = {"relaxation": 0.5}
+    with pytest.raises(Exception, match="needs a transition model"):
+        resolve(plate)
+    plate["physics"]["transition"] = {"model": "bcm", "relaxation": 1.5}
+    with pytest.raises(Exception, match=r"must be in \(0, 1\]"):
+        resolve(plate)
 
 
 def test_bcm_config_rules():

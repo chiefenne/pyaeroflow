@@ -87,8 +87,11 @@ def vorticity(grad):
     return jnp.abs(grad[:, V, 0] - grad[:, U, 1])
 
 
-def _source(model, nu_tilde, vort, distance, grad_sq, switch):
+def _source(model, nu_tilde, vort, distance, grad_sq, switch, gamma=None):
     """SA source with the transition model's intermittency (cell-local).
+
+    ``gamma`` (optional) is a given intermittency, e.g. the under-relaxed
+    field of the driver; by default it is evaluated from the current state.
 
     gamma is frozen in every linearisation (Picard on gamma, as SU2 does):
     the residual uses its current value, but neither the Newton-Krylov JVP
@@ -98,7 +101,9 @@ def _source(model, nu_tilde, vort, distance, grad_sq, switch):
     erratic.
     """
     nu = kinematic_viscosity(model)
-    gamma = jax.lax.stop_gradient(intermittency(model, nu_tilde, vort, distance))
+    if gamma is None:
+        gamma = intermittency(model, nu_tilde, vort, distance)
+    gamma = jax.lax.stop_gradient(gamma)
     return sa.source(
         nu_tilde,
         nu,
@@ -124,6 +129,7 @@ def intermittency(model, nu_tilde, vort, distance):
     return 1.0
 
 
+@partial(jax.jit, static_argnums=0)
 def intermittency_field(model, geom, bc, w):
     """Intermittency per cell for the output (ones without a transition model)."""
     w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
@@ -149,8 +155,12 @@ def limiter(model, geom, bc, w):
 
 
 @partial(jax.jit, static_argnums=(0, 4))
-def residual(model, geom, bc, w, order, beta2, psi=None):
-    """Residual R(w), shape (n_cells, 4): net outflow minus sources."""
+def residual(model, geom, bc, w, order, beta2, psi=None, gamma=None):
+    """Residual R(w), shape (n_cells, 4): net outflow minus sources.
+
+    ``gamma`` (n_cells,) replaces the transition intermittency of the current
+    state (under-relaxed intermittency of the driver); None = evaluate it.
+    """
     o, n, b = geom.f_owner, geom.f_neigh, geom.b_owner
     w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
     grad = lsq_gradient(geom, w, w_b)
@@ -193,7 +203,9 @@ def residual(model, geom, bc, w, order, beta2, psi=None):
     )
     grad_sq = jnp.sum(grad[:, NT, :] ** 2, axis=1)
     switch = 1.0 if geom.production_switch is None else geom.production_switch
-    src = _source(model, w[:, NT], vorticity(grad), geom.wall_distance, grad_sq, switch)
+    src = _source(
+        model, w[:, NT], vorticity(grad), geom.wall_distance, grad_sq, switch, gamma
+    )
     r = r.at[:, NT].add(-geom.area * src)
     force = jnp.asarray(model.body_force)
     r = r.at[:, 1:3].add(-geom.area[:, None] * force[None, :])
@@ -204,11 +216,11 @@ def residual(model, geom, bc, w, order, beta2, psi=None):
 
 
 @partial(jax.jit, static_argnums=(0, 5))
-def residual_jvp(model, geom, bc, w, dw, order, beta2, psi=None):
+def residual_jvp(model, geom, bc, w, dw, order, beta2, psi=None, gamma=None):
     """Exact Jacobian-vector product of the full residual (coupled)."""
 
     def f(x):
-        return residual(model, geom, bc, x, order, beta2, psi)
+        return residual(model, geom, bc, x, order, beta2, psi, gamma)
 
     return jax.jvp(f, (w,), (dw,))[1]
 
