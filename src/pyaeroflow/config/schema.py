@@ -303,12 +303,18 @@ SCHEMA = {
                 "string",
                 "growth",
                 "CFL control: growth (SER with at least growth_factor, adaptive "
-                "cap from the GMRES effort) or ser (proportional SER on the "
-                "per-equation measure, GMRES-modulated)",
+                "cap from the GMRES effort) or ser (proportional SER on the RMS "
+                "norm, bounded per step, GMRES-modulated)",
                 choices=("growth", "ser"),
             ),
             "ser_exponent": Opt(
                 "float", 1.0, "Exponent of the SER ratio (control = ser)", minimum=0.0
+            ),
+            "ser_growth_min": Opt(
+                "float",
+                1.2,
+                "Minimum CFL factor while the residual falls (ser)",
+                minimum=1.0,
             ),
             "ser_ratio_min": Opt(
                 "float",

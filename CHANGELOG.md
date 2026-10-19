@@ -38,8 +38,8 @@
   measurement to 0.015–0.028 in C_L, 5.3 % in C_D, 3.8 % in |c_m|; α = −2°
   and 8° do not converge in 400 iterations.
 - Proportional SER CFL control, opt-in with `solver.cfl.control = "ser"`
-  (D55): factor (m_old/m_new)^p of the per-equation measure clipped to
-  [0.3, 2], no minimum growth; in the Newton–Krylov phase hold from 10 and
+  (D55): factor (|R_old|/|R_new|)^p of the RMS norm, at least ×1.2 while
+  it falls, clipped to [0.3, 2]; in the Newton–Krylov phase hold from 10 and
   halve above 30 GMRES iterations instead of the adaptive cap. Used by the
   E387 case; the default stays `growth`.
 - The log names the restart file a run starts from (Notices), and how many

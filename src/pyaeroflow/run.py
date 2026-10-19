@@ -379,6 +379,7 @@ def _pseudo_time_settings(cfg):
         reject_factor=solver["cfl"]["reject_factor"],
         cfl_control=solver["cfl"]["control"],
         ser_exponent=solver["cfl"]["ser_exponent"],
+        ser_growth_min=solver["cfl"]["ser_growth_min"],
         ser_ratio_min=solver["cfl"]["ser_ratio_min"],
         ser_ratio_max=solver["cfl"]["ser_ratio_max"],
         ser_gmres_hold=solver["cfl"]["ser_gmres_hold"],
@@ -782,7 +783,8 @@ def _mode_rows(cfg):
                 f"CFL start {cfl['start']:g}, max {cfl['max_approximate']:.0e} "
                 f"before Newton-Krylov and {cfl['max']:.0e} with it, "
                 + (
-                    f"SER (measure ratio)^{cfl['ser_exponent']:g} in "
+                    f"SER (RMS ratio)^{cfl['ser_exponent']:g}, at least "
+                    f"x{cfl['ser_growth_min']:g} while falling, in "
                     f"[{cfl['ser_ratio_min']:g}, {cfl['ser_ratio_max']:g}], hold from "
                     f"{cfl['ser_gmres_hold']} and halve above "
                     f"{cfl['ser_gmres_reduce']} GMRES iterations"

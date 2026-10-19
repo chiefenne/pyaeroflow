@@ -31,11 +31,12 @@ residual grows by more than ``reject_factor``, the update is rejected and the
 CFL number is multiplied by ``cut_factor``.
 
 ``cfl_control = "ser"`` replaces this growth control by proportional SER on
-the per-equation convergence measure m (D54, D55):
+the RMS norm (D55):
 
-    CFL_n = CFL_(n-1) * clip((m_(n-1) / m_n)^p, ratio_min, ratio_max),
+    CFL_n = CFL_(n-1) * clip((|R_(n-1)| / |R_n|)^p, ratio_min, ratio_max),
 
-without a minimum growth, and in the Newton-Krylov phase modulated by the
+with at least ``ser_growth_min`` while the norm falls, and in the
+Newton-Krylov phase modulated by the
 GMRES effort of the step instead of the adaptive cap: full factor below
 ``ser_gmres_hold`` iterations, at most 1 (hold) up to ``ser_gmres_reduce``,
 at most 0.5 above.
@@ -136,10 +137,12 @@ class PseudoTimeSettings:
     cfl_control : {"growth", "ser"}
         CFL control: ``growth`` (SER on the RMS norm with at least
         ``growth_factor`` per accepted iteration, adaptive cap from the
-        GMRES effort) or ``ser`` (proportional SER on the per-equation
-        measure, GMRES-modulated; D55).
+        GMRES effort) or ``ser`` (proportional SER on the RMS norm,
+        bounded per step, GMRES-modulated; D55).
     ser_exponent : float
         Exponent p of the SER ratio (``cfl_control = "ser"``).
+    ser_growth_min : float
+        Minimum CFL factor while the RMS norm falls (``ser``).
     ser_ratio_min, ser_ratio_max : float
         Bounds of the CFL factor per accepted iteration (``ser``).
     ser_gmres_hold : int
@@ -176,6 +179,7 @@ class PseudoTimeSettings:
     line_search_steps: int = 2
     cfl_control: str = "growth"
     ser_exponent: float = 1.0
+    ser_growth_min: float = 1.2
     ser_ratio_min: float = 0.3
     ser_ratio_max: float = 2.0
     ser_gmres_hold: int = 10
@@ -398,11 +402,13 @@ def solve_steady(
         if accepted:
             ser = s.cfl_control == "ser"
             if ser:
-                # Proportional SER on the per-equation measure (D55); the
-                # scales are those before this step, so the ratio is the
-                # worst equation's own progress.
-                m_new = measure(r_new)
-                ratio = (norm / max(m_new, tiny)) ** s.ser_exponent
+                # Proportional SER on the plain RMS norm (D54, D55), with a
+                # minimum growth while it falls: the per-equation measure
+                # stays at 1 while one equation sets new peaks (nu_tilde
+                # during a slow transient) and would shrink the CFL.
+                ratio = (norm_abs / max(abs_new, tiny)) ** s.ser_exponent
+                if ratio > 1.0:
+                    ratio = max(ratio, s.ser_growth_min)
                 ratio = min(max(ratio, s.ser_ratio_min), s.ser_ratio_max)
                 if use_nk and lin_its > s.ser_gmres_reduce:
                     ratio = min(ratio, 0.5)
