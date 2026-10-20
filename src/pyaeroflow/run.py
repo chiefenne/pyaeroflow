@@ -471,6 +471,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir):
             release_limiter=freeze["release"],
             gamma_relaxation=tr_cfg["relaxation"],
             gamma_diagnostics=diagnose,
+            nu_tilde_step_limit=solver["nu_tilde_step_limit"],
         )
     else:
         result = problem.solve_explicit(
@@ -817,6 +818,14 @@ def _mode_rows(cfg):
                 "iterations",
             ),
         ]
+        if solver["nu_tilde_step_limit"] is not None and solver["method"] == "implicit":
+            rows.append(
+                (
+                    "nu_tilde step",
+                    f"capped at {solver['nu_tilde_step_limit']:g} x "
+                    "max(|nu_tilde|, nu) per cell",
+                )
+            )
         if nk["enabled"] and solver["method"] == "implicit":
             when = f"after {nk['switch_at_residual_drop']:g} orders"
             if nk["switch_at_iteration"] is not None:

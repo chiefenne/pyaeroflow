@@ -229,6 +229,7 @@ def solve_steady(
     callback=None,
     jvp=None,
     reference_norm=None,
+    limit_step=None,
 ):
     """Drive ``residual(u)`` to zero by implicit pseudo-time stepping.
 
@@ -257,6 +258,9 @@ def solve_steady(
         Per-variable residual norms that ``residual_drop`` and the
         Newton-Krylov switch refer to; default the norms of the initial
         residual.
+    limit_step : callable, optional
+        ``limit_step(u, du) -> du`` applied to every computed update before
+        the line search (e.g. a cap on the turbulence variable's change).
 
     Convergence is measured per equation (D54): every variable's RMS
     residual is divided by the largest value it has had so far (or by
@@ -378,6 +382,8 @@ def solve_steady(
                 du = lin.solve(-r.ravel())
                 lin_its = lin.iterations
             du = du.reshape(u.shape)
+            if limit_step is not None:
+                du = limit_step(u, du)
             u_new = u + du
             r_new = res(u_new, it + 1)
             abs_new = rms(r_new)

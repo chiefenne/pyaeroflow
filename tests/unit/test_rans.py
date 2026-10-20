@@ -235,7 +235,7 @@ def test_run_case_rans(tmp_path):
     )
 
 
-def _bcm_plate(tmp_path, transition="", output=""):
+def _bcm_plate(tmp_path, transition="", output="", solver=""):
     """Run the BCM flat-plate case; ``transition`` / ``output`` add case keys."""
     from pyaeroflow.cases.tmr_flat_plate import plate_mesh
     from pyaeroflow.mesh import write_su2
@@ -263,6 +263,8 @@ def _bcm_plate(tmp_path, transition="", output=""):
     write_su2(tmp_path / "plate.su2", plate_mesh(48, 12, 48, reynolds=5.0e5))
     if output:
         toml = toml.replace("[output]\n", f"[output]\n{output}")
+    if solver:
+        toml = toml.replace("[solver]\n", f"[solver]\n{solver}")
     (tmp_path / "plate.toml").write_text(toml)
     return run_case(tmp_path / "plate.toml", console=False)
 
@@ -311,6 +313,24 @@ def test_bcm_relaxed_intermittency_and_diagnostics(tmp_path):
     )
     np.testing.assert_allclose(
         w_rel["nu_t_ratio_max"], w_ref["nu_t_ratio_max"], rtol=2e-2, atol=1e-3
+    )
+
+
+def test_bcm_nu_tilde_step_limit(tmp_path):
+    """A nu_tilde step cap of 1 still converges the BCM plate to the same state."""
+    ref = tmp_path / "ref"
+    ref.mkdir()
+    _bcm_plate(ref)
+    run = tmp_path / "limited"
+    run.mkdir()
+    result = _bcm_plate(run, solver="nu_tilde_step_limit = 1.0\n")
+    assert result.converged
+    assert "capped at 1 x" in (run / "out" / "plate.log").read_text()
+    kw = {"delimiter": ",", "names": True}
+    a = np.genfromtxt(ref / "out" / "plate.wall_plate.csv", **kw)
+    b = np.genfromtxt(run / "out" / "plate.wall_plate.csv", **kw)
+    np.testing.assert_allclose(
+        b["nu_t_ratio_max"], a["nu_t_ratio_max"], rtol=2e-2, atol=1e-3
     )
 
 

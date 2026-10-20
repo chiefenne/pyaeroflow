@@ -157,3 +157,31 @@ def test_reference_residual_follows_an_operator_change():
     )
     assert result.converged and result.history["accepted"][3:].all()
     np.testing.assert_allclose(result.u, 1.21, rtol=1e-9)
+
+
+def test_limit_step_is_applied_to_every_update():
+    """The ``limit_step`` hook sees each computed update and its result is used."""
+    import numpy as np
+
+    from pyaeroflow.solver import PseudoTimeSettings, solve_steady
+    from scipy.sparse import identity
+
+    calls = []
+
+    def limit(u, du):
+        calls.append(float(np.abs(du).max()))
+        return np.clip(du, -0.25, 0.25)
+
+    u0 = np.full((4, 1), 3.0)
+    result = solve_steady(
+        lambda u: u.copy(),
+        lambda u: identity(4, format="csc"),
+        lambda u, cfl: identity(4, format="csc") / cfl,
+        u0,
+        PseudoTimeSettings(max_iterations=60, newton_krylov=False, cfl_start=1e6),
+        limit_step=limit,
+    )
+    assert calls and max(calls) > 0.25  # the raw Newton step is larger than the cap
+    h = result.history["residual"]
+    # the clipped steps move u by at most 0.25 per iteration: 3 -> 0 needs 12
+    assert h[1] > 0.5 * h[0] and result.converged

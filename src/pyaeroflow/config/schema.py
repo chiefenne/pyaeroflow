@@ -403,6 +403,15 @@ SCHEMA = {
                 choices=("mmd-at-plus-a", "colamd"),
             ),
         },
+        "nu_tilde_step_limit": Opt(
+            "float",
+            None,
+            "RANS, implicit: cap every update of nu_tilde to this multiple of "
+            "max(|nu_tilde|, nu) per cell before the line search (e.g. 1 = at "
+            "most double); off by default. Stops a Newton step from "
+            "multiplying nu_tilde in one boundary-layer cell",
+            minimum=0.0,
+        ),
         "turbulence_coupling": Opt(
             "string",
             "segregated",
@@ -462,7 +471,8 @@ SCHEMA = {
             False,
             "Add intermittency statistics to the steady history CSV (cells with "
             "gamma > 0.01, cells that switched, largest change and |R_nu| with "
-            "their cell centres); needs physics.transition.model",
+            "their cell centres), counted within 0.05 chords of a wall; needs "
+            "physics.transition.model",
         ),
         "verbosity": Opt(
             "string", "normal", "Log detail", choices=("normal", "detailed")

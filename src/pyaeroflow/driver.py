@@ -58,8 +58,14 @@ class FarfieldVortex:
         self.gamma = 0.0
 
 
+# The diagnostics count cells within this wall distance (non-dimensional,
+# chords): far from the wall Re_v = d^2 |omega| / nu is large and gamma flips
+# in the freestream, which would swamp the boundary-layer statistics.
+GAMMA_DIAGNOSTICS_DISTANCE = 0.05
+
 # Per-iteration transition diagnostics of :meth:`IncompressibleProblem.solve`:
-# cells with gamma > 0.01, area-weighted sum of gamma, cells whose model
+# cells with gamma > 0.01 (within GAMMA_DIAGNOSTICS_DISTANCE of a wall),
+# area-weighted sum of gamma, cells whose model
 # intermittency changed by more than 0.05 since the last accepted iteration,
 # the largest change and its cell centre (x, y), the largest |R_nu| and its
 # cell centre. Coordinates are non-dimensional (divided by the length scale).
@@ -492,6 +498,7 @@ class IncompressibleProblem:
         release_limiter=False,
         gamma_relaxation=None,
         gamma_diagnostics=False,
+        nu_tilde_step_limit=None,
     ):
         """Implicit pseudo-time solution (D25, D35).
 
@@ -514,6 +521,12 @@ class IncompressibleProblem:
         that of the unrelaxed model. ``gamma_diagnostics`` stores per-iteration
         intermittency statistics (:data:`GAMMA_DIAGNOSTICS`) in the callback's
         ``info["transition_diagnostics"]``.
+
+        With ``nu_tilde_step_limit`` = f every update of nu_tilde is capped
+        to f max(|nu_tilde|, nu) per cell before the line search (the
+        mean-flow update is untouched), as SU2 limits its turbulence
+        variable: a Newton step that multiplies nu_tilde in one boundary-layer
+        cell cannot pass as a small change of the overall residual norm.
         """
         w0 = self.initial_state() if w0 is None else w0
         state = {"beta2": self.beta2(w0), "psi": None, "gamma": None, "model": None}
@@ -594,6 +607,16 @@ class IncompressibleProblem:
         if callback is not None and not hasattr(callback, "info"):
             callback.info = on_iteration.info
 
+        limit_step = None
+        if nu_tilde_step_limit is not None and self.turbulent:
+            nu_floor = self.model.viscosity / self.model.density
+
+            def limit_step(u, du):
+                cap = nu_tilde_step_limit * np.maximum(np.abs(u[:, rans.NT]), nu_floor)
+                du = du.copy()
+                du[:, rans.NT] = np.clip(du[:, rans.NT], -cap, cap)
+                return du
+
         return solve_steady(
             residual,
             lambda w: self.jacobian(w, state["beta2"]),
@@ -605,17 +628,24 @@ class IncompressibleProblem:
             jvp=lambda w, dw: self.jvp(
                 w, dw, state["beta2"], state["psi"], state["gamma"]
             ),
+            limit_step=limit_step,
         )
 
     def _gamma_diagnostics(self, w, g_model, change, state):
         """Values of :data:`GAMMA_DIAGNOSTICS` for the accepted state ``w``."""
         c, area = self.mesh.cell_centroid, self.mesh.cell_area
-        g = np.asarray(g_model)
+        near = np.asarray(self.geom.wall_distance) < GAMMA_DIAGNOSTICS_DISTANCE
+        g = np.where(near, np.asarray(g_model), 0.0)
+        change = np.where(near, change, 0.0)
         i = int(np.argmax(change))
-        r_nu = np.abs(
-            self.residual(w, state["beta2"], psi=state["psi"], gamma=state["gamma"])[
-                :, rans.NT
-            ]
+        r_nu = np.where(
+            near,
+            np.abs(
+                self.residual(
+                    w, state["beta2"], psi=state["psi"], gamma=state["gamma"]
+                )[:, rans.NT]
+            ),
+            0.0,
         )
         j = int(np.argmax(r_nu))
         return (

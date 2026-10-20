@@ -31,7 +31,9 @@
   iteration, which turns the one-step R_ν jumps at the onset threshold (E387
   α = 8 with SER: 2-order jumps every ~125 iterations) into a ramp. Same
   converged state. `output.transition_diagnostics` adds γ statistics and the
-  location of the largest γ change and |R_ν| to the history CSV.
+  location of the largest γ change and |R_ν| to the history CSV (near-wall
+  cells only). `solver.nu_tilde_step_limit` caps each Newton update of ν̃ per
+  cell relative to max(|ν̃|, ν) (off by default).
 - Verified on the TMR plate at Re_L = 5·10⁵: laminar at Tu 0.1 %, transition
   at Re_x = 1.2·10⁵ at Tu 3.3 % (T3A); `docs/validation.md` section 7,
   example `examples/cases/flat_plate_transition.toml`. The discrete problem
