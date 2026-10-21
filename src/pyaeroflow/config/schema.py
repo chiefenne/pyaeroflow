@@ -495,10 +495,10 @@ SCHEMA = {
         "transition_diagnostics": Opt(
             "bool",
             False,
-            "Add intermittency statistics to the steady history CSV (cells with "
-            "gamma > 0.01, cells that switched, largest change and |R_nu| with "
-            "their cell centres), counted within 0.05 chords of a wall; needs "
-            "physics.transition.model",
+            "Add intermittency statistics to the history CSV (cells with "
+            "gamma > 0.01, cells that switched, largest change with its cell "
+            "centre; steady runs also |R_nu|), counted within 0.05 chords of "
+            "a wall; needs physics.transition.model",
         ),
         "verbosity": Opt(
             "string", "normal", "Log detail", choices=("normal", "detailed")

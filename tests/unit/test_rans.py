@@ -235,7 +235,7 @@ def test_run_case_rans(tmp_path):
     )
 
 
-def _bcm_plate(tmp_path, transition="", output="", solver=""):
+def _bcm_plate(tmp_path, transition="", output="", solver="", tail=""):
     """Run the BCM flat-plate case; ``transition`` / ``output`` add case keys."""
     from pyaeroflow.cases.tmr_flat_plate import plate_mesh
     from pyaeroflow.mesh import write_su2
@@ -265,7 +265,7 @@ def _bcm_plate(tmp_path, transition="", output="", solver=""):
         toml = toml.replace("[output]\n", f"[output]\n{output}")
     if solver:
         toml = toml.replace("[solver]\n", f"[solver]\n{solver}")
-    (tmp_path / "plate.toml").write_text(toml)
+    (tmp_path / "plate.toml").write_text(toml + tail)
     return run_case(tmp_path / "plate.toml", console=False)
 
 
@@ -392,3 +392,16 @@ def test_unsteady_nu_tilde_step_limit(tmp_path, monkeypatch):
     out = limit(u, du)
     np.testing.assert_array_equal(out[:, :3], 7.0)
     np.testing.assert_allclose(out[:, 3], [1e-9, 1.0, -4.0])
+
+
+def test_unsteady_gamma_diagnostics(tmp_path):
+    """transition_diagnostics adds the gamma statistics to the unsteady history."""
+    tail = '[time]\nmode = "unsteady"\ntime_step = 0.01\nend_time = 0.03\n'
+    _bcm_plate(tmp_path, output="transition_diagnostics = true\n", tail=tail)
+    h = np.genfromtxt(tmp_path / "out" / "plate.history.csv", delimiter=",", names=True)
+    assert len(h["step"]) == 3
+    for col in ("gamma_cells", "gamma_area", "gamma_jumped", "gamma_dmax_y"):
+        assert col in h.dtype.names
+    assert "rnu_max" not in h.dtype.names
+    assert (h["gamma_cells"] > 0).all() and (h["gamma_area"] > 0).all()
+    assert (h["gamma_dmax"] >= 0).all() and (h["gamma_dmax"] <= 1).all()

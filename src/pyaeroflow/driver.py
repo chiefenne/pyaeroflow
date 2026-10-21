@@ -82,6 +82,11 @@ GAMMA_DIAGNOSTICS = (
 )
 
 
+# The first six of them (no residual) are the per-time-step diagnostics of
+# unsteady runs, relative to the previous step.
+GAMMA_STEP_DIAGNOSTICS = GAMMA_DIAGNOSTICS[:6]
+
+
 class IncompressibleProblem:
     """An incompressible flow case on a mesh.
 
@@ -638,13 +643,41 @@ class IncompressibleProblem:
 
         return limit_step
 
-    def _gamma_diagnostics(self, w, g_model, change, state):
-        """Values of :data:`GAMMA_DIAGNOSTICS` for the accepted state ``w``."""
+    def _gamma_statistics(self, g_model, change):
+        """Return the first six :data:`GAMMA_DIAGNOSTICS` (near-wall cells only)."""
         c, area = self.mesh.cell_centroid, self.mesh.cell_area
         near = np.asarray(self.geom.wall_distance) < GAMMA_DIAGNOSTICS_DISTANCE
         g = np.where(near, np.asarray(g_model), 0.0)
         change = np.where(near, change, 0.0)
         i = int(np.argmax(change))
+        return (
+            int(np.count_nonzero(g > 0.01)),
+            float(np.sum(g * area)),
+            int(np.count_nonzero(change > 0.05)),
+            float(change[i]),
+            float(c[i, 0]),
+            float(c[i, 1]),
+        )
+
+    def gamma_step_diagnostics(self, w, previous=None):
+        """Per-time-step intermittency statistics of an unsteady run.
+
+        Returns (values of :data:`GAMMA_STEP_DIAGNOSTICS`, model gamma of
+        ``w``); ``previous`` is the model gamma of the previous step (``None``:
+        no change is counted).
+        """
+        g = self.physics.intermittency_field(
+            self.model, self.geom, self.bc, jnp.asarray(w)
+        )
+        change = (
+            np.zeros(len(g)) if previous is None else np.abs(np.asarray(g - previous))
+        )
+        return self._gamma_statistics(g, change), g
+
+    def _gamma_diagnostics(self, w, g_model, change, state):
+        """Values of :data:`GAMMA_DIAGNOSTICS` for the accepted state ``w``."""
+        c = self.mesh.cell_centroid
+        near = np.asarray(self.geom.wall_distance) < GAMMA_DIAGNOSTICS_DISTANCE
         r_nu = np.where(
             near,
             np.abs(
@@ -655,13 +688,7 @@ class IncompressibleProblem:
             0.0,
         )
         j = int(np.argmax(r_nu))
-        return (
-            int(np.count_nonzero(g > 0.01)),
-            float(np.sum(g * area)),
-            int(np.count_nonzero(change > 0.05)),
-            float(change[i]),
-            float(c[i, 0]),
-            float(c[i, 1]),
+        return self._gamma_statistics(g_model, change) + (
             float(r_nu[j]),
             float(c[j, 0]),
             float(c[j, 1]),

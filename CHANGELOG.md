@@ -12,7 +12,9 @@
   adds backups at the listed iterations or steps, on top of
   `restart_backup_interval` or alone.
 - `solver.nu_tilde_step_limit` now also caps the inner Newton updates of an
-  unsteady (dual-time) run.
+  unsteady (dual-time) run. `output.transition_diagnostics` also works in
+  unsteady runs: per time step, the near-wall γ statistics (columns
+  `gamma_cells` to `gamma_dmax_y`) in the history CSV.
 - Renamed from `aerojax` to `pyaeroflow`: repository
   github.com/chiefenne/pyaeroflow (the old URL redirects), package, import,
   command and conda environment, all lower case. PyAeroFlow is the written

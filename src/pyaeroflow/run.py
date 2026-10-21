@@ -19,7 +19,12 @@ import numpy as np
 
 from pyaeroflow import __version__
 from pyaeroflow.config import Resolved, load_case, resolve
-from pyaeroflow.driver import GAMMA_DIAGNOSTICS, INFLOW_TYPES, IncompressibleProblem
+from pyaeroflow.driver import (
+    GAMMA_DIAGNOSTICS,
+    GAMMA_STEP_DIAGNOSTICS,
+    INFLOW_TYPES,
+    IncompressibleProblem,
+)
 from pyaeroflow.io import HistoryWriter, RunLog, StepHistoryWriter, write_pvd, write_vtu
 from pyaeroflow.mesh import Mesh, read_su2
 from pyaeroflow.physics import forces as fz
@@ -614,7 +619,16 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir):
     force_boundaries = cfg["output"]["force_boundaries"]
     monitor = Monitor(config, problem, scaling) if force_boundaries else None
     coeff_names = ("CL", "CD", "CM") if monitor else ()
-    history = StepHistoryWriter(out_dir / f"{name}.history.csv", names, coeff_names)
+    diagnose = cfg["output"]["transition_diagnostics"]
+    history = StepHistoryWriter(
+        out_dir / f"{name}.history.csv",
+        names,
+        coeff_names,
+        GAMMA_STEP_DIAGNOSTICS if diagnose else (),
+    )
+    gamma = {"previous": None}
+    if diagnose:  # the first step is compared with the restart state
+        _, gamma["previous"] = problem.gamma_step_diagnostics(w0)
     detailed = cfg["output"]["verbosity"] == "detailed"
     log.step_header(names, ("GMRES",) + tuple((c, 11) for c in coeff_names))
     interval = cfg["output"]["interval"]
@@ -636,6 +650,11 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir):
         extra = (lin if lin else "",) + tuple(f"{c:.5f}" for c in coeffs)
         note = "" if converged else "inner limit"
         log.step(step, t * t_scale, inner, drop, residuals, extra, note)
+        stats = ()
+        if diagnose:
+            stats, gamma["previous"] = problem.gamma_step_diagnostics(
+                w, gamma["previous"]
+            )
         history.row(
             step,
             t * t_scale,
@@ -646,6 +665,7 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir):
             lin,
             coeffs,
             log.elapsed,
+            stats,
         )
         if interval and step % interval == 0:
             write_series(step, t, w)

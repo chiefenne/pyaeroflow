@@ -75,7 +75,7 @@ class StepHistoryWriter:
     linear_iterations, the coefficients, time_s.
     """
 
-    def __init__(self, path, residual_names, coefficient_names=()):
+    def __init__(self, path, residual_names, coefficient_names=(), diagnostic_names=()):
         self.path = Path(path)
         self._file = open(self.path, "w", newline="")
         self._writer = csv.writer(self._file)
@@ -89,6 +89,7 @@ class StepHistoryWriter:
                 "inner_converged",
                 "linear_iterations",
                 *coefficient_names,
+                *diagnostic_names,
                 "time_s",
             ]
         )
@@ -104,6 +105,7 @@ class StepHistoryWriter:
         linear,
         coefficients,
         elapsed,
+        diagnostics=(),
     ):
         """Write one row."""
         self._writer.writerow(
@@ -116,6 +118,7 @@ class StepHistoryWriter:
                 int(converged),
                 int(linear),
                 *(f"{c:.8e}" for c in coefficients),
+                *(f"{d:.6e}" if isinstance(d, float) else d for d in diagnostics),
                 f"{elapsed:.3f}",
             ]
         )
