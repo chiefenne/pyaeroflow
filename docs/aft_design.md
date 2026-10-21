@@ -148,20 +148,24 @@ Tu(%) is the freestream turbulence intensity in percent; τ is Drela's limiter
 
 ### 5.3 SA-AFT2019b: replaced correlations
 
-The form of 2017b is kept; these replace the 2017b ones. The page lists:
+The form of 2017b is kept; these replace the 2017b ones (TMR page, confirmed
+by Coder, AIAA 2019-0039, eqs. 2 to 14):
 
 ```
-H_L    = d²/ν [ ∂/∂x_i ( u_j ∂d/∂x_j ) ∂d/∂x_i ]       (constant-density form)
-H12    = 0.26 H_L + 2.4
+H_L    = d²/μ [ ∂/∂x_i ( ρ u_j ∂d/∂x_j ) ∂d/∂x_i ]      (the TMR page also gives the constant-density form d²/ν [...])
+H12    = min[ max(0.26 H_L + 2.4, 2.2), 20.0 ]
 D(H12) = 2.4 H12 / (H12 - 1)
 k_V    = 1 / (0.4036 H12² - 2.5394 H12 + 4.3273)
 ```
 
-The page text names H12, H_L and F_growth as improved; of F_growth only D is
-listed, so l(H12) and m(H12) are taken unchanged from 2017b. This is the
-reading to confirm against Coder (AIAA 2019-0039) before coding. The page's
-equation file also contains a stray "B = 1" that does not appear in the page
-text; it is ignored.
+Unchanged from 2017b: l(H12), m(H12), F_growth = D (1 + m)/2 l, dñ/dRe_θ,
+log10(Re_θ0), F_crit, the onset and turbulence functions, constants. The
+clipping of H12 is in the 2019 paper (eq. 3) but not on the TMR page: the lower
+limit 2.2 keeps H12 physically reasonable and prevents unintended destruction
+of ñ; the upper limit 20 prevents spurious production through shocks and near
+stagnation points. 2017b (AIAA 2018-1039, Appendix, eq. A3 to A4) instead limits
+-0.25 <= H_L <= 200 "for numerical reasons". The "B = 1" in the TMR equation
+file does not appear in the page or the papers and is ignored.
 
 ### 5.4 Constants and boundary conditions
 
@@ -180,16 +184,47 @@ which is about 0 in laminar and 1 in turbulent boundary layers (the page cites
 Spalart and Allmaras, 1994). The page notes that some implementations limit ñ
 and γ̃ to prevent runaway behaviour.
 
-### 5.5 Points to settle before coding
+### 5.5 Findings from the papers
 
-- F_crit is a step function of Re_V - Re_V0 (as is the BCM threshold). It is
-  not differentiable at the step; the smooth part of F_growth and the other
-  factors are. Check how the reference implementations treat the step in the
-  Jacobian (no change of the discrete cycle problem would be acceptable).
-- H12 contains a square root (2017b) and divisions by H12 - 1 and by l(H12):
-  the admissible range of H_L must be limited (clipping), as the references do.
-- The 2019b F_growth reading (above).
-- The first-order Jacobian of the new sources (negative part only, as for SA).
+Sources: Coder, AIAA 2019-0039 (AFT2019) and Coder, Pulliam, Jensen, AIAA
+2018-1039 (AFT2017b, Appendix); copies in the project files under
+`uploads/papers/`.
+
+- **F_growth in 2019b:** only D changes (eq. 9); l and m are as in 2017b
+  (eqs. 6 and 7). This settles the open reading.
+- **H12 limits:** [2.2, 20] in 2019b, none on the TMR page; implement them.
+- **Intermittency coupling:** f_t2 = c_t3 [1 - exp(γ̃)] with c_t3 = 1.2 is the
+  only change to SA ("all functions are defined as in the standard SA model");
+  f_t2 stays in the destruction term, where it cancels the production effect in
+  turbulent boundary layers. The paper's γ̃ equation (eq. 15) has the c_2 sign
+  typo that the TMR page corrects. The nonlinear diffusion term that the
+  ln γ change of variable would add is omitted on purpose.
+- **N_crit:** can be set directly (positive) or from Tu by eqs. 23 and 24
+  (Mack with Drela's smooth maximum, limit 2.5 %). Used values: 10.3 for the
+  Schubauer-Klebanoff flat plate, 7.2 for NLF(1)-0416 (Tu 0.15 %), 9 for the
+  S809 (Tu 0.07 %).
+- **Free-stream ν̃:** recommended ν̃/ν = 0.1 (ν_t/ν = 2.79e-7); the paper reports
+  surprising sensitivity of the drag to very low values (0.01), no sensitivity
+  of the skin friction up to ν̃/ν = 10.
+- **Convergence (the open risk):** transition starts at the trailing edge and
+  moves upstream during the iteration (flat plate: laminar for about 10 000
+  iterations, transition moves upstream until about 18 000, 50 000 in total,
+  with a structured third-order upwind solver, "this can limit the CFL
+  condition"). On the TMR plate grid family the finest grid stalled
+  (mean-flow residual not below 1e-7), no asymptotic grid convergence
+  could be shown. Expect the same upstream-moving transition in our
+  pseudo-time Newton-Krylov iteration; continuation from a laminar solution
+  and restarts are the natural remedy.
+- **Validation data in the paper:** TMR flat plate (N_crit 10.3), NLF(1)-0416
+  (Re 4e6, M 0.1, polar and Cp), S809 (Re 2e6, laminar bucket and laminar
+  separation bubbles; the model slightly underpredicts the bubble length),
+  6:1 prolate spheroid, Braunschweig sickle wing. No E387 or SD7003 case: those
+  remain our own validation against TM 4062 and XFOIL.
+- **Still open:** how the F_crit step (and the F_onset max/min functions, all
+  non-smooth) behave in the exact Jacobian; the paper uses a pseudo-time
+  scheme without Jacobian differentiation of the transition terms to our
+  knowledge, so this is untested for Newton-Krylov. Plan a first-order Jacobian
+  without the step, as for BCM, and the exact JVP, and compare.
 
 ## 6. Out of scope
 
