@@ -1,25 +1,28 @@
 # SA-AFT transition model: design note (planned, not started)
 
 Status: planned step (2) of L3 in `requirements.md`. No code yet. This note
-fixes the intended structure so that the work can start once the equations are
-transcribed. The model switch that precedes the implementation is the owner's
+fixes the intended structure and holds the transcribed model definition
+(section 5). The model switch that precedes the implementation is the owner's
 decision.
 
 ## 1. Model and source
 
-AFT2019b (Coder, with Stefanski et al. for the SA-neg coupling), as documented
-on the NASA Turbulence Modeling Resource: Spalart-Allmaras plus two transport
-equations, one for a modified intermittency and one for the amplification
-factor Ñ (the envelope of linearly amplified instabilities, the transported
-counterpart of the e^N method). Page named in the Flow360 documentation:
-`turbmodels.larc.nasa.gov/aft_transition_3eqn.html`. Papers: Coder and
-Maughmer (2014), Coder (2017, 2019), Stefanski et al. (2019, SA-neg coupling),
-Denison et al. (NASA LAVA, NTRS 20190028873).
-
-**The equations are not transcribed yet.** The page and NTRS could not be
-reached from the cloud session (network policy). Nothing below depends on
-values that were not retrieved. Section 5 lists what the transcription must
-supply.
+SA-AFT2019b (Coder), as documented on the NASA Turbulence Modeling Resource
+(TMR): Spalart-Allmaras plus two transport equations, one for the amplification
+factor ñ (the envelope of linearly amplified instabilities, the transported
+counterpart of the e^N method) and one for the natural logarithm of the
+intermittency, γ̃ = ln γ. The TMR page is `aft_transition_3eqn.html`, now
+hosted at https://tmbwg.github.io/turbmodels/ (source repository
+github.com/TMBWG/turbmodels; transcribed from commit 20a39f5, page last
+updated 10/04/2022 with typo fixes in the γ̃ equation and in c_2). AFT2019b has
+the same form as SA-AFT2017b, with improved correlations for H12, the local
+shape factor H_L and F_growth. Primary references: Coder, Pulliam and Jensen,
+AIAA 2018-1039 (2017b); Coder, AIAA 2019-0039 (2019b; its γ̃ equation has a
+sign typo on the c_2 term, the TMR form is the correct one); γ̃ equation after
+Menter et al., Flow Turbul. Combust. 95 (2015); N_crit after Mack (1977);
+limiter after Drela (MISES). Other papers: Coder and Maughmer (2014),
+Stefanski et al. (2019, SA-neg coupling), Denison et al. (NASA LAVA, NTRS
+20190028873).
 
 ## 2. Intended structure
 
@@ -33,15 +36,20 @@ supply.
 - **Transport.** γ̃ and Ñ use the same upwind convection and diffusion
   machinery as ν̃ (`upwind_scalar_flux`, face diffusion coefficients as the page
   specifies), added to the residual in `rans.py`.
-- **Coupling.** SA production/destruction modified as specified by the page,
-  compatible with SA-neg (the code uses `sa-neg`).
-- **Inputs from the flow.** Vorticity, wall distance (already used by BCM) and
-  whichever velocity-gradient quantity the local shape factor needs: to be
-  confirmed from the page.
+- **Coupling.** Only f_t2 changes: f_t2 = c_t3 (1 - exp(γ̃)) replaces the
+  default f_t2 in the SA equation; the production term is not multiplied by an
+  intermittency (unlike BCM). `spalart_allmaras.source` already has the f_t2
+  term (`ft2` flag, `CT3`); it needs a way to take f_t2 as an argument.
+  The page's SA equation is the standard SA with the SA-neg continuation left
+  to the implementation (the code uses `sa-neg`).
+- **Inputs from the flow.** Strain-rate magnitude S and vorticity Ω (full
+  tensors, not only |∂v/∂x - ∂u/∂y| as in BCM), wall distance d, and the wall
+  distance gradient ∂d/∂x_j for H_L (a geometric field, precomputed once per
+  mesh, like `wall_distance`). R_T = μ_t/μ and Re_V use the current ν̃.
 - **Configuration.** `physics.transition.model = "aft"`; `turbulence_intensity`
-  reused (as for BCM); N_crit follows from Tu by the page's relation unless the
-  page offers an override. Freestream and wall values of γ̃ and Ñ as the page
-  specifies, derived from the inflow Tu.
+  reused (as for BCM); N_crit from the page's relation (section 5), so Tu
+  fixes it. Inflow and wall values as in section 5; ν̃/ν = 0.1 in the
+  freestream, as for BCM.
 
 ## 3. Numerics
 
@@ -71,22 +79,119 @@ supply.
    family as the existing BCM plate (`docs/validation.md` §7).
 3. E387 at Re 2·10^5 (the case from the BCM work, NASA TM 4062 data) and the
    α polar; SD7003 at Re 6·10^4 (L3).
-4. **XFOIL comparison.** Same Re and α, N_crit from Tu by Mack's relation
-   (N_crit = -8.43 - 2.4 ln Tu, Tu as a fraction: about 8.1 at 0.1 %).
+4. **XFOIL comparison.** Same Re and α, N_crit from Tu by the page's relation
+   (section 5): 8.15 at Tu = 0.1 %.
    Compare transition and separation/reattachment locations, Cp, CL, CD. Use
    published XFOIL results where available, otherwise run XFOIL locally.
 5. Time-accurate run at the E387 α = 8 case, to see whether the model removes
    the force oscillation seen with BCM (`analysis/e387_alpha8_ser_stall.md`).
 
-## 5. To transcribe from the page before coding
+## 5. Model definition (transcribed from the TMR page)
 
-All transport equations (γ̃, Ñ), the SA coupling, every auxiliary function and
-constant (shape factor and its local parameter, growth rate, critical
-Reynolds number, onset and production/destruction terms), the N_crit relation,
-free-stream and wall boundary values, and the page's own verification cases
-with reference data.
+Notation: ρ density, μ molecular and μ_t eddy dynamic viscosity (μ_t from SA,
+ν_t = ν̃ f_v1 as usual), d wall distance, S = sqrt(2 S_ij S_ij) the strain-rate
+and Ω = sqrt(2 Ω_ij Ω_ij) the vorticity magnitude (S_ij, Ω_ij the symmetric and
+antisymmetric parts of ∂u_i/∂x_j). Linear eddy-viscosity model. The page treats
+variable density (ρ inside the derivatives); for the incompressible solver ρ is
+constant. Typographical fixes of 10/04/2022 are included.
+
+### 5.1 Transport equations (both versions)
+
+```
+Dν̃/Dt = c_b1 S̃ ν̃ (1 - f_t2) - (c_w1 f_w - c_b1/κ² f_t2) (ν̃/d)²
+         + 1/σ [ ∂/∂x_j((ν + ν̃) ∂ν̃/∂x_j) + c_b2 ∂ν̃/∂x_j ∂ν̃/∂x_j ]
+
+∂(ρñ)/∂t + ∂(ρ u_j ñ)/∂x_j = ρ Ω F_crit F_growth dñ/dRe_θ
+                              + ∂/∂x_j [ σ_n (μ + μ_t) ∂ñ/∂x_j ]
+
+∂(ργ̃)/∂t + ∂(ρ u_j γ̃)/∂x_j = c_1 ρ S F_onset [1 - exp(γ̃)]
+                               - c_2 ρ Ω F_turb [c_3 exp(γ̃) - 1]
+                               + ∂/∂x_j [ (μ + μ_t/σ_y) ∂γ̃/∂x_j ]
+
+f_t2 = c_t3 [1 - exp(γ̃)]          (coupling to SA)
+```
+
+γ̃ = ln γ (γ = exp(γ̃) is the intermittency; the change of variable keeps γ
+positive). The page notes that the reference paper combines F_onset,1 and
+F_onset,2 into one function; they are separated here.
+
+### 5.2 Auxiliary functions, SA-AFT2017b
+
+```
+H_L    = d²/μ [ ∂/∂x_i ( ρ u_j ∂d/∂x_j ) ∂d/∂x_i ]      (local shape factor)
+H12    = 0.376960 + sqrt( (H_L + 2.453432) / 0.653181 )
+
+Re_V   = ρ S d² / (μ + μ_t)
+Re_V0  = k_V Re_θ0
+k_V    = 0.246175 H12² - 0.141831 H12 + 0.008886
+log10(Re_θ0) = 0.7 tanh(14/(H12 - 1) - 9.24) + 2.492/(H12 - 1)^0.43 + 0.62
+F_crit = 0 for Re_V < Re_V0,   1 for Re_V >= Re_V0
+
+F_growth = D(H12) (1 + m(H12))/2 l(H12)
+D(H12) = H12 / (0.5482 H12 - 0.5185)
+l(H12) = (6.54 H12 - 14.07) / H12²
+m(H12) = 1/l(H12) [ 0.058 (H12 - 4)²/(H12 - 1) - 0.068 ]
+dñ/dRe_θ = 0.028 (H12 - 1) - 0.0345 exp[ -(3.87/(H12 - 1) - 2.52)² ]
+
+F_onset   = max(F_onset,2 - F_onset,3, 0)
+F_onset,1 = ñ / N_crit
+F_onset,2 = min(F_onset,1, 2)
+F_onset,3 = max(1 - (R_T/3.5)³, 0)
+F_turb    = exp[ -(R_T/2)⁴ ]
+R_T       = μ_t / μ
+
+N_crit = -8.43 - 2.4 ln(τ/100),    τ = 2.5 tanh( Tu(%) / 2.5 )
+```
+
+Tu(%) is the freestream turbulence intensity in percent; τ is Drela's limiter
+(τ = 0.0999 for Tu = 0.1 %, so N_crit = 8.15).
+
+### 5.3 SA-AFT2019b: replaced correlations
+
+The form of 2017b is kept; these replace the 2017b ones. The page lists:
+
+```
+H_L    = d²/ν [ ∂/∂x_i ( u_j ∂d/∂x_j ) ∂d/∂x_i ]       (constant-density form)
+H12    = 0.26 H_L + 2.4
+D(H12) = 2.4 H12 / (H12 - 1)
+k_V    = 1 / (0.4036 H12² - 2.5394 H12 + 4.3273)
+```
+
+The page text names H12, H_L and F_growth as improved; of F_growth only D is
+listed, so l(H12) and m(H12) are taken unchanged from 2017b. This is the
+reading to confirm against Coder (AIAA 2019-0039) before coding. The page's
+equation file also contains a stray "B = 1" that does not appear in the page
+text; it is ignored.
+
+### 5.4 Constants and boundary conditions
+
+```
+σ_n = 1.0   c_1 = 100   c_2 = 0.06   c_3 = 50   σ_y = 1.0   c_t3 = 1.2
+(c_2 was listed as 0.6 before 10/04/2022: 0.06 is correct; the sign in front
+ of the c_2 term of the γ̃ equation is minus, as written above)
+SA constants (c_b1, c_b2, σ, κ, c_w1..3, c_v1) as in the standard model.
+
+Freestream: ñ = 0,  γ̃ = 0 (γ = 1);   ν̃/ν = 0.1 suggested (ν_t/ν = 2.79e-7)
+Wall:       ∂ñ/∂y = 0,  ∂γ̃/∂y = 0,  ν̃ = 0
+```
+
+Transition location: Spalart's turbulence index i_t = (1/(κ sqrt(νΩ))) ∂ν̃/∂n,
+which is about 0 in laminar and 1 in turbulent boundary layers (the page cites
+Spalart and Allmaras, 1994). The page notes that some implementations limit ñ
+and γ̃ to prevent runaway behaviour.
+
+### 5.5 Points to settle before coding
+
+- F_crit is a step function of Re_V - Re_V0 (as is the BCM threshold). It is
+  not differentiable at the step; the smooth part of F_growth and the other
+  factors are. Check how the reference implementations treat the step in the
+  Jacobian (no change of the discrete cycle problem would be acceptable).
+- H12 contains a square root (2017b) and divisions by H12 - 1 and by l(H12):
+  the admissible range of H_L must be limited (clipping), as the references do.
+- The 2019b F_growth reading (above).
+- The first-order Jacobian of the new sources (negative part only, as for SA).
 
 ## 6. Out of scope
 
-Crossflow transition (the model has no deliberate treatment, 2019 paper),
+Crossflow transition (the model has no deliberate treatment),
 compressible forms, and 3D.
