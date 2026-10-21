@@ -10,6 +10,7 @@ import copy
 import dataclasses
 import hashlib
 import math
+import os
 import tomllib
 from pathlib import Path
 from typing import NamedTuple
@@ -286,15 +287,65 @@ def mesh_fingerprint(mesh):
     return hashlib.sha1(data.tobytes()).hexdigest()[:16]
 
 
-def save_restart(path, mesh, w_nd):
-    """Write the non-dimensional state and the mesh fingerprint (D45)."""
-    np.savez(
-        path,
-        w=np.asarray(w_nd),
-        fingerprint=mesh_fingerprint(mesh),
-        n_cells=mesh.n_cells,
-        version=__version__,
-    )
+def save_restart(path, mesh, w_nd, step=None, time=None):
+    """Write the non-dimensional state and the mesh fingerprint (D45).
+
+    The file is written next to ``path`` and renamed, so an interrupted write
+    never damages an existing restart file. ``step`` (iteration or time step)
+    and ``time`` (physical seconds, unsteady runs) are stored for reference;
+    a restart ignores them.
+    """
+    path = Path(path)
+    extra = {}
+    if step is not None:
+        extra["step"] = step
+    if time is not None:
+        extra["time"] = time
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "wb") as file:
+        np.savez(
+            file,
+            w=np.asarray(w_nd),
+            fingerprint=mesh_fingerprint(mesh),
+            n_cells=mesh.n_cells,
+            version=__version__,
+            **extra,
+        )
+    os.replace(tmp, path)
+
+
+class RestartWriter:
+    """Restart files written during a run (``output.restart_interval``).
+
+    ``restart_interval`` = n writes ``<name>.restart_a.npz`` and
+    ``<name>.restart_b.npz`` alternately every n iterations (steady) or time
+    steps (unsteady); each write replaces the older of the two, so the newer
+    one is always complete. ``restart_backup_interval`` = m writes a file
+    ``<name>.restart_<number>.npz`` that is never replaced. A write that falls
+    on a rejected iteration or a time step that hit the inner limit waits for
+    the next good one.
+    """
+
+    def __init__(self, out_dir, name, mesh, output):
+        self.out_dir, self.name, self.mesh = out_dir, name, mesh
+        self.every = output["restart_interval"]
+        self.backup = output["restart_backup_interval"]
+        self.written = 0
+        self.buckets = {"rolling": 0, "backup": 0}
+
+    def __call__(self, number, w, good=True, time=None):
+        """Write the files that are due at iteration or step ``number``."""
+        if not good:
+            return
+        if self.every and number // self.every > self.buckets["rolling"]:
+            self.buckets["rolling"] = number // self.every
+            file = f"{self.name}.restart_{'ab'[self.written % 2]}.npz"
+            self.written += 1
+            save_restart(self.out_dir / file, self.mesh, w, number, time)
+        if self.backup and number // self.backup > self.buckets["backup"]:
+            self.buckets["backup"] = number // self.backup
+            file = f"{self.name}.restart_{number:06d}.npz"
+            save_restart(self.out_dir / file, self.mesh, w, number, time)
 
 
 def load_restart(path, mesh, w_default):
@@ -420,6 +471,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir):
     )
     log.iteration_header(names, extra_names)
     interval = cfg["output"]["interval"]
+    restarts = RestartWriter(out_dir, name, mesh, cfg["output"])
 
     timing = {"setup": None}
 
@@ -448,6 +500,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir):
         )
         if interval and it and it % interval == 0:
             _write_fields(out_dir / f"{name}_{it:06d}.vtu", mesh, w, scaling, problem)
+        restarts(it, w, good=bool(accepted))
 
     callback.info = {}
 
@@ -558,6 +611,7 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir):
     log.step_header(names, ("GMRES",) + tuple((c, 11) for c in coeff_names))
     interval = cfg["output"]["interval"]
     series = []
+    restarts = RestartWriter(out_dir, name, mesh, cfg["output"])
     timing = {"setup": None}
 
     def write_series(step, t, w):
@@ -587,6 +641,7 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir):
         )
         if interval and step % interval == 0:
             write_series(step, t, w)
+        restarts(step, w, good=bool(converged), time=t * t_scale)
         if detailed:
             log.iteration_header(names, ("NK", "GMRES"))
             log.step_header(names, ("GMRES",) + tuple((c, 11) for c in coeff_names))

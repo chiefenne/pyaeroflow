@@ -460,6 +460,23 @@ SCHEMA = {
             minimum=0,
         ),
         "history": Opt("bool", True, "Write the convergence history (CSV and .log)"),
+        "restart_interval": Opt(
+            "int",
+            0,
+            "Write a restart file every n iterations (steady) or time steps "
+            "(unsteady), alternately to <name>.restart_a.npz and "
+            "<name>.restart_b.npz (each write replaces the older one); "
+            "0 = only the final <name>.restart.npz",
+            minimum=0,
+        ),
+        "restart_backup_interval": Opt(
+            "int",
+            0,
+            "Write a restart file <name>.restart_<number>.npz that is never "
+            "replaced every n iterations (steady) or time steps (unsteady); "
+            "0 = none",
+            minimum=0,
+        ),
         "force_boundaries": Opt(
             "string_list",
             None,

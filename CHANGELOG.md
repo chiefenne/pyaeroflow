@@ -2,6 +2,13 @@
 
 ## Unreleased (0.8) – Transition, step 1: SA-BCM
 
+- Restart files during a run: `output.restart_interval` writes two files
+  alternately (`<name>.restart_a.npz`, `<name>.restart_b.npz`), and
+  `output.restart_backup_interval` writes permanent numbered copies
+  (`<name>.restart_<number>.npz`), counted in iterations (steady) or time steps
+  (unsteady). All restart files are written through a temporary file and
+  carry the iteration or step (and the time of an unsteady run). The file at
+  the end of the run is unchanged.
 - Renamed from `aerojax` to `pyaeroflow`: repository
   github.com/chiefenne/pyaeroflow (the old URL redirects), package, import,
   command and conda environment, all lower case. PyAeroFlow is the written

@@ -200,3 +200,53 @@ def test_polar_runs_a_restart_chain(tmp_path):
     # Lift of a cylinder vanishes at every angle; the second run restarted.
     assert abs(polar["CL"]).max() < 5e-3
     assert main(["polar", str(tmp_path / "cyl.toml"), "--alpha", "0", "--quiet"]) == 0
+
+
+def test_rolling_and_backup_restart_files(case_dir):
+    """Rolling files alternate, backups stay, a restart from either one works."""
+    text = COUETTE.replace(
+        'directory = "out"',
+        'directory = "out"\nrestart_interval = 3\nrestart_backup_interval = 5',
+    )
+    (case_dir / "rolling.toml").write_text(text)
+    first = run_case(case_dir / "rolling.toml", console=False)
+    out = first.output_dir
+    n = int(first.history["iteration"][-1])
+    assert n >= 10, "the case must run long enough for two writes of each file"
+    for name in ("a", "b"):
+        assert (out / f"couette_test.restart_{name}.npz").exists()
+    backups = sorted(out.glob("couette_test.restart_0*.npz"))
+    assert [b.name for b in backups] == [
+        f"couette_test.restart_{k:06d}.npz" for k in range(5, n + 1, 5)
+    ]
+    assert not list(out.glob("*.tmp"))
+    steps = {
+        name: int(np.load(out / f"couette_test.restart_{name}.npz")["step"])
+        for name in ("a", "b")
+    }
+    assert max(steps.values()) % 3 == 0 and abs(steps["a"] - steps["b"]) == 3
+    newest = out / f"couette_test.restart_{'ab'[steps['b'] > steps['a']]}.npz"
+    text = COUETTE.replace('name = "couette_test"', 'name = "couette_again"').replace(
+        "[initial]\nvelocity = [0.0, 0.0]", f'[initial]\nrestart = "{newest}"'
+    )
+    (case_dir / "again.toml").write_text(text)
+    second = run_case(case_dir / "again.toml", console=False)
+    assert second.converged and second.history["iteration"][-1] < n
+
+
+def test_restart_files_unsteady(tmp_path):
+    mesh = rectangle(4, 32, x=(0.0, 1.0), y=(0.0, 0.5), cell_type="quad")
+    write_su2(tmp_path / "channel.su2", mesh)
+    (tmp_path / "couette.toml").write_text(
+        UNSTEADY.replace(
+            'directory = "out"',
+            'directory = "out"\nrestart_interval = 4\nrestart_backup_interval = 6',
+        )
+    )
+    out = run_case(tmp_path / "couette.toml", console=False).output_dir
+    a = np.load(out / "couette_unsteady.restart_a.npz")
+    b = np.load(out / "couette_unsteady.restart_b.npz")
+    assert (int(a["step"]), int(b["step"])) == (4, 8)
+    assert float(b["time"]) == pytest.approx(0.4)
+    assert (out / "couette_unsteady.restart_000006.npz").exists()
+    assert not (out / "couette_unsteady.restart_000012.npz").exists()
