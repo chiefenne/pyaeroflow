@@ -8,7 +8,11 @@
   (`<name>.restart_<number>.npz`), counted in iterations (steady) or time steps
   (unsteady). All restart files are written through a temporary file and
   carry the iteration or step (and the time of an unsteady run). The file at
-  the end of the run is unchanged.
+  the end of the run is unchanged. `output.restart_backup_at = [120, 147, 211]`
+  adds backups at the listed iterations or steps, on top of
+  `restart_backup_interval` or alone.
+- `solver.nu_tilde_step_limit` now also caps the inner Newton updates of an
+  unsteady (dual-time) run.
 - Renamed from `aerojax` to `pyaeroflow`: repository
   github.com/chiefenne/pyaeroflow (the old URL redirects), package, import,
   command and conda environment, all lower case. PyAeroFlow is the written

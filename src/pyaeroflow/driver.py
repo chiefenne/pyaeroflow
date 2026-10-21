@@ -607,16 +607,6 @@ class IncompressibleProblem:
         if callback is not None and not hasattr(callback, "info"):
             callback.info = on_iteration.info
 
-        limit_step = None
-        if nu_tilde_step_limit is not None and self.turbulent:
-            nu_floor = self.model.viscosity / self.model.density
-
-            def limit_step(u, du):
-                cap = nu_tilde_step_limit * np.maximum(np.abs(u[:, rans.NT]), nu_floor)
-                du = du.copy()
-                du[:, rans.NT] = np.clip(du[:, rans.NT], -cap, cap)
-                return du
-
         return solve_steady(
             residual,
             lambda w: self.jacobian(w, state["beta2"]),
@@ -628,8 +618,25 @@ class IncompressibleProblem:
             jvp=lambda w, dw: self.jvp(
                 w, dw, state["beta2"], state["psi"], state["gamma"]
             ),
-            limit_step=limit_step,
+            limit_step=self._nu_tilde_limiter(nu_tilde_step_limit),
         )
+
+    def _nu_tilde_limiter(self, factor):
+        """Step limiter capping the nu_tilde update to factor max(|nu_tilde|, nu).
+
+        Returns ``limit_step(u, du)``, or None without a cap or turbulence.
+        """
+        if factor is None or not self.turbulent:
+            return None
+        nu_floor = self.model.viscosity / self.model.density
+
+        def limit_step(u, du):
+            cap = factor * np.maximum(np.abs(u[:, rans.NT]), nu_floor)
+            du = du.copy()
+            du[:, rans.NT] = np.clip(du[:, rans.NT], -cap, cap)
+            return du
+
+        return limit_step
 
     def _gamma_diagnostics(self, w, g_model, change, state):
         """Values of :data:`GAMMA_DIAGNOSTICS` for the accepted state ``w``."""
@@ -667,13 +674,21 @@ class IncompressibleProblem:
         diag = [0.0, rho, rho] + ([1.0] if self.turbulent else [])
         return area[:, None] * np.array(diag)
 
-    def solve_unsteady(self, w0, settings, callback=None, inner_callback=None):
+    def solve_unsteady(
+        self,
+        w0,
+        settings,
+        callback=None,
+        inner_callback=None,
+        nu_tilde_step_limit=None,
+    ):
         """Dual time stepping from ``w0`` to ``settings.end_time`` (D9, D37).
 
         Every time step solves the steady residual plus the BDF time term
         with the inner pseudo-time/Newton-Krylov iterations of
         ``settings.inner``; beta^2 follows the current state, the limiter is
-        not frozen.
+        not frozen. ``nu_tilde_step_limit`` caps every inner update of
+        nu_tilde as in :meth:`solve`.
         """
         state = {"beta2": self.beta2(w0)}
 
@@ -691,6 +706,7 @@ class IncompressibleProblem:
             callback=callback,
             inner_callback=inner_callback,
             jvp=lambda w, dw: self.jvp(w, dw, state["beta2"]),
+            limit_step=self._nu_tilde_limiter(nu_tilde_step_limit),
         )
 
     def solve_explicit(

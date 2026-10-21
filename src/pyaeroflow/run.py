@@ -321,15 +321,17 @@ class RestartWriter:
     ``<name>.restart_b.npz`` alternately every n iterations (steady) or time
     steps (unsteady); each write replaces the older of the two, so the newer
     one is always complete. ``restart_backup_interval`` = m writes a file
-    ``<name>.restart_<number>.npz`` that is never replaced. A write that falls
-    on a rejected iteration or a time step that hit the inner limit waits for
-    the next good one.
+    ``<name>.restart_<number>.npz`` that is never replaced, and
+    ``restart_backup_at`` adds such files at the listed iterations or steps.
+    A write that falls on a rejected iteration or a time step that hit the
+    inner limit waits for the next good one.
     """
 
     def __init__(self, out_dir, name, mesh, output):
         self.out_dir, self.name, self.mesh = out_dir, name, mesh
         self.every = output["restart_interval"]
         self.backup = output["restart_backup_interval"]
+        self.backup_at = sorted(set(output.get("restart_backup_at") or []))
         self.written = 0
         self.buckets = {"rolling": 0, "backup": 0}
 
@@ -342,8 +344,14 @@ class RestartWriter:
             file = f"{self.name}.restart_{'ab'[self.written % 2]}.npz"
             self.written += 1
             save_restart(self.out_dir / file, self.mesh, w, number, time)
+        due = False
         if self.backup and number // self.backup > self.buckets["backup"]:
             self.buckets["backup"] = number // self.backup
+            due = True
+        if self.backup_at and self.backup_at[0] <= number:
+            self.backup_at = [n for n in self.backup_at if n > number]
+            due = True
+        if due:
             file = f"{self.name}.restart_{number:06d}.npz"
             save_restart(self.out_dir / file, self.mesh, w, number, time)
 
@@ -674,6 +682,7 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir):
         settings,
         callback=callback,
         inner_callback=inner_callback if detailed else None,
+        nu_tilde_step_limit=cfg["solver"]["nu_tilde_step_limit"],
     )
     history.close()
 
@@ -873,14 +882,6 @@ def _mode_rows(cfg):
                 "iterations",
             ),
         ]
-        if solver["nu_tilde_step_limit"] is not None and solver["method"] == "implicit":
-            rows.append(
-                (
-                    "nu_tilde step",
-                    f"capped at {solver['nu_tilde_step_limit']:g} x "
-                    "max(|nu_tilde|, nu) per cell",
-                )
-            )
         if nk["enabled"] and solver["method"] == "implicit":
             when = f"after {nk['switch_at_residual_drop']:g} orders"
             if nk["switch_at_iteration"] is not None:
@@ -888,6 +889,17 @@ def _mode_rows(cfg):
             rows.append(("Newton-Krylov", when))
         else:
             rows.append(("Newton-Krylov", "off"))
+    if solver["nu_tilde_step_limit"] is not None and (
+        unsteady or solver["method"] == "implicit"
+    ):
+        rows.append(
+            (
+                "nu_tilde step",
+                f"capped at {solver['nu_tilde_step_limit']:g} x "
+                "max(|nu_tilde|, nu) per cell"
+                + (" (inner iterations)" if unsteady else ""),
+            )
+        )
     if num["first_order_iterations"]:
         n_first = num["first_order_iterations"]
         rows.append(("first-order start-up", f"{n_first} iterations"))

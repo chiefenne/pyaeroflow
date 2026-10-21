@@ -315,6 +315,10 @@ def _check_value(dotted, opt, value, problems):
         value = [float(v) for v in value] if ok else value
     elif opt.type == "string_list":
         ok = isinstance(value, list) and all(isinstance(v, str) for v in value)
+    elif opt.type == "int_list":
+        ok = isinstance(value, list) and all(
+            isinstance(v, int) and not isinstance(v, bool) for v in value
+        )
     elif opt.type == "table":
         ok = isinstance(value, dict)
     elif opt.type == "table_list":
@@ -323,6 +327,7 @@ def _check_value(dotted, opt, value, problems):
         kind = {
             "float2": "array of two numbers",
             "string_list": "array of strings",
+            "int_list": "array of integers",
             "table": "table",
             "table_list": "array of tables",
         }
@@ -333,7 +338,9 @@ def _check_value(dotted, opt, value, problems):
     if opt.choices and value not in opt.choices:
         problems.append(f"{dotted}: {value!r} is not one of {list(opt.choices)}")
     if opt.minimum is not None and (
-        value < opt.minimum if opt.type != "float2" else min(value) < opt.minimum
+        min(value, default=opt.minimum) < opt.minimum
+        if opt.type in ("float2", "int_list")
+        else value < opt.minimum
     ):
         problems.append(f"{dotted}: must be >= {opt.minimum}, got {value!r}")
     return value

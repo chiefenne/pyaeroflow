@@ -250,3 +250,43 @@ def test_restart_files_unsteady(tmp_path):
     assert float(b["time"]) == pytest.approx(0.4)
     assert (out / "couette_unsteady.restart_000006.npz").exists()
     assert not (out / "couette_unsteady.restart_000012.npz").exists()
+
+
+def test_restart_backup_at_listed_steps(tmp_path):
+    """restart_backup_at adds backups to the interval ones, or works alone."""
+    mesh = rectangle(4, 32, x=(0.0, 1.0), y=(0.0, 0.5), cell_type="quad")
+    write_su2(tmp_path / "channel.su2", mesh)
+    for name, keys, expected in (
+        (
+            "both",
+            "restart_backup_interval = 4\nrestart_backup_at = [3, 4, 9, 50]",
+            [3, 4, 8, 9],
+        ),
+        ("alone", "restart_backup_at = [7, 2]", [2, 7]),
+    ):
+        text = UNSTEADY.replace(
+            'name = "couette_unsteady"', f'name = "{name}"'
+        ).replace('directory = "out"', f'directory = "out"\n{keys}')
+        (tmp_path / f"{name}.toml").write_text(text)
+        out = run_case(tmp_path / f"{name}.toml", console=False).output_dir
+        files = sorted(p.name for p in out.glob(f"{name}.restart_0*.npz"))
+        assert files == [f"{name}.restart_{k:06d}.npz" for k in expected]
+        assert not (out / f"{name}.restart_a.npz").exists()
+
+
+def test_restart_backup_at_waits_for_a_good_step(tmp_path):
+    """A listed backup on a bad iteration is written at the next good one."""
+    from pyaeroflow.run import RestartWriter
+
+    mesh = rectangle(2, 2)
+    output = {
+        "restart_interval": 0,
+        "restart_backup_interval": 0,
+        "restart_backup_at": [3, 5],
+    }
+    writer = RestartWriter(tmp_path, "c", mesh, output)
+    w = np.zeros((mesh.n_cells, 3))
+    for n, good in ((1, True), (3, False), (4, False), (6, True), (7, True)):
+        writer(n, w, good=good)
+    # 3 and 5 are both overdue at 6: one file, nothing more afterwards
+    assert sorted(p.name for p in tmp_path.glob("*.npz")) == ["c.restart_000006.npz"]

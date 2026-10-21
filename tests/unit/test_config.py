@@ -72,6 +72,10 @@ def test_required_and_types():
     assert "numerics.spatial_order: 3 is not one of [1, 2]" in problems(raw)
     raw = {**MINIMAL, "initial": {"velocity": [1.0]}}
     assert "initial.velocity: expected array of two numbers" in problems(raw)
+    raw = {**MINIMAL, "output": {"restart_backup_at": [10, 2.5]}}
+    assert "output.restart_backup_at: expected array of integers" in problems(raw)
+    raw = {**MINIMAL, "output": {"restart_backup_at": [10, 0]}}
+    assert "output.restart_backup_at: must be >= 1" in problems(raw)
 
 
 def test_viscosity_xor_reynolds():

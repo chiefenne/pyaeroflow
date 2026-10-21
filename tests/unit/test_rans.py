@@ -356,3 +356,39 @@ def test_bcm_config_rules():
     }
     with pytest.raises(Exception, match="needs physics.model = rans"):
         resolve(raw)
+
+
+def test_unsteady_nu_tilde_step_limit(tmp_path, monkeypatch):
+    """solver.nu_tilde_step_limit reaches the inner iterations of a BDF2 run."""
+    import pyaeroflow.driver as driver
+    from pyaeroflow.cases.tmr_flat_plate import plate_mesh
+    from pyaeroflow.mesh import write_su2
+
+    seen = {}
+    original = driver.solve_unsteady
+
+    def spy(*args, **kwargs):
+        seen["limit_step"] = kwargs.get("limit_step")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(driver, "solve_unsteady", spy)
+    write_su2(tmp_path / "plate.su2", plate_mesh(24, 6, 24, reynolds=1.0e5))
+    toml = (
+        PLATE_TOML.replace("[solver]\n", "[solver]\nnu_tilde_step_limit = 1.0\n")
+        + '[time]\nmode = "unsteady"\ntime_step = 0.01\nend_time = 0.03\n'
+    )
+    (tmp_path / "plate.toml").write_text(toml)
+    result = run_case(tmp_path / "plate.toml", console=False)
+    assert np.isfinite(result.w).all()
+    log = (tmp_path / "out" / "plate.log").read_text()
+    assert "capped at 1 x max(|nu_tilde|, nu) per cell (inner iterations)" in log
+    limit = seen["limit_step"]
+    assert limit is not None
+    # cap f max(|nu_tilde|, nu) per cell, nu = 1 / Re non-dimensional
+    u = np.zeros((3, 4))
+    u[:, 3] = [0.0, 1.0, -4.0]
+    du = np.full((3, 4), 7.0)
+    du[:, 3] = [1e-9, 5.0, -10.0]
+    out = limit(u, du)
+    np.testing.assert_array_equal(out[:, :3], 7.0)
+    np.testing.assert_allclose(out[:, 3], [1e-9, 1.0, -4.0])

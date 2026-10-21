@@ -100,6 +100,7 @@ def solve_unsteady(
     callback=None,
     inner_callback=None,
     jvp=None,
+    limit_step=None,
 ):
     """Advance ``M du/dt + R(u) = 0`` from ``u0`` to ``settings.end_time``.
 
@@ -117,6 +118,8 @@ def solve_unsteady(
         that receives ``linear_iterations``.
     inner_callback : callable, optional
         Passed to the inner :func:`solve_steady` (per inner iteration).
+    limit_step : callable, optional
+        Passed to the inner :func:`solve_steady` (limits every inner update).
 
     Returns
     -------
@@ -175,6 +178,7 @@ def solve_unsteady(
             callback=inner_callback,
             jvp=jvp_t,
             reference_norm=norm_n,
+            limit_step=limit_step,
         )
         h = inner.history
         t = step * dt

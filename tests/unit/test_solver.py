@@ -185,3 +185,34 @@ def test_limit_step_is_applied_to_every_update():
     h = result.history["residual"]
     # the clipped steps move u by at most 0.25 per iteration: 3 -> 0 needs 12
     assert h[1] > 0.5 * h[0] and result.converged
+
+
+def test_unsteady_inner_iterations_use_limit_step():
+    """``solve_unsteady`` hands ``limit_step`` to every inner solve."""
+    from scipy.sparse import identity
+
+    from pyaeroflow.solver import DualTimeSettings, solve_unsteady
+
+    calls = []
+
+    def limit(u, du):
+        calls.append(float(np.abs(du).max()))
+        return np.clip(du, -0.25, 0.25)
+
+    inner = PseudoTimeSettings(
+        max_iterations=1, newton_krylov=False, cfl_start=1e6, residual_drop=12.0
+    )
+    result = solve_unsteady(
+        lambda u: u.copy(),
+        lambda u: identity(4, format="csc"),
+        lambda u, cfl: identity(4, format="csc") / cfl,
+        np.ones((4, 1)),
+        np.full((4, 1), 3.0),
+        DualTimeSettings(10.0, 20.0, "bdf1", inner),
+        limit_step=limit,
+    )
+    # du/dt = -u with dt = 10: one Newton step would take u from 3 to 3/11;
+    # the cap allows 0.25 per inner iteration, one iteration per step:
+    # 3 -> 2.75, then extrapolated to 2.5 and capped to 2.25.
+    assert len(calls) == 2 and min(calls) > 0.25
+    np.testing.assert_allclose(result.u, 2.25)

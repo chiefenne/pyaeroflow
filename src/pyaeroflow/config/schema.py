@@ -26,7 +26,7 @@ TURBULENCE_FORMS = {
 class Opt(NamedTuple):
     """One configuration option."""
 
-    type: str  # "float", "int", "bool", "string", "float2", "string_list"
+    type: str  # "float", "int", "bool", "string", "float2", "string_list", "int_list"
     default: object
     description: str
     unit: str = ""
@@ -406,10 +406,11 @@ SCHEMA = {
         "nu_tilde_step_limit": Opt(
             "float",
             None,
-            "RANS, implicit: cap every update of nu_tilde to this multiple of "
-            "max(|nu_tilde|, nu) per cell before the line search (e.g. 1 = at "
-            "most double); off by default. Stops a Newton step from "
-            "multiplying nu_tilde in one boundary-layer cell",
+            "RANS, implicit and unsteady (inner iterations): cap every update "
+            "of nu_tilde to this multiple of max(|nu_tilde|, nu) per cell "
+            "before the line search (e.g. 1 = at most double); off by default. "
+            "Stops a Newton step from multiplying nu_tilde in one "
+            "boundary-layer cell",
             minimum=0.0,
         ),
         "turbulence_coupling": Opt(
@@ -476,6 +477,14 @@ SCHEMA = {
             "replaced every n iterations (steady) or time steps (unsteady); "
             "0 = none",
             minimum=0,
+        ),
+        "restart_backup_at": Opt(
+            "int_list",
+            [],
+            "Also write a backup restart file <name>.restart_<number>.npz at "
+            "these iterations (steady) or time steps (unsteady), in addition "
+            "to restart_backup_interval",
+            minimum=1,
         ),
         "force_boundaries": Opt(
             "string_list",
