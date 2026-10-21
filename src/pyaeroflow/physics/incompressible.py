@@ -96,6 +96,13 @@ class IncompressibleModel(NamedTuple):
     coupling : {"segregated", "coupled"}
         Mean-flow/turbulence coupling of the first-order Jacobian (D34):
         "segregated" drops the cross-coupling blocks.
+    transition : {"none", "bcm", "aft"}
+        Transition model (L3): algebraic BCM, or SA-AFT2019b, which adds the
+        log-intermittency and the amplification factor as columns 4 and 5.
+    turbulence_intensity : float
+        Freestream Tu in percent.
+    critical_amplification : float or None
+        N_crit of SA-AFT; None derives it from ``turbulence_intensity``.
     """
 
     density: float = 1.0
@@ -111,13 +118,16 @@ class IncompressibleModel(NamedTuple):
     turbulence: str = "none"
     turbulence_spatial_order: int = 1
     coupling: str = "segregated"
-    transition: str = "none"  # "none" or "bcm" (algebraic, L3 step 1)
-    turbulence_intensity: float = 0.0  # freestream Tu in percent (BCM input)
+    transition: str = "none"  # "none", "bcm" (algebraic) or "aft" (SA-AFT2019b)
+    turbulence_intensity: float = 0.0  # freestream Tu in percent (BCM, AFT)
+    critical_amplification: float = None  # AFT N_crit; None: from Tu
 
     @property
     def n_var(self):
-        """Number of variables: 3, or 4 with a turbulence model."""
-        return 4 if self.turbulence != "none" else 3
+        """Number of variables: 3, 4 with a turbulence model, 6 with AFT."""
+        if self.turbulence == "none":
+            return 3
+        return 6 if self.transition == "aft" else 4
 
 
 def _density(bc):
@@ -222,8 +232,8 @@ def lsq_include(conditions, n_var=3):
     A boundary face takes part in a variable's gradient only where its value
     is known: velocity at walls, velocity inlets and total-pressure inlets,
     pressure at pressure outlets, everything at farfield and symmetry faces
-    (symmetry values are the mirrored cell values). The turbulence variable
-    (``n_var`` = 4) follows the velocity.
+    (symmetry values are the mirrored cell values). The turbulence and
+    transition variables (columns 3 and up) follow the velocity.
     """
 
     def include(slices, n_bfaces):

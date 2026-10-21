@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased (0.9) – Transition, step 2: SA-AFT2019b
+
+- SA-AFT2019b transition model (Coder; NASA TMR `aft_transition_3eqn`):
+  `physics.transition.model = "aft"` adds transport equations for the
+  log-intermittency γ̃ and the amplification factor ñ (6 unknowns per cell).
+  N_crit from `turbulence_intensity` (Mack/Drela, 8.15 at 0.1 %) or directly
+  from the new `physics.transition.critical_amplification`. SA keeps its
+  production; f_t2 = 1.2 (1 − e^γ̃) is the only coupling. Exact JVP (nothing
+  frozen). Output: `intermittency` and `amplification_factor` in the VTU,
+  residual columns `gam` and `n`. A restart from a 4-column run starts the
+  new columns at 0. Needs ν̃/ν ≈ 0.1 in the freestream (notice otherwise).
+- Flat plate: transition at the e^N location (N_crit 3 and 5), converged to
+  machine zero (`docs/validation.md` §8).
+- `physics.transition.relaxation` is now BCM only.
+
 ## Unreleased (0.8) – Transition, step 1: SA-BCM
 
 - Restart files during a run: `output.restart_interval` writes two files

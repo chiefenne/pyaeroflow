@@ -11,7 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from pyaeroflow.numerics import build_geometry
-from pyaeroflow.numerics.wall_distance import mesh_wall_distance
+from pyaeroflow.numerics.wall_distance import mesh_wall_distance, mesh_wall_normal
 from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
 from pyaeroflow.physics import rans
@@ -181,6 +181,10 @@ class IncompressibleProblem:
                     self._production_switch(mesh, regular, laminar_regions or [])
                 ),
             )
+            if model.transition == "aft":
+                self.geom = self.geom._replace(
+                    wall_normal=jnp.asarray(mesh_wall_normal(mesh, nearest))
+                )
         self.bc = inc.boundary_data(self.disc, regular, model.density)
         self.conditions = regular
         self.periodic = periodic
@@ -323,7 +327,11 @@ class IncompressibleProblem:
         mask = None
         if self.turbulent:
             b_args = b_args + (self.bc.nu_tilde,)
-            mask = rans.SEGREGATED_MASK if self.model.coupling == "segregated" else None
+            mask = (
+                rans.segregated_mask(self.model.n_var)
+                if self.model.coupling == "segregated"
+                else None
+            )
         if self._pattern is None:
             self._pattern = JacobianPattern(self.geom, self.model.n_var)
         j = first_order_jacobian(
@@ -482,7 +490,10 @@ class IncompressibleProblem:
         self.bc = self.bc._replace(value=jnp.asarray(value))
 
     def initial_state(self, velocity=(0.0, 0.0), pressure=0.0, nu_tilde=None):
-        """Uniform initial field, shape (n_cells, n_var); nu_tilde default 3 nu."""
+        """Uniform initial field, shape (n_cells, n_var); nu_tilde default 3 nu.
+
+        The SA-AFT columns start at gamma_tilde = 0 and n = 0 (freestream).
+        """
         w = np.zeros((self.mesh.n_cells, self.model.n_var))
         w[:, inc.P] = pressure
         w[:, inc.U] = velocity[0]
@@ -538,7 +549,7 @@ class IncompressibleProblem:
         relax = (
             gamma_relaxation is not None
             and gamma_relaxation < 1.0
-            and self.model.transition != "none"
+            and self.model.transition == "bcm"
         )
         track = relax or (gamma_diagnostics and self.model.transition != "none")
         if track:
@@ -695,10 +706,10 @@ class IncompressibleProblem:
         )
 
     def mass(self):
-        """Diagonal of the mass matrix: rho * area on u, v; area on nu_tilde."""
+        """Diagonal of the mass matrix: rho * area on u, v; area on turbulence."""
         area = np.asarray(self.geom.area)
         rho = self.model.density
-        diag = [0.0, rho, rho] + ([1.0] if self.turbulent else [])
+        diag = [0.0, rho, rho] + [1.0] * (self.model.n_var - 3)
         return area[:, None] * np.array(diag)
 
     def solve_unsteady(

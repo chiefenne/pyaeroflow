@@ -67,9 +67,10 @@ SCHEMA = {
                 "string",
                 "none",
                 "Transition model: bcm = algebraic intermittency on the SA production "
-                "(Cakmakcioglu et al., 2020 revision, with SA-noft2); combines with "
-                "mode = prescribed",
-                choices=("none", "bcm"),
+                "(Cakmakcioglu et al., 2020 revision, with SA-noft2); aft = "
+                "SA-AFT2019b (Coder: transport equations for the amplification "
+                "factor and the log-intermittency); combines with mode = prescribed",
+                choices=("none", "bcm", "aft"),
             ),
             "turbulence_intensity": Opt(
                 "float",
@@ -79,10 +80,18 @@ SCHEMA = {
                 "turbulence table",
                 minimum=0.0,
             ),
+            "critical_amplification": Opt(
+                "float",
+                None,
+                "N_crit of model = aft (e^N method); default: from "
+                "turbulence_intensity by Mack's relation with Drela's limit "
+                "(8.15 at 0.1 %)",
+                minimum=0.0,
+            ),
             "relaxation": Opt(
                 "float",
                 1.0,
-                "Under-relaxation omega in (0, 1] of the transition intermittency "
+                "Under-relaxation omega in (0, 1] of the BCM intermittency "
                 "in steady runs: gamma += omega (gamma_model - gamma) per accepted "
                 "iteration, so onset ramps in over ~1/omega iterations; 1 = off. "
                 "The converged state is that of the unrelaxed model",

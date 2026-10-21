@@ -1,9 +1,9 @@
-# SA-AFT transition model: design note (planned, not started)
+# SA-AFT transition model: design note
 
-Status: planned step (2) of L3 in `requirements.md`. No code yet. This note
-fixes the intended structure and holds the transcribed model definition
-(section 5). The model switch that precedes the implementation is the owner's
-decision.
+Status: implemented (step (2) of L3 in `requirements.md`), first verification
+on the flat plate (`docs/validation.md` §8). This note holds the structure,
+the transcribed model definition (section 5) and the implementation choices
+(section 7).
 
 ## 1. Model and source
 
@@ -230,3 +230,29 @@ Sources: Coder, AIAA 2019-0039 (AFT2019) and Coder, Pulliam, Jensen, AIAA
 
 Crossflow transition (the model has no deliberate treatment),
 compressible forms, and 3D.
+
+## 7. Implementation (as built)
+
+- `physics/aft.py`: N_crit, H12 (with the 2019b limits), growth rate,
+  F_growth, Re_θ0, Re_V0, F_onset, F_turb, f_t2 and the two sources, all pure
+  JAX functions. Columns NG = 4 (γ̃) and NN = 5 (ñ) in `physics/rans.py`.
+- `spalart_allmaras.source(..., ft2_value=...)` takes the AFT f_t2 in both
+  SA-neg branches (the negative branch uses c_b1 (1 − f_t2) S ν̃, the χ → 0
+  limit of standard SA-neg).
+- S = sqrt(2(u_x² + v_y²) + (u_y + v_x)²), Ω = |v_x − u_y| from the
+  least-squares velocity gradients. H_L = d²/ν ∇q · n_d with q = u · n_d and
+  n_d the unit vector from the nearest wall point to the centroid
+  (`numerics.wall_distance.mesh_wall_normal`, stored as `geom.wall_normal`);
+  ∇q is the least-squares gradient with the velocity's coefficient set.
+- Boundary values: γ̃ = ñ = 0 on velocity inlets, total-pressure inlets and
+  inflowing farfield faces, the interior value elsewhere (walls included).
+- Diffusion: face-averaged ν_t, coefficients ν + ν_t/σ_y and σ_n (ν + ν_t).
+- Jacobian: the JVP is exact (no stop_gradient; F_crit is a jnp.where step
+  with zero derivative). The first-order Jacobian has the convective and
+  diffusive blocks of all six columns, the segregated mask keeps the 3 × 3
+  mean-flow and the 3 × 3 turbulence blocks, and the source part is the
+  diagonal of the local source Jacobian clipped to its negative part.
+- Not implemented: clipping of ñ and γ̃, the extension of
+  `nu_tilde_step_limit` to them, γ relaxation (BCM only); none was needed on
+  the plate.
+

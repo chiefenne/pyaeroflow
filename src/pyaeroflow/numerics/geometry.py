@@ -35,7 +35,9 @@ class FVGeometry(NamedTuple):
 
     Boundary faces are ordered by boundary name (see :class:`Discretization`).
     ``lsq_coeff`` has shape (n_entries, n_sets, 2) with one coefficient set
-    per variable, or a single shared set.
+    per variable, or a single shared set. ``wall_normal`` is the unit
+    gradient of the wall distance (from the nearest wall point to the
+    centroid), set for the SA-AFT local shape factor.
     """
 
     area: jnp.ndarray
@@ -58,6 +60,7 @@ class FVGeometry(NamedTuple):
     lsq_coeff: jnp.ndarray
     wall_distance: jnp.ndarray = None
     production_switch: jnp.ndarray = None
+    wall_normal: jnp.ndarray = None
 
 
 class Discretization(NamedTuple):

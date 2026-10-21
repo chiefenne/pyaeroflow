@@ -29,6 +29,7 @@ from pyaeroflow.io import HistoryWriter, RunLog, StepHistoryWriter, write_pvd, w
 from pyaeroflow.mesh import Mesh, read_su2
 from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
+from pyaeroflow.physics import rans
 from pyaeroflow.physics import spalart_allmaras as sa
 from pyaeroflow.solver import DualTimeSettings, LinearSettings, PseudoTimeSettings
 
@@ -223,6 +224,9 @@ def setup(config, mesh=None):
         coupling=cfg["solver"]["turbulence_coupling"],
         transition=physics["transition"]["model"] if rans else "none",
         turbulence_intensity=100.0 * (tr_cfg["turbulence_intensity"] or 0.0),
+        critical_amplification=(
+            tr_cfg["critical_amplification"] if tr_cfg["model"] == "aft" else None
+        ),
     )
     regions = None
     if rans and physics["transition"]["mode"] == "prescribed":
@@ -426,6 +430,7 @@ def run_case(path, console=True, mesh=None):
     scale = [scaling.pressure, scaling.velocity, scaling.velocity]
     if problem.turbulent:
         scale.append(scaling.viscosity / scaling.density)
+    scale += [1.0] * (problem.model.n_var - len(scale))  # AFT: dimensionless
     w = result.u * np.array(scale)
     return RunResult(
         config, mesh, w, result.converged, result.history, out_dir, coefficients
@@ -462,11 +467,21 @@ def _pseudo_time_settings(cfg):
     )
 
 
+def _residual_names(problem):
+    """Names of the residual columns in the log and history."""
+    names = ("p", "u", "v")
+    if problem.turbulent:
+        names += ("nu",)
+    if problem.model.n_var == 6:
+        names += ("gam", "n")
+    return names
+
+
 def _run_steady(log, config, problem, scaling, w0, mesh, out_dir):
     """Steady solve with one log line per pseudo-time iteration."""
     cfg = config.data
     name = config.name
-    names = ("p", "u", "v", "nu") if problem.turbulent else ("p", "u", "v")
+    names = _residual_names(problem)
     implicit = cfg["solver"]["method"] == "implicit"
     force_boundaries = cfg["output"]["force_boundaries"]
     monitor = Monitor(config, problem, scaling) if force_boundaries else None
@@ -615,7 +630,7 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir):
     name = config.name
     tm = cfg["time"]
     t_scale = scaling.length / scaling.velocity  # physical seconds per unit time
-    names = ("p", "u", "v", "nu") if problem.turbulent else ("p", "u", "v")
+    names = _residual_names(problem)
     force_boundaries = cfg["output"]["force_boundaries"]
     monitor = Monitor(config, problem, scaling) if force_boundaries else None
     coeff_names = ("CL", "CD", "CM") if monitor else ()
@@ -858,6 +873,8 @@ def _write_fields(path, mesh, w_nd, scaling, problem=None):
         )
         if problem.model.transition != "none":
             data["intermittency"] = problem.intermittency(w_nd)
+        if problem.model.transition == "aft":
+            data["amplification_factor"] = w_nd[:, 5]
     write_vtu(path, mesh, cell_data=data)
 
 
@@ -981,7 +998,18 @@ def _log_setup(log, config, problem, scaling, mesh):
                 np.count_nonzero(np.asarray(problem.geom.production_switch) == 0)
             )
             rows.append(("laminar regions", f"{n_off} cells without SA production"))
-        if problem.model.transition != "none":
+        if problem.model.transition == "aft":
+            tu = problem.model.turbulence_intensity
+            n_crit = rans.critical_amplification(problem.model)
+            given = problem.model.critical_amplification is not None
+            rows.append(
+                (
+                    "transition",
+                    f"aft (SA-AFT2019b), N_crit = {n_crit:.3g}"
+                    + (" (given)" if given else f" from Tu = {tu:.3g} %"),
+                )
+            )
+        elif problem.model.transition != "none":
             tu = problem.model.turbulence_intensity
             re_theta_t = 803.73 * (tu + 0.6067) ** (-1.027)
             rows.append(
@@ -1001,8 +1029,15 @@ def _log_setup(log, config, problem, scaling, mesh):
                 )
         log.table(rows)
         bcm = problem.model.transition == "bcm"
+        aft_model = problem.model.transition == "aft"
         for name, v in tv.items():
-            if bcm and v.chi > 0.5:
+            if aft_model:
+                if not 0.05 <= v.chi <= 0.5:
+                    config.notices.append(
+                        f"{name}: nu_tilde/nu = {v.chi:.3g}; SA-AFT recommends about "
+                        "0.1 in the freestream (Coder 2019)"
+                    )
+            elif bcm and v.chi > 0.5:
                 config.notices.append(
                     f"{name}: nu_tilde/nu = {v.chi:.3g} with the BCM transition model: "
                     "its second term reads eddy viscosity as turbulence (nu_tilde/nu "

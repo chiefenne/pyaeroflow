@@ -235,7 +235,7 @@ def test_run_case_rans(tmp_path):
     )
 
 
-def _bcm_plate(tmp_path, transition="", output="", solver="", tail=""):
+def _bcm_plate(tmp_path, transition="", output="", solver="", tail="", model="bcm"):
     """Run the BCM flat-plate case; ``transition`` / ``output`` add case keys."""
     from pyaeroflow.cases.tmr_flat_plate import plate_mesh
     from pyaeroflow.mesh import write_su2
@@ -244,7 +244,7 @@ def _bcm_plate(tmp_path, transition="", output="", solver="", tail=""):
         PLATE_TOML.replace(
             '[physics.transition]\nmode = "prescribed"\n'
             'laminar_region = [{ boundary = "plate", side = "upper", x_max = 0.05 }]\n',
-            f'[physics.transition]\nmodel = "bcm"\n{transition}',
+            f'[physics.transition]\nmodel = "{model}"\n{transition}',
         )
         .replace(
             "turbulence = { kinetic_energy = 0.0015, length_scale = 0.01 }",
@@ -337,7 +337,7 @@ def test_bcm_nu_tilde_step_limit(tmp_path):
 def test_bcm_relaxation_config_rules():
     plate = {**RANS_MINIMAL, "physics": {"model": "rans", "transition": {}}}
     plate["physics"]["transition"] = {"relaxation": 0.5}
-    with pytest.raises(Exception, match="needs a transition model"):
+    with pytest.raises(Exception, match="needs model = bcm"):
         resolve(plate)
     plate["physics"]["transition"] = {"model": "bcm", "relaxation": 1.5}
     with pytest.raises(Exception, match=r"must be in \(0, 1\]"):

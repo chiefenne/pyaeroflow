@@ -412,14 +412,19 @@ def _consistency(data, explicit, problems, notices, path):
     if not 0.0 < tr["relaxation"] <= 1.0:
         problems.append("physics.transition.relaxation must be in (0, 1]")
     elif tr["relaxation"] < 1.0:
-        if tr["model"] == "none":
-            problems.append("physics.transition.relaxation needs a transition model")
+        if tr["model"] != "bcm":
+            problems.append("physics.transition.relaxation needs model = bcm")
         if data["time"]["mode"] == "unsteady":
             problems.append("physics.transition.relaxation is for steady runs only")
     if tr["model"] != "none":
         if not rans:
             problems.append("physics.transition.model needs physics.model = rans")
-        if tr["turbulence_intensity"] is None:
+        if tr["critical_amplification"] is not None and tr["model"] != "aft":
+            notices.append(
+                "physics.transition.critical_amplification ignored: model != aft"
+            )
+        given_n_crit = tr["model"] == "aft" and tr["critical_amplification"] is not None
+        if tr["turbulence_intensity"] is None and not given_n_crit:
             tu = [
                 b["turbulence"]["intensity"]
                 for b in boundaries.values()
@@ -433,9 +438,18 @@ def _consistency(data, explicit, problems, notices, path):
                     "physics.transition.turbulence_intensity is required for "
                     f"model = {tr['model']} (fraction, e.g. 0.001 = 0.1 %) unless an "
                     "inflow turbulence table gives intensity"
+                    + (
+                        " or critical_amplification is set"
+                        if tr["model"] == "aft"
+                        else ""
+                    )
                 )
     elif tr["turbulence_intensity"] is not None:
         notices.append("physics.transition.turbulence_intensity ignored: model = none")
+    if tr["model"] == "none" and tr["critical_amplification"] is not None:
+        notices.append(
+            "physics.transition.critical_amplification ignored: model = none"
+        )
     if rans:
         _turbulence_table(data["initial"], "initial", problems)
         for name, b in boundaries.items():

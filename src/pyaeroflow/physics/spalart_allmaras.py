@@ -99,6 +99,7 @@ def source(
     production_switch=1.0,
     intermittency=1.0,
     ft2=True,
+    ft2_value=None,
 ):
     """Source per unit volume: production - destruction + c_b2 term.
 
@@ -121,6 +122,9 @@ def source(
     ft2 : bool
         Include the f_t2 term (standard SA-neg); False gives SA-noft2, the
         form the BCM model is paired with.
+    ft2_value : array, optional
+        Given f_t2 replacing c_t3 exp(-c_t4 chi^2) in both branches (the
+        SA-AFT coupling c_t3 (1 - exp(gamma_tilde))); ``ft2`` is then ignored.
     """
     ct3 = CT3 if ft2 else 0.0
     chi = nu_tilde / nu
@@ -141,14 +145,18 @@ def source(
     r = jnp.minimum(nu_tilde / jnp.maximum(s_mod * kd2, floor), R_MAX)
     g = r + CW2 * (r**6 - r)
     f_w = g * ((1.0 + CW3**6) / (g**6 + CW3**6)) ** (1.0 / 6.0)
-    f_t2 = ct3 * jnp.exp(-CT4 * chi**2)
+    if ft2_value is None:
+        f_t2 = ct3 * jnp.exp(-CT4 * chi**2)
+        f_t2_neg = ct3
+    else:
+        f_t2 = f_t2_neg = ft2_value
     production = (
         production_switch * intermittency * CB1 * (1.0 - f_t2) * s_mod * nu_tilde
     )
     destruction = (CW1 * f_w - CB1 / KAPPA**2 * f_t2) * (nu_tilde / distance) ** 2
     positive = production - destruction
     # nu_tilde < 0: modified terms (destruction becomes a sink of negative values).
-    negative = CB1 * (1.0 - ct3) * s * nu_tilde + CW1 * (nu_tilde / distance) ** 2
+    negative = CB1 * (1.0 - f_t2_neg) * s * nu_tilde + CW1 * (nu_tilde / distance) ** 2
     return jnp.where(nu_tilde >= 0.0, positive, negative) + CB2 / SIGMA * grad_sq
 
 

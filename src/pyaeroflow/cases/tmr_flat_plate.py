@@ -84,6 +84,7 @@ def solve(
     transition="none",
     turbulence_intensity=0.0,
     nu_tilde_ratio=3.0,
+    critical_amplification=None,
 ):
     """Run the turbulent flat plate and evaluate C_f(x) and the drag.
 
@@ -91,7 +92,8 @@ def solve(
     transitional plate (T3-series style) instead of the fully turbulent one;
     the BCM model needs a low freestream ``nu_tilde_ratio`` (0.1 instead of
     the fully turbulent 3), its second term reads existing eddy viscosity as
-    turbulence.
+    turbulence. ``transition = "aft"`` runs SA-AFT2019b with N_crit from
+    ``critical_amplification`` or, if None, from ``turbulence_intensity``.
     """
     u_inf, nu = 1.0, 1.0 / reynolds
     nt_inf = nu_tilde_ratio * nu
@@ -119,6 +121,7 @@ def solve(
         coupling=coupling,
         transition=transition,
         turbulence_intensity=turbulence_intensity,
+        critical_amplification=critical_amplification,
     )
     problem = IncompressibleProblem(mesh, model, conditions)
     result = problem.solve(

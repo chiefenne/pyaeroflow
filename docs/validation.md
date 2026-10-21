@@ -253,6 +253,30 @@ intermittency (CHANGELOG 0.8) cannot reach it, is open.
 
 [↑ back to table](#stage-table)
 
+## 8. SA-AFT2019b transition: flat plate
+
+`tests/verification/test_rans_plate.py::test_aft_transition_on_the_plate`.
+TMR plate domain, 48 × 12 × 48 cells, Re = 10⁶ per unit length, freestream
+ν̃/ν = 0.1, N_crit given directly. Reference: the e^N estimate for a Blasius
+layer (H12 = 2.59: Re_θ0 = 237 and dñ/dRe_θ = 0.0103 from the model's own
+correlations, Re_θ = 0.664 √Re_x), which is what the ñ equation integrates.
+
+| N_crit | e^N estimate Re_x | Onset Re_x (C_f leaves Blasius) | Iterations to machine zero |
+| --- | --- | --- | --- |
+| 3 | 6.3·10⁵ | about 6·10⁵ | 827 (4 min) |
+| 5 | 1.2·10⁶ | about 1.3·10⁶ | 1279 (3 min) |
+
+The laminar C_f is 5–20 % below Blasius on this coarse mesh (most near the
+leading edge), the turbulent C_f 0–12 % above the 0.0576 Re_x^−0.2
+correlation. γ
+is 1/c_3 = 0.02 in the laminar layer, as the γ̃ equation predicts. Unlike
+BCM, the Newton–Krylov iteration converges to machine zero with the exact
+JVP (nothing frozen); the F_crit step and the min/max of F_onset did not
+stall it here. The upstream-moving transition that Coder reports (thousands
+of iterations) was not seen: the pseudo-time CFL ramp reaches the Newton
+phase in a few hundred iterations. T3A-series and airfoil cases (E387,
+XFOIL comparison) are next.
+
 ## References
 
 - Ghia, U., Ghia, K. N., Shin, C. T. (1982): High-Re solutions for
