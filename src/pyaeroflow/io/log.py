@@ -23,13 +23,20 @@ class RunLog:
         Log file; None writes to the console only.
     console : bool
         Echo to stdout.
+    append : bool
+        Append to an existing file (a restart that continues a run) instead
+        of overwriting it.
+    elapsed_offset : float
+        Wall time of the earlier runs in seconds; the wall column continues
+        from it.
     """
 
-    def __init__(self, path=None, console=True):
+    def __init__(self, path=None, console=True, append=False, elapsed_offset=0.0):
         self.path = Path(path) if path is not None else None
-        self._file = open(self.path, "w") if self.path is not None else None
+        mode = "a" if append else "w"
+        self._file = open(self.path, mode) if self.path is not None else None
         self._console = console
-        self._t0 = time.perf_counter()
+        self._t0 = time.perf_counter() - elapsed_offset
         self._columns = None
 
     def close(self):

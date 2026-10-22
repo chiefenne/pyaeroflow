@@ -479,6 +479,18 @@ class IncompressibleProblem:
         lift = -f.fx * direction[1] + f.fy * direction[0]
         gamma = lift / (self.model.density * speed)
         vortex.gamma += vortex.relaxation * (gamma - vortex.gamma)
+        self._set_vortex_values(vortex)
+
+    def restore_farfield_vortex(self, vortex, gamma):
+        """Set the circulation (e.g. from a restart file) and the farfield values."""
+        vortex.gamma = float(gamma)
+        self._set_vortex_values(vortex)
+
+    def _set_vortex_values(self, vortex):
+        """Farfield p, u, v of freestream plus the vortex of ``vortex.gamma``."""
+        base = vortex.base
+        u_inf = base[:, 1:3]
+        speed = np.hypot(u_inf[:, 0], u_inf[:, 1]).mean()
         r = vortex.offset
         r2 = np.sum(r**2, axis=1)
         coeff = vortex.gamma / (2.0 * np.pi * r2)
@@ -515,6 +527,7 @@ class IncompressibleProblem:
         gamma_relaxation=None,
         gamma_diagnostics=False,
         nu_tilde_step_limit=None,
+        resume=None,
     ):
         """Implicit pseudo-time solution (D25, D35).
 
@@ -543,9 +556,21 @@ class IncompressibleProblem:
         mean-flow update is untouched), as SU2 limits its turbulence
         variable: a Newton step that multiplies nu_tilde in one boundary-layer
         cell cannot pass as a small change of the overall residual norm.
+
+        ``resume`` is the state of an earlier run (the ``state`` of its result
+        or of a restart file, see :func:`pyaeroflow.run.load_restart_state`):
+        the solver state of :func:`solve_steady` plus the frozen or released
+        limiter ``psi``, the lagged intermittency ``gamma`` and the farfield
+        circulation ``vortex_gamma``. The result's ``state`` is the same
+        dictionary at the end of the run.
         """
         w0 = self.initial_state() if w0 is None else w0
+        resume = resume or {}
         state = {"beta2": self.beta2(w0), "psi": None, "gamma": None, "model": None}
+        if resume.get("psi") is not None:
+            state["psi"] = jnp.asarray(resume["psi"])
+        if vortex is not None and resume.get("vortex_gamma") is not None:
+            self.restore_farfield_vortex(vortex, resume["vortex_gamma"])
         relax = (
             gamma_relaxation is not None
             and gamma_relaxation < 1.0
@@ -558,6 +583,8 @@ class IncompressibleProblem:
             )
             if relax:
                 state["gamma"] = state["model"]
+                if resume.get("gamma") is not None:
+                    state["gamma"] = jnp.asarray(resume["gamma"])
         uses_limiter = self.model.limiter != "none" and self.model.spatial_order == 2
 
         def residual(w):
@@ -623,7 +650,20 @@ class IncompressibleProblem:
         if callback is not None and not hasattr(callback, "info"):
             callback.info = on_iteration.info
 
-        return solve_steady(
+        def driver_state():
+            """Limiter, lagged intermittency and vortex of the live run."""
+            out = {}
+            if state["psi"] is not None:
+                out["psi"] = np.asarray(state["psi"])
+            if state["gamma"] is not None:
+                out["gamma"] = np.asarray(state["gamma"])
+            if vortex is not None:
+                out["vortex_gamma"] = vortex.gamma
+            return out
+
+        on_iteration.info["driver_state"] = driver_state
+
+        result = solve_steady(
             residual,
             lambda w: self.jacobian(w, state["beta2"]),
             lambda w, cfl: self.time_term(w, state["beta2"], cfl),
@@ -635,7 +675,9 @@ class IncompressibleProblem:
                 w, dw, state["beta2"], state["psi"], state["gamma"]
             ),
             limit_step=self._nu_tilde_limiter(nu_tilde_step_limit),
+            resume=resume,
         )
+        return result._replace(state={**result.state, **driver_state()})
 
     def _nu_tilde_limiter(self, factor):
         """Step limiter capping the nu_tilde update to factor max(|nu_tilde|, nu).
@@ -719,6 +761,7 @@ class IncompressibleProblem:
         callback=None,
         inner_callback=None,
         nu_tilde_step_limit=None,
+        resume=None,
     ):
         """Dual time stepping from ``w0`` to ``settings.end_time`` (D9, D37).
 
@@ -726,7 +769,8 @@ class IncompressibleProblem:
         with the inner pseudo-time/Newton-Krylov iterations of
         ``settings.inner``; beta^2 follows the current state, the limiter is
         not frozen. ``nu_tilde_step_limit`` caps every inner update of
-        nu_tilde as in :meth:`solve`.
+        nu_tilde as in :meth:`solve`. ``resume`` continues an earlier run
+        (``step`` and ``u_previous``, see :func:`solve_unsteady`).
         """
         state = {"beta2": self.beta2(w0)}
 
@@ -745,6 +789,7 @@ class IncompressibleProblem:
             inner_callback=inner_callback,
             jvp=lambda w, dw: self.jvp(w, dw, state["beta2"]),
             limit_step=self._nu_tilde_limiter(nu_tilde_step_limit),
+            resume=resume,
         )
 
     def solve_explicit(

@@ -73,12 +73,16 @@ class UnsteadyResult(NamedTuple):
         ``inner_drop`` (orders reached relative to R*(u^n)), ``converged``,
         ``linear_iterations``
         (GMRES iterations of the step).
+    u_previous : ndarray or None
+        Solution one time step before ``u`` (the second level of BDF2); a
+        restart needs it to continue with BDF2 at once.
     """
 
     u: np.ndarray
     time: float
     converged: bool
     history: dict
+    u_previous: np.ndarray = None
 
 
 def bdf_coefficients(step, dt, scheme):
@@ -101,6 +105,7 @@ def solve_unsteady(
     inner_callback=None,
     jvp=None,
     limit_step=None,
+    resume=None,
 ):
     """Advance ``M du/dt + R(u) = 0`` from ``u0`` to ``settings.end_time``.
 
@@ -120,6 +125,12 @@ def solve_unsteady(
         Passed to the inner :func:`solve_steady` (per inner iteration).
     limit_step : callable, optional
         Passed to the inner :func:`solve_steady` (limits every inner update).
+    resume : dict, optional
+        ``step`` (the steps already done; ``u0`` is the solution after them)
+        and ``u_previous`` (the solution after step - 1, or None: the first
+        step then uses BDF1). ``end_time`` stays the total: the run continues
+        with step + 1 and the time is step * time_step. ``callback.info``
+        receives ``u_previous`` and ``time_step`` before every call.
 
     Returns
     -------
@@ -131,7 +142,10 @@ def solve_unsteady(
     mass = np.asarray(mass, dtype=float)
     m_diag = sp.diags(mass.ravel())
     u_n = np.array(u0, dtype=float)
-    u_nm1 = None
+    resume = resume or {}
+    step0 = int(resume.get("step", 0))
+    u_nm1 = resume.get("u_previous")
+    u_nm1 = None if u_nm1 is None else np.array(u_nm1, dtype=float)
     hist = {
         k: []
         for k in (
@@ -146,10 +160,10 @@ def solve_unsteady(
         )
     }
     all_converged = True
-    t = 0.0
+    t = step0 * dt
 
-    for step in range(1, n_steps + 1):
-        a0, a1, a2 = bdf_coefficients(step, dt, s.scheme)
+    for step in range(step0 + 1, n_steps + 1):
+        a0, a1, a2 = bdf_coefficients(1 if u_nm1 is None else step, dt, s.scheme)
         source = mass * (a1 * u_n + (a2 * u_nm1 if u_nm1 is not None else 0.0))
 
         def res_t(u, a0=a0, source=source):
@@ -200,7 +214,9 @@ def solve_unsteady(
         if callback is not None:
             if hasattr(callback, "info"):
                 callback.info["linear_iterations"] = lin
+                callback.info["u_previous"] = u_nm1
+                callback.info["time_step"] = dt
             callback(step, t, u_n, h["residuals"][-1], n_inner, drop, inner.converged)
 
     history = {k: np.asarray(v) for k, v in hist.items()}
-    return UnsteadyResult(u_n, t, all_converged, history)
+    return UnsteadyResult(u_n, t, all_converged, history, u_nm1)

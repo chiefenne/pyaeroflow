@@ -12,6 +12,7 @@ import hashlib
 import math
 import os
 import tomllib
+from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
@@ -296,13 +297,16 @@ def mesh_fingerprint(mesh):
     return hashlib.sha1(data.tobytes()).hexdigest()[:16]
 
 
-def save_restart(path, mesh, w_nd, step=None, time=None):
+def save_restart(path, mesh, w_nd, step=None, time=None, state=None):
     """Write the non-dimensional state and the mesh fingerprint (D45).
 
     The file is written next to ``path`` and renamed, so an interrupted write
     never damages an existing restart file. ``step`` (iteration or time step)
-    and ``time`` (physical seconds, unsteady runs) are stored for reference;
-    a restart ignores them.
+    and ``time`` (physical seconds, unsteady runs) are stored with the
+    ``state``: the solver state that a continuation needs (``kind`` "steady":
+    CFL, residual peaks, Newton-Krylov switch, limiter, farfield vortex;
+    "unsteady": the solution one step earlier and the time step), see
+    :func:`load_restart_state`.
     """
     path = Path(path)
     extra = {}
@@ -310,6 +314,9 @@ def save_restart(path, mesh, w_nd, step=None, time=None):
         extra["step"] = step
     if time is not None:
         extra["time"] = time
+    for key, value in (state or {}).items():
+        if value is not None:
+            extra[f"state_{key}"] = np.asarray(value)
     tmp = path.with_name(path.name + ".tmp")
     with open(tmp, "wb") as file:
         np.savez(
@@ -336,23 +343,34 @@ class RestartWriter:
     inner limit waits for the next good one.
     """
 
-    def __init__(self, out_dir, name, mesh, output):
+    def __init__(self, out_dir, name, mesh, output, after=0, loaded=None):
         self.out_dir, self.name, self.mesh = out_dir, name, mesh
         self.every = output["restart_interval"]
         self.backup = output["restart_backup_interval"]
-        self.backup_at = sorted(set(output.get("restart_backup_at") or []))
-        self.written = 0
-        self.buckets = {"rolling": 0, "backup": 0}
+        self.backup_at = [
+            n for n in sorted(set(output.get("restart_backup_at") or [])) if n > after
+        ]
+        self.written = 1 if str(loaded).endswith(".restart_a.npz") else 0
+        self.buckets = {
+            "rolling": after // self.every if self.every else 0,
+            "backup": after // self.backup if self.backup else 0,
+        }
 
-    def __call__(self, number, w, good=True, time=None):
-        """Write the files that are due at iteration or step ``number``."""
+    def __call__(self, number, w, good=True, time=None, state=None):
+        """Write the files that are due at iteration or step ``number``.
+
+        ``state`` (callable returning the dict of :func:`save_restart`) is
+        only evaluated when a file is written.
+        """
         if not good:
             return
         if self.every and number // self.every > self.buckets["rolling"]:
             self.buckets["rolling"] = number // self.every
             file = f"{self.name}.restart_{'ab'[self.written % 2]}.npz"
             self.written += 1
-            save_restart(self.out_dir / file, self.mesh, w, number, time)
+            save_restart(
+                self.out_dir / file, self.mesh, w, number, time, state and state()
+            )
         due = False
         if self.backup and number // self.backup > self.buckets["backup"]:
             self.buckets["backup"] = number // self.backup
@@ -362,7 +380,9 @@ class RestartWriter:
             due = True
         if due:
             file = f"{self.name}.restart_{number:06d}.npz"
-            save_restart(self.out_dir / file, self.mesh, w, number, time)
+            save_restart(
+                self.out_dir / file, self.mesh, w, number, time, state and state()
+            )
 
 
 def load_restart(path, mesh, w_default):
@@ -381,6 +401,34 @@ def load_restart(path, mesh, w_default):
     return w0, n
 
 
+def load_restart_state(path):
+    """Solver state stored in a restart file, or None for an older file.
+
+    Returns the ``state`` of :func:`save_restart` with the iteration or time
+    step as ``iteration`` (steady) or ``step`` (unsteady) and the physical
+    ``time``: the ``resume`` argument of ``IncompressibleProblem.solve`` and
+    ``solve_unsteady``. A file written before the state was stored (no
+    ``state_*`` entries) gives None: the run then starts as a new run.
+    """
+    with np.load(path) as data:
+        keys = [k for k in data.files if k.startswith("state_")]
+        if not keys or "step" not in data.files:
+            return None
+        state = {k[6:]: np.array(data[k]) for k in keys}
+        step = int(data["step"])
+        if "time" in data.files:
+            state["time"] = float(data["time"])
+    for key in ("cfl", "cfl_cap", "elapsed", "vortex_gamma", "time_step"):
+        if key in state:
+            state[key] = float(state[key])
+    if "nk_on" in state:
+        state["nk_on"] = bool(state["nk_on"])
+    kind = str(state.pop("kind", "steady"))
+    state["kind"] = kind
+    state["step" if kind == "unsteady" else "iteration"] = step
+    return state
+
+
 def _display_path(path):
     """``path`` relative to the working directory if below it, else absolute."""
     path = Path(path).resolve()
@@ -390,7 +438,55 @@ def _display_path(path):
         return str(path)
 
 
-def run_case(path, console=True, mesh=None):
+def _resume_state(config, scaling, restart_mode):
+    """Solver state to continue from ``initial.restart``, or None; notices appended.
+
+    ``restart_mode`` "continue" (the default of every run) continues the
+    run that wrote the file: iteration or time step, CFL, residual peaks,
+    Newton-Krylov switch, limiter and vortex, or the previous time level.
+    "state" (the next angle of a polar) takes over only the solver state of a
+    steady run (CFL, Newton-Krylov switch, limiter, vortex): the counter and
+    the residual reference start again. A file without stored state (older
+    version) or of the other kind (steady/unsteady) starts a new run.
+    """
+    cfg = config.data
+    if cfg["initial"]["restart"] is None:
+        return None
+    path = config.resolve_path(cfg["initial"]["restart"])
+    state = load_restart_state(path)
+    unsteady = cfg["time"]["mode"] == "unsteady"
+    if state is None:
+        config.notices.append(
+            "restart file has no solver state: new run from its fields"
+        )
+        return None
+    if (state["kind"] == "unsteady") != unsteady:
+        config.notices.append(
+            f"restart file is a {state['kind']} state: new run from its fields"
+        )
+        return None
+    if restart_mode == "state":
+        if unsteady:
+            return None
+        keys = ("cfl", "cfl_cap", "nk_on", "psi", "gamma", "vortex_gamma")
+        return {k: state[k] for k in keys if k in state}
+    if unsteady:
+        dt = cfg["time"]["time_step"] / (scaling.length / scaling.velocity)
+        if abs(state.get("time_step", dt) - dt) > 1e-9 * dt:
+            state.pop("u_previous", None)
+            config.notices.append(
+                "time step differs from the restart file: first step BDF1"
+            )
+        config.notices.append(
+            f"continuing after time step {state['step']} (t = {state['step'] * dt * scaling.length / scaling.velocity:.6g} s)"
+        )
+    else:
+        config.notices.append(f"continuing after iteration {state['iteration']}")
+    state["file"] = str(path)
+    return state
+
+
+def run_case(path, console=True, mesh=None, restart_mode="continue"):
     """Run a case file end to end and write the results.
 
     Parameters
@@ -401,6 +497,9 @@ def run_case(path, console=True, mesh=None):
         Echo the log to stdout.
     mesh : Mesh, optional
         Use this mesh instead of reading ``mesh.file`` (tests).
+    restart_mode : {"continue", "state"}
+        What a restart file (``initial.restart``) carries over, see
+        :func:`_resume_state`; ``run_polar`` uses "state".
 
     Returns
     -------
@@ -413,20 +512,61 @@ def run_case(path, console=True, mesh=None):
     name = config.name
     (out_dir / f"{name}.resolved.toml").write_text(config.to_toml())
 
-    with RunLog(out_dir / f"{name}.log", console) as log:
+    # The log and history of a continued run are appended to (D58): a restart
+    # that continues the counter writes one log from start to end.
+    log_path = out_dir / f"{name}.log"
+    problem, scaling, w0, mesh = setup(config, mesh)
+    resume = _resume_state(config, scaling, restart_mode)
+    continued = bool(resume) and ("iteration" in resume or "step" in resume)
+    with RunLog(
+        log_path,
+        console,
+        append=continued and log_path.exists(),
+        elapsed_offset=resume.get("elapsed", 0.0) if continued else 0.0,
+    ) as log:
+        if continued and log_path.exists() and log_path.stat().st_size:
+            number = resume.get("iteration", resume.get("step"))
+            log.write("")
+            log.write("=" * 100)
+            log.write(
+                f"RESTART {datetime.now():%Y-%m-%d %H:%M:%S}: continuing after "
+                f"{'iteration' if 'iteration' in resume else 'step'} {number} "
+                f"from {_display_path(resume['file'])}"
+            )
+            log.write("=" * 100)
         log.write(f"PyAeroFlow {__version__}: case '{name}' ({config.path})")
-        problem, scaling, w0, mesh = setup(config, mesh)
         _log_setup(log, config, problem, scaling, mesh)
 
         if cfg["time"]["mode"] == "unsteady":
             result, coefficients = _run_unsteady(
-                log, config, problem, scaling, w0, mesh, out_dir
+                log, config, problem, scaling, w0, mesh, out_dir, resume
             )
+            state = {
+                "kind": "unsteady",
+                "u_previous": result.u_previous,
+                "time_step": cfg["time"]["time_step"]
+                / (scaling.length / scaling.velocity),
+            }
+            n_steps = (
+                int(result.history["step"][-1])
+                if result.history["step"].size
+                else (resume or {}).get("step", 0)
+            )
+            t_phys = result.time * scaling.length / scaling.velocity
         else:
             result, coefficients = _run_steady(
-                log, config, problem, scaling, w0, mesh, out_dir
+                log, config, problem, scaling, w0, mesh, out_dir, resume
             )
-    save_restart(out_dir / f"{name}.restart.npz", mesh, result.u)
+            state = (
+                {"kind": "steady", **result.state, "elapsed": log.elapsed}
+                if result.state
+                else None
+            )
+            n_steps = int(result.history["iteration"][-1])
+            t_phys = None
+    save_restart(
+        out_dir / f"{name}.restart.npz", mesh, result.u, n_steps, t_phys, state
+    )
     scale = [scaling.pressure, scaling.velocity, scaling.velocity]
     if problem.turbulent:
         scale.append(scaling.viscosity / scaling.density)
@@ -477,7 +617,7 @@ def _residual_names(problem):
     return names
 
 
-def _run_steady(log, config, problem, scaling, w0, mesh, out_dir):
+def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     """Steady solve with one log line per pseudo-time iteration."""
     cfg = config.data
     name = config.name
@@ -488,24 +628,43 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir):
     coeff_names = ("CL", "CD", "CM") if monitor else ()
     tr_cfg = cfg["physics"]["transition"]
     diagnose = cfg["output"]["transition_diagnostics"]
+    after = (resume or {}).get("iteration")
     history = HistoryWriter(
         out_dir / f"{name}.history.csv",
         names,
         coeff_names,
         GAMMA_DIAGNOSTICS if diagnose else (),
+        resume_after=after,
     )
     extra_names = (("NK", "GMRES") if implicit else ()) + tuple(
         (c, 11) for c in coeff_names
     )
     log.iteration_header(names, extra_names)
     interval = cfg["output"]["interval"]
-    restarts = RestartWriter(out_dir, name, mesh, cfg["output"])
+    restarts = RestartWriter(
+        out_dir,
+        name,
+        mesh,
+        cfg["output"],
+        after=after or 0,
+        loaded=(resume or {}).get("file"),
+    )
 
     timing = {"setup": None}
+    offset = (resume or {}).get("elapsed", 0.0)  # wall time of the earlier runs
+
+    def restart_state():
+        info = callback.info
+        return {
+            "kind": "steady",
+            **info["solver_state"](),
+            **info["driver_state"](),
+            "elapsed": log.elapsed,
+        }
 
     def callback(it, w, residuals, cfl, accepted):
-        if it == 0:
-            timing["setup"] = log.elapsed
+        if timing["setup"] is None:
+            timing["setup"] = log.elapsed - offset
         info = callback.info
         nk, lin = info.get("newton_krylov", False), info.get("linear_iterations", 0)
         extra = ("NK" if nk else "", lin if lin else "") if implicit else ()
@@ -528,7 +687,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir):
         )
         if interval and it and it % interval == 0:
             _write_fields(out_dir / f"{name}_{it:06d}.vtu", mesh, w, scaling, problem)
-        restarts(it, w, good=bool(accepted))
+        restarts(it, w, good=bool(accepted), state=restart_state)
 
     callback.info = {}
 
@@ -553,6 +712,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir):
             gamma_relaxation=tr_cfg["relaxation"],
             gamma_diagnostics=diagnose,
             nu_tilde_step_limit=solver["nu_tilde_step_limit"],
+            resume=resume,
         )
     else:
         result = problem.solve_explicit(
@@ -563,6 +723,8 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir):
             callback=callback,
         )
     history.close()
+    if timing["setup"] is None:  # a restart that is converged already
+        timing["setup"] = log.elapsed - offset
 
     _write_fields(out_dir / f"{name}.vtu", mesh, result.u, scaling, problem)
     h = result.history
@@ -624,7 +786,7 @@ def _vortex_rows(vortex, scaling):
     return [("farfield vortex", f"circulation {gamma:.6g} m^2/s")]
 
 
-def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir):
+def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     """Dual time stepping with one log line per physical time step (D45)."""
     cfg = config.data
     name = config.name
@@ -635,11 +797,13 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir):
     monitor = Monitor(config, problem, scaling) if force_boundaries else None
     coeff_names = ("CL", "CD", "CM") if monitor else ()
     diagnose = cfg["output"]["transition_diagnostics"]
+    after = (resume or {}).get("step")
     history = StepHistoryWriter(
         out_dir / f"{name}.history.csv",
         names,
         coeff_names,
         GAMMA_STEP_DIAGNOSTICS if diagnose else (),
+        resume_after=after,
     )
     gamma = {"previous": None}
     if diagnose:  # the first step is compared with the restart state
@@ -648,8 +812,24 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir):
     log.step_header(names, ("GMRES",) + tuple((c, 11) for c in coeff_names))
     interval = cfg["output"]["interval"]
     series = []
-    restarts = RestartWriter(out_dir, name, mesh, cfg["output"])
+    restarts = RestartWriter(
+        out_dir,
+        name,
+        mesh,
+        cfg["output"],
+        after=after or 0,
+        loaded=(resume or {}).get("file"),
+    )
     timing = {"setup": None}
+    offset = (resume or {}).get("elapsed", 0.0)  # wall time of the earlier runs
+
+    def restart_state():
+        return {
+            "kind": "unsteady",
+            "u_previous": callback.info.get("u_previous"),
+            "time_step": callback.info["time_step"],
+            "elapsed": log.elapsed,
+        }
 
     def write_series(step, t, w):
         file = f"{name}_{step:06d}.vtu"
@@ -659,7 +839,7 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir):
 
     def callback(step, t, w, residuals, inner, drop, converged):
         if timing["setup"] is None:
-            timing["setup"] = log.elapsed
+            timing["setup"] = log.elapsed - offset
         lin = callback.info.get("linear_iterations", 0)
         coeffs = monitor.coefficients(w) if monitor else ()
         extra = (lin if lin else "",) + tuple(f"{c:.5f}" for c in coeffs)
@@ -684,7 +864,7 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir):
         )
         if interval and step % interval == 0:
             write_series(step, t, w)
-        restarts(step, w, good=bool(converged), time=t * t_scale)
+        restarts(step, w, good=bool(converged), time=t * t_scale, state=restart_state)
         if detailed:
             log.iteration_header(names, ("NK", "GMRES"))
             log.step_header(names, ("GMRES",) + tuple((c, 11) for c in coeff_names))
@@ -718,10 +898,17 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir):
         callback=callback,
         inner_callback=inner_callback if detailed else None,
         nu_tilde_step_limit=cfg["solver"]["nu_tilde_step_limit"],
+        resume=resume,
     )
     history.close()
+    if timing["setup"] is None:  # a restart at the end time already
+        timing["setup"] = log.elapsed - offset
 
-    n_steps = int(result.history["step"][-1]) if result.history["step"].size else 0
+    n_steps = (
+        int(result.history["step"][-1])
+        if result.history["step"].size
+        else (resume or {}).get("step", 0)
+    )
     if not interval or n_steps % interval:
         write_series(n_steps, result.time, result.u)
     _write_fields(out_dir / f"{name}.vtu", mesh, result.u, scaling, problem)
@@ -1102,7 +1289,7 @@ def run_polar(path, angles, console=True):
         if previous is not None:
             case.setdefault("initial", {})["restart"] = str(previous)
         config = resolve(case, path)
-        result = run_case(config, console=console)
+        result = run_case(config, console=console, restart_mode="state")
         previous = result.output_dir / f"{config.name}.restart.npz"
         c = result.coefficients
         rows = [r for r in rows if abs(r[0] - alpha) > 1e-9]
