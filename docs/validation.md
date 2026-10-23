@@ -251,6 +251,19 @@ lower-surface transition appears at x = 0.15). Whether the discrete problem
 has no stable steady state there, or the linearisation with frozen
 intermittency (CHANGELOG 0.8) cannot reach it, is open.
 
+With SA-AFT2019b (`physics.transition.model = "aft"`, §8 and the E387 case
+`examples/cases/e387_aft.toml`) the converged α = 4° solution (632 iterations
+after a restart) has LS 0.430 and TR 0.622, against 0.428 and 0.619 from
+XFOIL at N_crit 8.15 and 0.40 / 0.62 from the oil flow. C_L = 0.809 lies
+0.023 above the Langley measurement and 0.026 below XFOIL. C_D = 0.0114 lies
+14 % below the Langley value, the same drag gap as the polar at α = 0–6°.
+The Penn State measurements of Somers & Maughmer (2007) at Tu ≈ 0.045 %
+give C_L = 0.762 and C_D = 0.0131 at 4° and agree with the oil flow to 0.03 c.
+Known discrepancy, not yet explained: the drag is 9–14 % below both
+experiments at α = −2 to 6°. Candidates, not tested: the thickened trailing
+edge of the model (0.5 % c, sharp in the mesh) and the 5-chord farfield with
+the point-vortex correction.
+
 [↑ back to table](#stage-table)
 
 ## 8. SA-AFT2019b transition: flat plate
