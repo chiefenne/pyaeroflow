@@ -9,7 +9,8 @@ Mode is taken from the header line:
                             are skipped; "inner" is parsed but not plotted)
 
 Writes (prefix defaults to the log file name without extension):
-  <prefix>_residuals.png  R_p, R_u, R_v (left axis) + R_nu (right axis)
+  <prefix>_residuals.png  R_p, R_u, R_v (left axis) + R_nu (right axis);
+                          with SA-AFT also R_gam and R_n (right axis)
   <prefix>_solver.png     drop / CFL / GMRES / wall[s] as stacked subplots
   <prefix>_coeffs.png     CL / CD / CM as stacked subplots
   <prefix>_diffs.png      consecutive differences of drop / CFL / GMRES
@@ -57,9 +58,10 @@ DCFL_MAX = 8e3       # +- limit for the delta CFL panel
 
 TARGET_ALIASES = {
     "log(R_p)": "Rp", "log(R_u)": "Ru", "log(R_v)": "Rv", "log(R_nu)": "Rnu",
+    "log(R_gam)": "Rgam", "log(R_n)": "Rn",
 }
 TARGET_KEYS = {"CL", "CD", "CM", "drop", "CFL", "GMRES", "wall",
-               "Rp", "Ru", "Rv", "Rnu"}
+               "Rp", "Ru", "Rv", "Rnu", "Rgam", "Rn"}
 
 
 def is_num(s):
@@ -128,13 +130,15 @@ def draw_target(ax, key, targets, color, logy=False):
 def parse_log(path):
     """Return (data dict, notes, mode). mode is 'steady' or 'transient'.
 
+    The residual columns are taken from the header ("log(R_p)" ... ), so
+    laminar (3), SA (4) and SA-AFT (6: also R_gam, R_n) logs all work.
     Steady: iter, log(R_*), drop, CFL, [NK], GMRES, CL, CD, CM, wall, note.
             NK is optional per row; GMRES is 0 when no NK step ran.
     Transient: step, time, inner, drop, log(R_*), GMRES, CL, CD, CM, wall, note.
             Mapped onto the same keys; 'iter' holds the step number.
     """
-    header, mode = None, None
-    steady_rows, trans_rows, notes = [], [], []
+    header, mode, res_keys = None, None, []
+    rows, notes = [], []
     with open(path) as f:
         for line in f:
             tok = line.split()
@@ -143,40 +147,39 @@ def parse_log(path):
             if header is None and tok[0] in ("iter", "step"):
                 header = tok
                 mode = "steady" if tok[0] == "iter" else "transient"
+                res_keys = ["R" + t[len("log(R_"):-1] for t in tok
+                            if t.startswith("log(R_")]
                 continue
             if header is None or not is_num(tok[0]):
                 continue
-            if mode == "steady":
-                if len(tok) < 11:
-                    continue
-                it = int(tok[0])
-                rp, ru, rv, rnu, drop, cfl = map(float, tok[1:7])
-                rest = tok[7:]
-                gmres = 0
-                if rest and rest[0] == "NK":
-                    gmres = int(rest[1])
-                    rest = rest[2:]
-                cl, cd, cm, wall = map(float, rest[:4])
-                steady_rows.append([it, rp, ru, rv, rnu, drop, cfl, gmres,
-                                    cl, cd, cm, wall])
-                notes.append(" ".join(rest[4:]))
-            else:
-                if len(tok) < 13:
-                    continue
-                vals = [float(v) for v in tok[:13]]
-                trans_rows.append(vals)
-                notes.append(" ".join(tok[13:]))
+            nr = len(res_keys)
+            try:
+                if mode == "steady":
+                    it = int(tok[0])
+                    res = [float(v) for v in tok[1:1 + nr]]
+                    drop, cfl = float(tok[1 + nr]), float(tok[2 + nr])
+                    rest = tok[3 + nr:]
+                    gmres = 0
+                    if rest and rest[0] == "NK":
+                        gmres = int(rest[1])
+                        rest = rest[2:]
+                    cl, cd, cm, wall = map(float, rest[:4])
+                    rows.append([it, *res, drop, cfl, gmres, cl, cd, cm, wall])
+                    notes.append(" ".join(rest[4:]))
+                else:
+                    n = 4 + nr + 5
+                    rows.append([float(v) for v in tok[:n]])
+                    notes.append(" ".join(tok[n:]))
+            except (ValueError, IndexError):
+                continue  # incomplete row (e.g. still being written)
 
     if mode == "steady":
-        cols = ["iter", "Rp", "Ru", "Rv", "Rnu", "drop", "CFL",
-                "GMRES", "CL", "CD", "CM", "wall"]
-        data = np.array(steady_rows, dtype=float)
-        d = {c: data[:, i] for i, c in enumerate(cols)}
+        cols = ["iter", *res_keys, "drop", "CFL", "GMRES", "CL", "CD", "CM", "wall"]
     else:
-        cols = ["iter", "time", "inner", "drop", "Rp", "Ru", "Rv", "Rnu",
+        cols = ["iter", "time", "inner", "drop", *res_keys,
                 "GMRES", "CL", "CD", "CM", "wall"]
-        data = np.array(trans_rows, dtype=float)
-        d = {c: data[:, i] for i, c in enumerate(cols)}
+    data = np.array(rows, dtype=float).reshape(-1, len(cols))
+    d = {c: data[:, i] for i, c in enumerate(cols)}
     return d, notes, mode or "steady"
 
 
@@ -235,15 +238,22 @@ def plot_residuals(d, x, notes, xlabel, targets, title, path):
             lines.append(t)
     ax.set_ylabel("log(R_p), log(R_u), log(R_v)")
 
-    ax2 = ax.twinx()  # secondary y axis for the turbulence residual
-    lines += ax2.plot(x, d["Rnu"], marker=".", ms=4, lw=1.2, color="C3", ls="--",
-                      label="log(R_nu)  [right axis]")
-    t = draw_target(ax2, "Rnu", targets, "C3")
-    if t is not None:
-        t.set_label(f"log(R_nu) {t.get_label()}")
-        lines.append(t)
-    ax2.set_ylabel("log(R_nu)", color="C3")
-    ax2.tick_params(axis="y", colors="C3")
+    right = [k for k in ("Rnu", "Rgam", "Rn") if k in d]
+    if right:
+        ax2 = ax.twinx()  # secondary y axis for the turbulence residuals
+        for k, key in enumerate(right):
+            lab = f"log(R_{key[1:]})"
+            c = f"C{3 + k}"
+            lines += ax2.plot(x, d[key], marker=".", ms=4, lw=1.2, color=c, ls="--",
+                              label=f"{lab}  [right axis]")
+            t = draw_target(ax2, key, targets, c)
+            if t is not None:
+                t.set_label(f"{lab} {t.get_label()}")
+                lines.append(t)
+        ylab = ", ".join(f"log(R_{key[1:]})" for key in right)
+        ax2.set_ylabel(ylab, color="C3" if len(right) == 1 else "k")
+        if len(right) == 1:
+            ax2.tick_params(axis="y", colors="C3")
     ax.legend(lines, [l.get_label() for l in lines], loc="upper right",
               ncol=2, fontsize=9)
 
