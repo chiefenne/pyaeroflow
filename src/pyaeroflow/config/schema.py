@@ -462,11 +462,36 @@ SCHEMA = {
             "string", "results", "Output directory, relative to the case file"
         ),
         "formats": Opt("string_list", ["vtu"], "Field output formats"),
+        "fields": Opt(
+            "string_list",
+            None,
+            "Cell fields written to the VTU files (D59, field table in "
+            'docs/configuration.md); "all" = every field the case provides; '
+            "default: pressure, velocity, velocity_magnitude and, with a "
+            "turbulence model, nu_tilde, eddy_viscosity_ratio and the "
+            "transition fields",
+        ),
+        "fields_interval": Opt(
+            "int",
+            0,
+            "Write the fields every n iterations (steady) or time steps "
+            "(unsteady), to <name>_<number>.vtu; 0 = only at the end",
+            minimum=0,
+        ),
+        "fields_at": Opt(
+            "int_list",
+            [],
+            "Also write the fields at these iterations (steady) or time steps "
+            "(unsteady), in addition to fields_interval",
+            minimum=1,
+        ),
+        "fields_final": Opt(
+            "bool", True, "Write the final fields to <name>.vtu at the end of the run"
+        ),
         "interval": Opt(
             "int",
             0,
-            "Write fields every n iterations (steady) or time steps (unsteady); "
-            "0 = only at the end",
+            "Same as fields_interval (kept for older case files); do not set both",
             minimum=0,
         ),
         "history": Opt("bool", True, "Write the convergence history (CSV and .log)"),

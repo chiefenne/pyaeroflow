@@ -26,7 +26,15 @@ from pyaeroflow.driver import (
     INFLOW_TYPES,
     IncompressibleProblem,
 )
-from pyaeroflow.io import HistoryWriter, RunLog, StepHistoryWriter, write_pvd, write_vtu
+from pyaeroflow.io import (
+    HistoryWriter,
+    RunLog,
+    StepHistoryWriter,
+    estimate_vtu_bytes,
+    write_pvd,
+    write_vtu,
+)
+from pyaeroflow.io.fields import FieldContext, compute_fields, n_columns
 from pyaeroflow.mesh import Mesh, read_su2
 from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
@@ -385,6 +393,95 @@ class RestartWriter:
             )
 
 
+class FieldWriter:
+    """VTU field files written during a run (``output.fields_*``, D59).
+
+    ``fields_interval`` = n writes ``<name>_<number>.vtu`` every n iterations
+    (steady) or time steps (unsteady), ``fields_at`` adds files at the listed
+    numbers, ``fields_final`` the final ``<name>.vtu``. The schedule follows
+    :class:`RestartWriter`: a write that falls on a rejected iteration or a
+    time step that hit the inner limit waits for the next good one.
+    """
+
+    def __init__(self, out_dir, name, mesh, scaling, problem, monitor, output, after=0):
+        self.out_dir, self.name, self.mesh = out_dir, name, mesh
+        self.scaling, self.problem, self.monitor = scaling, problem, monitor
+        self.names = list(output["fields"])
+        self.every = output["fields_interval"]
+        self.final = output["fields_final"]
+        self.at = [n for n in sorted(set(output["fields_at"])) if n > after]
+        self.bucket = after // self.every if self.every else 0
+        self.last = None  # number of the latest series file
+
+    def write(self, path, w, cell_residual=None):
+        """Write the selected fields of the non-dimensional state ``w``."""
+        ctx = FieldContext(self.problem, w, self.scaling, self.monitor, cell_residual)
+        write_vtu(path, self.mesh, cell_data=compute_fields(self.names, ctx))
+
+    def due(self, number, good=True):
+        """Return True if a series file is due at ``number`` (updates the schedule)."""
+        if not good:
+            return False
+        due = False
+        if self.every and number // self.every > self.bucket:
+            self.bucket = number // self.every
+            due = True
+        if self.at and self.at[0] <= number:
+            self.at = [n for n in self.at if n > number]
+            due = True
+        return due
+
+    def series_file(self, number):
+        """Name of the series file of ``number`` (recorded as the latest)."""
+        self.last = number
+        return f"{self.name}_{number:06d}.vtu"
+
+    def write_pvd(self):
+        """Steady runs: collect the files of the series (also earlier runs)."""
+        pattern = f"{self.name}_[0-9][0-9][0-9][0-9][0-9][0-9].vtu"
+        files = sorted(self.out_dir.glob(pattern))
+        write_pvd(
+            self.out_dir / f"{self.name}.pvd",
+            [(int(f.stem.rsplit("_", 1)[1]), f.name) for f in files],
+        )
+
+
+def _field_rows(cfg, mesh):
+    """Build the configuration rows of the field output (fields, schedule, sizes)."""
+    out = cfg["output"]
+    names = out["fields"]
+    n_scalar, n_vector = n_columns(names)
+    size = estimate_vtu_bytes(mesh, n_scalar, n_vector)
+    unsteady = cfg["time"]["mode"] == "unsteady"
+    total = (
+        int(round(cfg["time"]["end_time"] / cfg["time"]["time_step"]))
+        if unsteady
+        else cfg["solver"]["max_iterations"]
+    )
+    unit = "time steps" if unsteady else "iterations"
+    every, at = out["fields_interval"], sorted(set(out["fields_at"]))
+    parts, files = [], 0
+    if every:
+        parts.append(f"every {every} {unit}")
+        files += total // every
+    if at:
+        parts.append(f"at {', '.join(str(n) for n in at)}")
+        files += len([n for n in at if n <= total and (not every or n % every)])
+    if out["fields_final"]:
+        parts.append("final")
+        files += 1
+    schedule = ", ".join(parts) if parts else "none"
+    rows = [("field output", f"{len(names)} fields: {', '.join(names)}")]
+    rows.append(
+        (
+            "field files",
+            f"{size / 1e6:.1f} MB each; {schedule}; at most {files} files, "
+            f"{size * files / 1e6:.0f} MB",
+        )
+    )
+    return rows
+
+
 def load_restart(path, mesh, w_default):
     """Read a restart file for ``mesh``; missing variables keep ``w_default``.
 
@@ -640,7 +737,9 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
         (c, 11) for c in coeff_names
     )
     log.iteration_header(names, extra_names)
-    interval = cfg["output"]["interval"]
+    fields = FieldWriter(
+        out_dir, name, mesh, scaling, problem, monitor, cfg["output"], after=after or 0
+    )
     restarts = RestartWriter(
         out_dir,
         name,
@@ -685,8 +784,9 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
             if diagnose
             else (),
         )
-        if interval and it and it % interval == 0:
-            _write_fields(out_dir / f"{name}_{it:06d}.vtu", mesh, w, scaling, problem)
+        if fields.due(it, accepted):
+            fields.write(out_dir / fields.series_file(it), w, info.get("cell_residual"))
+            fields.write_pvd()
         restarts(it, w, good=bool(accepted), state=restart_state)
 
     callback.info = {}
@@ -726,7 +826,10 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     if timing["setup"] is None:  # a restart that is converged already
         timing["setup"] = log.elapsed - offset
 
-    _write_fields(out_dir / f"{name}.vtu", mesh, result.u, scaling, problem)
+    if fields.final:
+        fields.write(
+            out_dir / f"{name}.vtu", result.u, callback.info.get("cell_residual")
+        )
     h = result.history
     log.section("Summary")
     nk_steps = int(np.count_nonzero(h["newton_krylov"]))
@@ -741,7 +844,8 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
         ),
         ("setup and compilation", f"{timing['setup']:.1f} s"),
         ("wall time", f"{log.elapsed:.1f} s"),
-        ("fields", str(out_dir / f"{name}.vtu")),
+        *([("fields", str(out_dir / f"{name}.vtu"))] if fields.final else []),
+        *([("field series", str(out_dir / f"{name}.pvd"))] if fields.last else []),
         ("history", str(history.path)),
     ]
     coefficients = None
@@ -810,8 +914,10 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         _, gamma["previous"] = problem.gamma_step_diagnostics(w0)
     detailed = cfg["output"]["verbosity"] == "detailed"
     log.step_header(names, ("GMRES",) + tuple((c, 11) for c in coeff_names))
-    interval = cfg["output"]["interval"]
     series = []
+    fields = FieldWriter(
+        out_dir, name, mesh, scaling, problem, monitor, cfg["output"], after=after or 0
+    )
     restarts = RestartWriter(
         out_dir,
         name,
@@ -832,8 +938,8 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         }
 
     def write_series(step, t, w):
-        file = f"{name}_{step:06d}.vtu"
-        _write_fields(out_dir / file, mesh, w, scaling, problem)
+        file = fields.series_file(step)
+        fields.write(out_dir / file, w)
         series.append((t * t_scale, file))
         write_pvd(out_dir / f"{name}.pvd", series)
 
@@ -862,7 +968,7 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
             log.elapsed,
             stats,
         )
-        if interval and step % interval == 0:
+        if fields.due(step, converged):
             write_series(step, t, w)
         restarts(step, w, good=bool(converged), time=t * t_scale, state=restart_state)
         if detailed:
@@ -909,9 +1015,10 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         if result.history["step"].size
         else (resume or {}).get("step", 0)
     )
-    if not interval or n_steps % interval:
-        write_series(n_steps, result.time, result.u)
-    _write_fields(out_dir / f"{name}.vtu", mesh, result.u, scaling, problem)
+    if fields.final:
+        if fields.last != n_steps:
+            write_series(n_steps, result.time, result.u)
+        fields.write(out_dir / f"{name}.vtu", result.u)
     h = result.history
     log.section("Summary")
     rows = [
@@ -921,8 +1028,8 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         ("steps at inner limit", str(int(np.count_nonzero(~h["converged"])))),
         ("setup and compilation", f"{timing['setup']:.1f} s"),
         ("wall time", f"{log.elapsed:.1f} s"),
-        ("fields", str(out_dir / f"{name}.vtu")),
-        ("field series", str(out_dir / f"{name}.pvd")),
+        *([("fields", str(out_dir / f"{name}.vtu"))] if fields.final else []),
+        *([("field series", str(out_dir / f"{name}.pvd"))] if series else []),
         ("history", str(history.path)),
     ]
     coefficients = None
@@ -1044,27 +1151,6 @@ def _scaled_mesh(mesh, factor):
     return Mesh.from_cells(mesh.nodes * factor, cells, boundary)
 
 
-def _write_fields(path, mesh, w_nd, scaling, problem=None):
-    p = w_nd[:, 0] * scaling.pressure
-    vel = w_nd[:, 1:3] * scaling.velocity
-    data = {
-        "pressure": p,
-        "velocity": vel,
-        "velocity_magnitude": np.hypot(vel[:, 0], vel[:, 1]),
-    }
-    if problem is not None and problem.turbulent:
-        nu_scale = scaling.viscosity / scaling.density  # m^2/s
-        data["nu_tilde"] = w_nd[:, 3] * nu_scale
-        data["eddy_viscosity_ratio"] = problem.eddy_viscosity(w_nd) / (
-            problem.model.viscosity / problem.model.density
-        )
-        if problem.model.transition != "none":
-            data["intermittency"] = problem.intermittency(w_nd)
-        if problem.model.transition == "aft":
-            data["amplification_factor"] = w_nd[:, 5]
-    write_vtu(path, mesh, cell_data=data)
-
-
 def _mode_rows(cfg):
     """Build the configuration rows for the time mode and iteration control."""
     solver, tm, num = cfg["solver"], cfg["time"], cfg["numerics"]
@@ -1168,6 +1254,7 @@ def _log_setup(log, config, problem, scaling, mesh):
         ("solver", cfg["solver"]["method"]),
     ]
     rows += _mode_rows(cfg)
+    rows += _field_rows(cfg, mesh)
     rows.append(("resolved configuration", f"{config.name}.resolved.toml"))
     log.table(rows)
     log.section("Mesh")

@@ -358,6 +358,8 @@ def solve_steady(
     info = getattr(callback, "info", None)
     if info is not None:
         info["solver_state"] = snapshot
+        # The residual array of the last accepted iteration (field output).
+        info["cell_residual"] = lambda: r
     if callback is not None:
         if info is not None:
             info["measure"] = norm

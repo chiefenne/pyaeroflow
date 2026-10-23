@@ -10,7 +10,7 @@ from functools import partial
 import jax.numpy as jnp
 import numpy as np
 
-from pyaeroflow.numerics import build_geometry
+from pyaeroflow.numerics import build_geometry, lsq_gradient
 from pyaeroflow.numerics.wall_distance import mesh_wall_distance, mesh_wall_normal
 from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
@@ -377,6 +377,15 @@ class IncompressibleProblem:
         return fz.wall_loads(
             self.model, self.geom, self.bc, jnp.asarray(w), self.physics.boundary_state
         )
+
+    def vorticity(self, w):
+        """Signed vorticity dv/dx - du/dy per cell (non-dimensional)."""
+        w = jnp.asarray(w)
+        w_b = self.physics.boundary_state(
+            self.bc, self.geom.b_normal, w[self.geom.b_owner]
+        )
+        grad = lsq_gradient(self.geom, w, w_b)
+        return np.asarray(grad[:, 2, 0] - grad[:, 1, 1])
 
     def intermittency(self, w):
         """Transition intermittency per cell (ones without a transition model)."""

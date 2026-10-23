@@ -130,3 +130,21 @@ def write_pvd(path, entries):
     ]
     lines += ["  </Collection>", "</VTKFile>", ""]
     Path(path).write_text("\n".join(lines))
+
+
+def estimate_vtu_bytes(mesh, n_scalar, n_vector=0):
+    """Size in bytes of a binary ``write_vtu`` file with the given cell fields.
+
+    Counts the mesh (points, connectivity, offsets, types) and ``n_scalar``
+    float64 fields plus ``n_vector`` 2D vector fields (written as three
+    components), with the 4/3 of the base64 encoding; the XML text around the
+    arrays is a few hundred bytes and not counted.
+    """
+    raw = (
+        mesh.n_nodes * 3 * 8
+        + mesh.cell_nodes.size * 8
+        + mesh.n_cells * 8
+        + mesh.n_cells
+        + mesh.n_cells * 8 * (n_scalar + 3 * n_vector)
+    )
+    return int(raw * 4 / 3)

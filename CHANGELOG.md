@@ -2,6 +2,18 @@
 
 ## Unreleased (0.9) – Transition, step 2: SA-AFT2019b
 
+- Configurable field output (D59). `output.fields` selects the VTU cell
+  fields by name (`"all"` for everything the case provides): vorticity,
+  kinematic, eddy and effective viscosity, wall distance, the cell residuals
+  per variable divided by the cell volume (steady, implicit), and the wall
+  fields `cf` (attached flow positive on every side), `cp_wall`,
+  `tau_wall_x`, `tau_wall_y` and `y_plus` in the wall cells (0 elsewhere), in
+  addition to the earlier fields. The schedule is `fields_interval` (the old
+  `interval` stays as an alias), `fields_at` (extra iterations or steps) and
+  `fields_final`; steady runs write a PVD series. The log header lists the
+  fields, the size of one file and the largest total size. The field table is
+  generated from `pyaeroflow.io.fields` and checked against
+  docs/configuration.md.
 - A restart now continues the run (D58). The restart files (rolling, backup
   and final) store the iteration or time step, the time and the solver state:
   CFL, per-variable residual peaks (the reference of `residual_drop`), the

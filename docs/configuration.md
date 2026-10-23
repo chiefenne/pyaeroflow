@@ -349,8 +349,12 @@ The other `[solver]` settings (CFL control, Newton–Krylov, linear solver) appl
 | Key | Type | Default | Description | # |
 |-----|------|---------|-------------|---|
 | `directory` | path | `"results"` | Relative to the case file | |
-| `formats` | array | `["vtu"]` | Field output; `"vtu"` (series as PVD for unsteady runs): pressure, velocity, velocity magnitude and, with a turbulence model, ν̃ and ν_t/ν | D45 |
-| `interval` | int | `0` | Write every n iterations / time steps; 0 = only at the end | |
+| `formats` | array | `["vtu"]` | Field output format; only `"vtu"` (series as PVD). The fields are selected with `fields` | D45, D59 |
+| `fields` | array of strings | pressure, velocity, velocity_magnitude and, with a turbulence model, nu_tilde, eddy_viscosity_ratio and the transition fields | Cell fields written to the VTU files, from the table in [Field output](#field-output); `["all"]` selects every field the case provides. The default is the set written before D59. An unknown name gets a "did you mean" hint, a field that the case does not provide is an error that names what it needs | D59 |
+| `fields_interval` | int | `0` | Write the fields to `<name>_<number>.vtu` every n iterations (steady) or time steps (unsteady); 0 = only at the end. The number is the iteration or step, 6 digits; a write that falls on a rejected iteration or an unsteady step at the inner limit waits for the next good one (as the restart files, D56). Steady runs also write `<name>.pvd` (ParaView series over the iterations) | D59 |
+| `fields_at` | int array | `[]` | Also write the fields at these iterations / time steps, e.g. `[120, 147, 211]`; adds to `fields_interval` (or works alone) | D59 |
+| `fields_final` | bool | `true` | Write the final fields to `<name>.vtu` (unsteady runs also add the last step to the series) | D59 |
+| `interval` | int | `0` | The older name of `fields_interval`, kept for existing case files; setting both to different values is an error | D59 |
 | `restart_interval` | int | `0` | Write a restart file every n iterations (steady) or time steps (unsteady), alternately to `<name>.restart_a.npz` and `<name>.restart_b.npz`: each write replaces the older of the two and goes through a temporary file, so after a crash or a stopped run the newer file (check the modification time) is complete. A write that falls on a rejected iteration or an unsteady step that hit the inner limit waits for the next good one. 0 = only the final `<name>.restart.npz`, which is always written at the end. Restart from one of them with `initial.restart`; the file carries the iteration or step, the time and the solver state, so the run continues where it stopped (see `initial.restart`) | |
 | `restart_backup_interval` | int | `0` | Write a restart file `<name>.restart_<iteration or step, 6 digits>.npz` every n iterations / time steps that is never replaced (same content as the rolling files); 0 = none. The two intervals are independent | D56 |
 | `restart_backup_at` | int array | `[]` | Also write a backup `<name>.restart_<number>.npz` at these iterations / time steps, e.g. `[120, 147, 211]`; adds to `restart_backup_interval` (or works alone when that is 0); a number due from both gives one file. A listed number that falls on a rejected iteration or an unsteady step at the inner limit is written at the next good one | D56 |
@@ -359,6 +363,42 @@ The other `[solver]` settings (CFL control, Newton–Krylov, linear solver) appl
 | `force_boundaries` | array of strings | all wall boundaries | Boundary faces over which forces and moments are integrated (walls, transpiration walls; slip walls allowed, and included by default in Euler mode); C_L, C_D, C_M per iteration in the log and history, and a wall CSV (x, y, p, Cp, τ_x, τ_y, Cf, and y⁺ of the first cell centre with a turbulence model) per boundary at the end. Forces are those of the fluid on the wall; Cf uses the face tangent oriented counter-clockwise with respect to the fluid (+x on a bottom wall) | D45 |
 | `history` | bool | `true` | Residuals and coefficients as CSV and in the `.log` file: per pseudo-time iteration (steady) or per physical time step (unsteady) | D45 |
 
+
+### Field output
+
+`output.fields` selects the cell fields of the VTU files; the schedule is `fields_interval`, `fields_at` and `fields_final`. The log header lists the selected fields and the size of one file, the number of files at most written and their total size, so a wrong setting can be seen and corrected at the start of a run.
+
+All values are in SI units except the residuals and the wall coefficients (non-dimensional, marked `1`). Fields that exist only at the wall (`cf`, `cp_wall`, `tau_wall_x`, `tau_wall_y`, `y_plus`) are written in the cells next to the walls in `output.force_boundaries` and are 0 in all other cells; a cell with several wall faces gets the length-weighted mean. The residual fields are the residual of the last accepted iteration divided by the cell volume (area in 2D), non-dimensional and signed, with the sign of the residual vector `R(w)` (zero for a converged cell); they exist for steady runs with the implicit solver, not for unsteady runs and not for the explicit mode.
+
+`cf` is flow-aligned: the wall shear stress component along the wall tangent oriented with the freestream direction (`reference.angle_of_attack`), divided by the dynamic pressure, so attached flow gives a positive value on every side of an airfoil and separated flow a negative one. The wall CSV keeps its own sign convention, that of the wall traversal (negative on the lower surface of an airfoil even where the flow is attached). The orientation by the freestream direction is not meaningful where the wall is perpendicular to the freestream (a leading edge, a base).
+
+The table is generated from the field registry (`pyaeroflow.io.fields`); a column marks the model combinations for which a field exists. A field also needs the conditions of the column "Needs".
+
+| Field | Unit | Description | Needs | euler | laminar | SA | SA + BCM | SA + AFT |
+|---|---|---|---|---|---|---|---|---|
+| `pressure` | Pa | Static pressure | always | x | x | x | x | x |
+| `velocity` | m/s | Velocity vector | always | x | x | x | x | x |
+| `velocity_magnitude` | m/s | Speed | always | x | x | x | x | x |
+| `vorticity` | 1/s | dv/dx - du/dy from the least-squares gradient (signed) | always | x | x | x | x | x |
+| `kinematic_viscosity` | m^2/s | Laminar kinematic viscosity (constant) | laminar, rans |  | x | x | x | x |
+| `eddy_viscosity` | m^2/s | Kinematic eddy viscosity nu_t | rans |  |  | x | x | x |
+| `eddy_viscosity_ratio` | 1 | nu_t / nu | rans |  |  | x | x | x |
+| `effective_viscosity` | m^2/s | nu + nu_t (the laminar value without a turbulence model) | laminar, rans |  | x | x | x | x |
+| `nu_tilde` | m^2/s | SA working variable | rans |  |  | x | x | x |
+| `wall_distance` | m | Distance to the nearest wall used by the turbulence model | rans |  |  | x | x | x |
+| `intermittency` | 1 | Transition intermittency gamma | rans with a transition model |  |  |  | x | x |
+| `amplification_factor` | 1 | Amplification factor n of SA-AFT | rans with transition.model = aft |  |  |  |  | x |
+| `residual_p` | 1 | Pressure (continuity) residual per cell volume | steady, implicit | x | x | x | x | x |
+| `residual_u` | 1 | x-momentum residual per cell volume | steady, implicit | x | x | x | x | x |
+| `residual_v` | 1 | y-momentum residual per cell volume | steady, implicit | x | x | x | x | x |
+| `residual_nu_tilde` | 1 | nu_tilde residual per cell volume | steady, implicit, rans |  |  | x | x | x |
+| `residual_gamma` | 1 | log-intermittency residual per cell volume | steady, implicit, transition.model = aft |  |  |  |  | x |
+| `residual_n` | 1 | Amplification-factor residual per cell volume | steady, implicit, transition.model = aft |  |  |  |  | x |
+| `cf` | 1 | Skin-friction coefficient with attached flow positive on every side (the wall CSV keeps the sign of the wall traversal); wall cells only | wall in output.force_boundaries, laminar or rans |  | x | x | x | x |
+| `cp_wall` | 1 | Pressure coefficient at the wall; wall cells only | wall in output.force_boundaries | x | x | x | x | x |
+| `tau_wall_x` | 1 | Wall shear stress x component (non-dimensional, rho U^2); wall cells only | wall in output.force_boundaries, laminar or rans |  | x | x | x | x |
+| `tau_wall_y` | 1 | Wall shear stress y component (non-dimensional, rho U^2); wall cells only | wall in output.force_boundaries, laminar or rans |  | x | x | x | x |
+| `y_plus` | 1 | y+ of the first cell centre; wall cells only | wall in output.force_boundaries, rans |  |  | x | x | x |
 
 ## 6. Open questions
 

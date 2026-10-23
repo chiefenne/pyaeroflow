@@ -15,6 +15,7 @@ from pyaeroflow.config.schema import (
     TURBULENCE_FORMS,
     Opt,
 )
+from pyaeroflow.io.fields import Capabilities, resolve_fields
 
 PRESSURE_FIXING = {"pressure-outlet", "farfield", "total-pressure-inlet"}
 
@@ -589,6 +590,20 @@ def _consistency(data, explicit, problems, notices, path):
 
     if data["output"]["formats"] and set(data["output"]["formats"]) - {"vtu"}:
         problems.append("output.formats: only 'vtu' is available")
+
+    # Field output (D59): `interval` is the older name of fields_interval.
+    out = data["output"]
+    if out["interval"]:
+        if out["fields_interval"] and out["fields_interval"] != out["interval"]:
+            problems.append(
+                "output.interval is the same as output.fields_interval: set only one"
+            )
+        out["fields_interval"] = out["interval"]
+    out["interval"] = out["fields_interval"]
+    out["fields"], field_problems = resolve_fields(
+        out["fields"], Capabilities.from_config(data)
+    )
+    problems += field_problems
 
 
 def _unknown(what, name, candidates):
