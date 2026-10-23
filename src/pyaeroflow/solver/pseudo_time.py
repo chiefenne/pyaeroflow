@@ -202,11 +202,15 @@ class SteadyResult(NamedTuple):
         ``residuals`` (RMS norm per variable), ``cfl``,
         ``accepted``, ``newton_krylov`` (phase flag), ``linear_iterations``
         (GMRES iterations of the step, 0 for a direct solve).
+    state : dict or None
+        Solver state at the end (``cfl``, ``cfl_cap``, ``scale``, ``nk_on``,
+        ``iteration``), the ``resume`` argument of a continuation.
     """
 
     u: np.ndarray
     converged: bool
     history: dict
+    state: dict = None
 
 
 def rms(r):
@@ -230,6 +234,7 @@ def solve_steady(
     jvp=None,
     reference_norm=None,
     limit_step=None,
+    resume=None,
 ):
     """Drive ``residual(u)`` to zero by implicit pseudo-time stepping.
 
@@ -261,6 +266,17 @@ def solve_steady(
     limit_step : callable, optional
         ``limit_step(u, du) -> du`` applied to every computed update before
         the line search (e.g. a cap on the turbulence variable's change).
+    resume : dict, optional
+        Solver state of an earlier run (``SteadyResult.state``). With
+        ``iteration`` the run continues that run: the counting starts after
+        that iteration (``settings.max_iterations`` is the total), the
+        per-variable residual peaks (``scale``) are kept, so that
+        ``residual_drop`` still refers to the original start, and the
+        iteration-triggered phases (first-order start-up, Newton-Krylov
+        switch) are not repeated. Without ``iteration`` only ``cfl``,
+        ``cfl_cap`` and ``nk_on`` are taken over (a new problem, e.g. the next
+        angle of attack, that starts from the earlier solution). The initial
+        callback (iteration 0) is not called on a continuation.
 
     Convergence is measured per equation (D54): every variable's RMS
     residual is divided by the largest value it has had so far (or by
@@ -285,12 +301,16 @@ def solve_steady(
             return np.asarray(residual_startup(u))
         return np.asarray(residual(u))
 
-    r = res(u, 1)
+    resume = resume or {}
+    it0 = int(resume.get("iteration", 0))
+    r = res(u, it0 + 1)
     tiny = np.finfo(float).tiny
     scale = np.maximum(
         rms_per_variable(r) if reference_norm is None else np.asarray(reference_norm),
         tiny,
     )
+    if "scale" in resume and it0:
+        scale = np.maximum(np.asarray(resume["scale"], dtype=float), tiny)
 
     def measure(r):
         active = scale >= 1e-12 * scale.max()
@@ -304,10 +324,10 @@ def solve_steady(
         return norm <= target or norm_abs <= s.residual_floor
 
     nk_threshold = 10.0 ** (-s.nk_switch_residual_drop)
-    cfl = s.cfl_start
+    cfl = float(resume.get("cfl", s.cfl_start))
     eta = s.nk_linear_tolerance
     hist = {
-        "iteration": [0],
+        "iteration": [it0],
         "residual": [norm_abs],
         "measure": [norm],
         "residuals": [rms_per_variable(r)],
@@ -317,19 +337,36 @@ def solve_steady(
         "linear_iterations": [0],
     }
     converged = done(norm, norm_abs)
-    if callback is not None:
-        info = getattr(callback, "info", None)
-        if info is not None:
-            info["measure"] = norm
-        callback(0, u, hist["residuals"][0], cfl, True)
-    lin, steps_since_factor, cfl_at_factor = None, 0, cfl
-    stale = False  # the preconditioner let GMRES work hard: rebuild it
-    nk_on = False  # the switch latches: once on, Newton-Krylov stays on
     # CFL cap of the Newton-Krylov phase, adapted to the GMRES effort: the
     # first-order preconditioner degrades as the pseudo-time term vanishes,
     # so expensive linear solves lower the cap and cheap ones raise it.
-    cfl_cap = s.cfl_max
-    for it in range(1, s.max_iterations + 1):
+    cfl_cap = float(resume.get("cfl_cap", s.cfl_max))
+    nk_on = bool(resume.get("nk_on", False))  # the switch latches
+    # Live view of the solver state for the callback (restart files).
+    state = {}
+
+    def snapshot():
+        return {
+            "iteration": state["it"],
+            "cfl": cfl,
+            "cfl_cap": cfl_cap,
+            "scale": scale.copy(),
+            "nk_on": nk_on,
+        }
+
+    state["it"] = it0
+    info = getattr(callback, "info", None)
+    if info is not None:
+        info["solver_state"] = snapshot
+    if callback is not None:
+        if info is not None:
+            info["measure"] = norm
+        if not it0:
+            callback(0, u, hist["residuals"][0], cfl, True)
+    lin, steps_since_factor, cfl_at_factor = None, 0, cfl
+    stale = False  # the preconditioner let GMRES work hard: rebuild it
+    for it in range(it0 + 1, s.max_iterations + 1):
+        state["it"] = it - 1
         if converged or cfl < s.cfl_min:
             break
         info = getattr(callback, "info", None)
@@ -457,9 +494,11 @@ def solve_steady(
                 info["newton_krylov"] = use_nk
                 info["linear_iterations"] = lin_its
                 info["measure"] = norm
+            state["it"] = it
             callback(it, u, hist["residuals"][-1], hist["cfl"][-1], accepted)
+        state["it"] = it
     history = {k: np.asarray(v) for k, v in hist.items()}
-    return SteadyResult(u, bool(converged), history)
+    return SteadyResult(u, bool(converged), history, snapshot())
 
 
 def _newton_operator(t_matrix, jvp, u):

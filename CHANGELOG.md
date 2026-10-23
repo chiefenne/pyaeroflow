@@ -2,6 +2,18 @@
 
 ## Unreleased (0.9) – Transition, step 2: SA-AFT2019b
 
+- A restart now continues the run (D58). The restart files (rolling, backup
+  and final) store the iteration or time step, the time and the solver state:
+  CFL, per-variable residual peaks (the reference of `residual_drop`), the
+  Newton–Krylov switch, the frozen or released limiter, the lagged
+  intermittency, the farfield circulation and the wall time; unsteady runs
+  store the previous time level, so BDF2 continues at once. With
+  `initial.restart` the counting goes on (`max_iterations` and `end_time` are
+  totals, no repeated start-up phase), and a run with the same name and output
+  directory appends to its log (with a `RESTART` marker) and history CSV.
+  `pyaeroflow polar` keeps the solver state from angle to angle but starts the
+  counter and the residual reference again. Files from older versions start a
+  new run from their fields.
 - SA-AFT2019b transition model (Coder; NASA TMR `aft_transition_3eqn`):
   `physics.transition.model = "aft"` adds transport equations for the
   log-intermittency γ̃ and the amplification factor ñ (6 unknowns per cell).
