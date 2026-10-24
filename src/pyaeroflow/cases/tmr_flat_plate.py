@@ -28,6 +28,12 @@ from pyaeroflow.solver import PseudoTimeSettings
 # 0.0027054 (FUN3D); C_D, reference area 2 (the whole plate), is 0.0028599
 # (CFL3D) and 0.0028525 (FUN3D). The means of the two codes are used.
 TMR_REFERENCE = {"cf_097": 0.0027055, "cd": 0.0028562}
+# NASA TMR (now tmbwg.github.io/turbmodels), flatplate_sst.html, SST-Vm (on
+# this plate the same as SST-2003m: vorticity = strain), finest grid, data
+# files FlatPlate/SST/cf_convergence_sstv.dat and drag_convergence_sstv.dat:
+# C_f(0.970084) 0.0026909 (CFL3D) and 0.0026905 (FUN3D), C_D 0.0028533 and
+# 0.0028442; the means are used.
+TMR_REFERENCE_SST = {"cf_097": 0.0026907, "cd": 0.0028488}
 
 
 def plate_mesh(nx_plate=96, nx_front=24, ny=64, reynolds=5.0e6, y_plus=1.0, height=1.0):
@@ -162,5 +168,5 @@ def solve(
         cf_097,
         cd,
         float(y_plus.max()),
-        TMR_REFERENCE,
+        TMR_REFERENCE_SST if turbulence == "sst" else TMR_REFERENCE,
     )

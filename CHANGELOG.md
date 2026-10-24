@@ -10,7 +10,8 @@
   k and ω (form b needs `intensity`; default Tu 0.1 %, ν_t/ν = 1). New VTU
   fields `k`, `omega`, `blending_f1`, `residual_k`, `residual_omega`, and
   `mu_t` for every RANS model; `nu_tilde` and `residual_nu_tilde` are SA
-  only. Flat plate: C_f(0.97) grid-converged, 0.8 % below the TMR SA value;
+  only. Flat plate: C_f(0.97) and C_D grid-converged, 0.1 % and 0.5 % from the
+  TMR SST values;
   SD7003 comparison in `docs/validation.md` §9.
 
 - Saved-state files renamed (D56, D60). Backups are `<name>.backup_000100.npz`

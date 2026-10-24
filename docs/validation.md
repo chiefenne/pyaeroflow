@@ -26,7 +26,7 @@ Click a case to jump to its section; each section ends with a link back here.
 | 6 | [NACA 0012, Re 6·10⁶](#sec-6) | validation | Ladson 1988, Gregory & O'Reilly 1970, NASA TMR | `examples/stage6_pyaero_validation.py` |
 | 7 (0.8) | [BCM transition, flat plate](#sec-7-plate) | verification/validation | Blasius, ERCOFTAC T3A | `tests/verification/test_rans_plate.py`, `pyaeroflow run examples/cases/flat_plate_transition.toml` |
 | 7 (0.8) | [BCM transition, Eppler 387](#sec-7-e387) | validation | McGhee, Walker & Millard 1988 (NASA TM 4062) | `pyaeroflow polar examples/cases/e387_transition.toml --alpha 4 6 8 2 0 -2` |
-| L2 (0.9) | [k-ω SST: flat plate, SD7003](#sec-9) | verification/validation | NASA TMR (SA values), LES/DNS, XFOIL, SA-AFT | `tests/verification/test_rans_plate.py::test_sst_turbulent_plate`, `pyaeroflow run examples/cases/sst_sd7003.toml` |
+| L2 (0.9) | [k-ω SST: flat plate, SD7003](#sec-9) | verification/validation | NASA TMR SST, LES/DNS, XFOIL, SA-AFT | `tests/verification/test_rans_plate.py::test_sst_turbulent_plate`, `pyaeroflow run examples/cases/sst_sd7003.toml` |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
 the scripts write) is not tracked.
@@ -298,22 +298,23 @@ XFOIL comparison) are next.
 ### Flat plate
 
 TMR 2DZP domain, Re_L = 5·10⁶, TMR SST freestream (k = 9·10⁻⁹ a² at
-M = 0.2, i.e. k = 2.25·10⁻⁷ U², μ_t/μ = 0.009). The TMR SST reference values
-could not be fetched (the TMR site has moved), so the table compares with
-the TMR SA values; on this plate SST and SA agree to about 1 % in the
-literature.
+M = 0.2, i.e. k = 2.25·10⁻⁷ U², ω = 125 U/L, μ_t/μ = 0.009), against the
+TMR SST values (`flatplate_sst.html`, SST-Vm, finest grid 545 × 385, mean of
+CFL3D and FUN3D: C_f(0.97) = 0.0026907, C_D = 0.0028488; on this plate
+SST-Vm and SST-2003m coincide, vorticity = strain rate):
 
 | mesh | cells | C_f(0.97) | C_D | y⁺ max | iterations |
 |---|---|---|---|---|---|
-| 48 × 48 | 2 880 | 0.002684 (−0.8 %) | 0.002869 (+0.4 %) | 0.64 | 153 |
-| 96 × 64 | 7 680 | 0.002684 (−0.8 %) | 0.002866 (+0.3 %) | 0.68 | 158 |
-| 192 × 96 | 23 040 | 0.002689 (−0.6 %) | 0.002864 (+0.3 %) | 0.74 | 181 |
+| 48 × 48 | 2 880 | 0.002684 (−0.2 %) | 0.002869 (+0.7 %) | 0.64 | 153 |
+| 96 × 64 | 7 680 | 0.002684 (−0.2 %) | 0.002866 (+0.6 %) | 0.68 | 158 |
+| 192 × 96 | 23 040 | 0.002689 (−0.1 %) | 0.002864 (+0.5 %) | 0.74 | 181 |
 
 The solution is grid-converged. It depends on the wall value of ω, which a
 cell-centred scheme does not resolve (ω ~ 1/y²): with d₁ = the wall-cell
 height (the default, SU2's first mesh spacing on the same points) C_f(0.97)
-is 0.002689, with d₁ = the centroid distance (ω_wall four times larger)
-0.002630 at 192 × 96, about 2 % lower at every grid level.
+is 0.002689 (TMR 0.0026907), with d₁ = the centroid distance (ω_wall four
+times larger) 0.002630 at 192 × 96, about 2 % lower at every grid level: the
+TMR value confirms the wall-cell height.
 
 ![SST flat plate](figures/sst_plate_cf.png)
 
