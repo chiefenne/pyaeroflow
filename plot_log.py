@@ -10,7 +10,8 @@ Mode is taken from the header line:
 
 Writes (prefix defaults to the log file name without extension):
   <prefix>_residuals.png  R_p, R_u, R_v (left axis) + R_nu (right axis);
-                          with SA-AFT also R_gam and R_n (right axis)
+                          with SA-AFT also R_gam and R_n, with SST R_k and
+                          R_om instead of R_nu (right axis)
   <prefix>_solver.png     drop / CFL / GMRES / wall[s] as stacked subplots
   <prefix>_coeffs.png     CL / CD / CM as stacked subplots
   <prefix>_diffs.png      consecutive differences of drop / CFL / GMRES
@@ -25,7 +26,7 @@ Scaling:
     is limited to +-DCFL_MAX.
 
 Targets (optional TOML file, every entry optional, see targets.toml):
-  Keys: CL CD CM drop CFL GMRES wall Rp Ru Rv Rnu  (also "log(R_p)" etc.)
+  Keys: CL CD CM drop CFL GMRES wall Rp Ru Rv Rnu Rk Rom  (also "log(R_p)" etc.)
   Each entry is either a number (target line only) or a table:
       [targets.CD]
       value = 0.0195
@@ -58,10 +59,10 @@ DCFL_MAX = 8e3       # +- limit for the delta CFL panel
 
 TARGET_ALIASES = {
     "log(R_p)": "Rp", "log(R_u)": "Ru", "log(R_v)": "Rv", "log(R_nu)": "Rnu",
-    "log(R_gam)": "Rgam", "log(R_n)": "Rn",
+    "log(R_gam)": "Rgam", "log(R_n)": "Rn", "log(R_k)": "Rk", "log(R_om)": "Rom",
 }
 TARGET_KEYS = {"CL", "CD", "CM", "drop", "CFL", "GMRES", "wall",
-               "Rp", "Ru", "Rv", "Rnu", "Rgam", "Rn"}
+               "Rp", "Ru", "Rv", "Rnu", "Rgam", "Rn", "Rk", "Rom"}
 
 
 def is_num(s):
@@ -131,7 +132,8 @@ def parse_log(path):
     """Return (data dict, notes, mode). mode is 'steady' or 'transient'.
 
     The residual columns are taken from the header ("log(R_p)" ... ), so
-    laminar (3), SA (4) and SA-AFT (6: also R_gam, R_n) logs all work.
+    laminar (3), SA (4), SA-AFT (6: also R_gam, R_n) and SST (5: R_k, R_om
+    instead of R_nu) logs all work.
     Steady: iter, log(R_*), drop, CFL, [NK], GMRES, CL, CD, CM, wall, note.
             NK is optional per row; GMRES is 0 when no NK step ran.
     Transient: step, time, inner, drop, log(R_*), GMRES, CL, CD, CM, wall, note.
@@ -238,7 +240,7 @@ def plot_residuals(d, x, notes, xlabel, targets, title, path):
             lines.append(t)
     ax.set_ylabel("log(R_p), log(R_u), log(R_v)")
 
-    right = [k for k in ("Rnu", "Rgam", "Rn") if k in d]
+    right = [k for k in ("Rnu", "Rgam", "Rn", "Rk", "Rom") if k in d]
     if right:
         ax2 = ax.twinx()  # secondary y axis for the turbulence residuals
         for k, key in enumerate(right):
