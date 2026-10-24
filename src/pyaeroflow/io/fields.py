@@ -23,6 +23,7 @@ class Capabilities(NamedTuple):
     steady: bool
     implicit: bool  # steady with the implicit solver
     walls: bool  # output.force_boundaries is not empty
+    turbulence: str = "sa-neg"  # "sa-neg" or "sst" (only meaningful with rans)
 
     @classmethod
     def from_config(cls, data):
@@ -36,6 +37,7 @@ class Capabilities(NamedTuple):
             steady,
             steady and data["solver"]["method"] == "implicit",
             bool(data["output"]["force_boundaries"]),
+            physics["turbulence"] if rans else "none",
         )
 
 
@@ -157,6 +159,23 @@ def _effective_viscosity(c):
     return c.nu_si + nu_t
 
 
+def _dynamic_eddy_viscosity(c):
+    nu_t = c.problem.eddy_viscosity(c.w) * c.scaling.viscosity / c.scaling.density
+    return c.problem.model.density * c.scaling.density * nu_t
+
+
+def _turbulent_kinetic_energy(c):
+    return c.w[:, 3] * c.scaling.velocity**2
+
+
+def _specific_dissipation(c):
+    return c.w[:, 4] * c.scaling.velocity / c.scaling.length
+
+
+def _blending_f1(c):
+    return c.problem.blending_f1(c.w)
+
+
 def _wall_distance(c):
     return np.asarray(c.problem.geom.wall_distance) * c.scaling.length
 
@@ -169,13 +188,19 @@ def _amplification_factor(c):
     return c.w[:, 5]
 
 
-def _residual(column):
+def _residual(column, scale=None):
     def compute(c):
-        # Residual per unit cell volume (area in 2D), non-dimensional.
-        r = np.asarray(c.cell_residual())
-        return r[:, column] / np.asarray(c.problem.geom.area)
+        # Residual per unit cell volume (area in 2D), non-dimensional; ``scale``
+        # undoes a row scaling of the residual.
+        r = np.asarray(c.cell_residual())[:, column] / np.asarray(c.problem.geom.area)
+        return r if scale is None else r / scale(c)
 
     return compute
+
+
+def _nu_nd(c):
+    # The SST omega residual is solved multiplied by nu (rans_sst).
+    return c.problem.model.viscosity / c.problem.model.density
 
 
 def _wall(key):
@@ -197,6 +222,22 @@ def _rans(caps):
     return caps.model == "rans"
 
 
+def _sa(caps):
+    return caps.model == "rans" and caps.turbulence != "sst"
+
+
+def _sst(caps):
+    return caps.model == "rans" and caps.turbulence == "sst"
+
+
+def _implicit_sa(caps):
+    return caps.implicit and _sa(caps)
+
+
+def _implicit_sst(caps):
+    return caps.implicit and _sst(caps)
+
+
 def _transition(caps):
     return caps.model == "rans" and caps.transition != "none"
 
@@ -207,10 +248,6 @@ def _aft(caps):
 
 def _implicit(caps):
     return caps.implicit
-
-
-def _implicit_rans(caps):
-    return caps.implicit and caps.model == "rans"
 
 
 def _implicit_aft(caps):
@@ -273,7 +310,46 @@ FIELDS = (
         _viscous,
         _effective_viscosity,
     ),
-    Field("nu_tilde", "m^2/s", "SA working variable", "rans", _rans, _nu_tilde),
+    Field(
+        "mu_t",
+        "Pa s",
+        "Dynamic eddy viscosity rho nu_t",
+        "rans",
+        _rans,
+        _dynamic_eddy_viscosity,
+    ),
+    Field(
+        "nu_tilde",
+        "m^2/s",
+        "SA working variable",
+        "rans with turbulence = sa-neg",
+        _sa,
+        _nu_tilde,
+    ),
+    Field(
+        "k",
+        "m^2/s^2",
+        "Turbulent kinetic energy (SST)",
+        "rans with turbulence = sst",
+        _sst,
+        _turbulent_kinetic_energy,
+    ),
+    Field(
+        "omega",
+        "1/s",
+        "Specific dissipation rate (SST)",
+        "rans with turbulence = sst",
+        _sst,
+        _specific_dissipation,
+    ),
+    Field(
+        "blending_f1",
+        "1",
+        "Menter's blending function F1 (1: k-omega near the wall, 0: k-epsilon)",
+        "rans with turbulence = sst",
+        _sst,
+        _blending_f1,
+    ),
     Field(
         "wall_distance",
         "m",
@@ -326,9 +402,25 @@ FIELDS = (
         "residual_nu_tilde",
         "1",
         "nu_tilde residual per cell volume",
-        "steady, implicit, rans",
-        _implicit_rans,
+        "steady, implicit, turbulence = sa-neg",
+        _implicit_sa,
         _residual(3),
+    ),
+    Field(
+        "residual_k",
+        "1",
+        "k residual per cell volume",
+        "steady, implicit, turbulence = sst",
+        _implicit_sst,
+        _residual(3),
+    ),
+    Field(
+        "residual_omega",
+        "1",
+        "omega residual per cell volume",
+        "steady, implicit, turbulence = sst",
+        _implicit_sst,
+        _residual(4, _nu_nd),
     ),
     Field(
         "residual_gamma",
@@ -397,6 +489,8 @@ DEFAULT_NAMES = (
     "velocity",
     "velocity_magnitude",
     "nu_tilde",
+    "k",
+    "omega",
     "eddy_viscosity_ratio",
     "intermittency",
     "amplification_factor",
@@ -437,7 +531,11 @@ def resolve_fields(requested, caps):
             problems.append(
                 f"output.fields: '{name}' needs {field.needs} "
                 f"(this case: model {caps.model}"
-                + (f", transition {caps.transition}" if caps.model == "rans" else "")
+                + (
+                    f", turbulence {caps.turbulence}, transition {caps.transition}"
+                    if caps.model == "rans"
+                    else ""
+                )
                 + f", {'steady' if caps.steady else 'unsteady'}"
                 + (", implicit" if caps.implicit else "")
                 + ")"
@@ -466,6 +564,7 @@ def catalogue_table():
         ("SA", Capabilities("rans", "none", True, True, True)),
         ("SA + BCM", Capabilities("rans", "bcm", True, True, True)),
         ("SA + AFT", Capabilities("rans", "aft", True, True, True)),
+        ("SST", Capabilities("rans", "none", True, True, True, "sst")),
     )
     head = "| Field | Unit | Description | Needs | " + " | ".join(c[0] for c in cases)
     lines = [head + " |", "|" + "---|" * (4 + len(cases))]

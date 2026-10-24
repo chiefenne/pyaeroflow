@@ -15,13 +15,15 @@ import scipy.sparse as sp
 
 
 @partial(jax.jit, static_argnums=(1, 2))
-def _face_blocks(geom, interior_flux, boundary_flux, u, params, b_args):
+def _face_blocks(geom, interior_flux, boundary_flux, u, params, b_args, f_args=()):
     """Flux derivatives per face, scaled by the face length."""
     o, n, b = geom.f_owner, geom.f_neigh, geom.b_owner
+    n_f = len(f_args)
     d_inner = jax.vmap(
-        jax.jacfwd(interior_flux, argnums=(1, 2)), in_axes=(None, 0, 0, 0, 0)
+        jax.jacfwd(interior_flux, argnums=(1, 2)),
+        in_axes=(None, 0, 0, *([0] * n_f), 0, 0),
     )
-    d_o, d_n = d_inner(params, u[o], u[n], geom.f_normal, geom.f_delta)
+    d_o, d_n = d_inner(params, u[o], u[n], *f_args, geom.f_normal, geom.f_delta)
     n_extra = len(b_args)
     d_bnd = jax.vmap(
         jax.jacfwd(boundary_flux, argnums=1), in_axes=(None, 0, *([0] * n_extra), 0, 0)
@@ -77,6 +79,7 @@ def first_order_jacobian(
     b_args=(),
     block_mask=None,
     pattern=None,
+    f_args=(),
 ):
     """Assemble dR1/du of the compact first-order residual.
 
@@ -105,6 +108,9 @@ def first_order_jacobian(
         (segregated turbulence coupling, D34).
     pattern : JacobianPattern, optional
         Sparsity built once for this geometry; built on the fly otherwise.
+    f_args : tuple of arrays
+        Per-interior-face arrays (first axis n_ifaces) passed to
+        ``interior_flux`` after the two states; held fixed in the derivative.
 
     Returns
     -------
@@ -113,7 +119,9 @@ def first_order_jacobian(
     n_var = u.shape[1]
     d_o, d_n, d_b = (
         np.asarray(a)
-        for a in _face_blocks(geom, interior_flux, boundary_flux, u, params, b_args)
+        for a in _face_blocks(
+            geom, interior_flux, boundary_flux, u, params, b_args, tuple(f_args)
+        )
     )
     blocks = np.concatenate((d_o, d_n, -d_o, -d_n, d_b))
     if block_mask is not None:

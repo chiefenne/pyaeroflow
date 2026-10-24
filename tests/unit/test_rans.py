@@ -221,7 +221,7 @@ def test_run_case_rans(tmp_path):
     result = run_case(tmp_path / "plate.toml", console=False)
     assert result.converged and result.w.shape[1] == 4
     log = (tmp_path / "out" / "plate.log").read_text()
-    assert "nu_tilde/nu" in log and "cells without SA production" in log
+    assert "nu_tilde/nu" in log and "cells without turbulence production" in log
     assert "outside the NASA TMR range" in log  # k, l form gives nu_tilde/nu > 5
     assert "log(R_nu)   drop" in log  # four residual columns, then the measure
     history = (tmp_path / "out" / "plate.history.csv").read_text().splitlines()

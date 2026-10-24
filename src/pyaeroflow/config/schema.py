@@ -12,8 +12,8 @@ REQUIRED = object()
 
 TURBULENCE_DESCRIPTION = (
     "Turbulence values (D33), one form: {turbulent_viscosity_ratio, intensity}, "
-    "{kinetic_energy, length_scale, c_mu} or {nu_tilde_ratio}; "
-    "default nu_tilde/nu = 3"
+    "{kinetic_energy, length_scale, c_mu} or {nu_tilde_ratio} (SA only); "
+    "default nu_tilde/nu = 3 (SA), Tu = 0.1 % and nu_t/nu = 1 (SST)"
 )
 # Keys of the three input forms of a turbulence table.
 TURBULENCE_FORMS = {
@@ -53,8 +53,9 @@ SCHEMA = {
         "turbulence": Opt(
             "string",
             None,
-            "Turbulence model (rans); default sa-neg",
-            choices=("sa-neg",),
+            "Turbulence model (rans): sa-neg (Spalart-Allmaras, negative "
+            "variant) or sst (Menter k-omega SST-2003m as in SU2); default sa-neg",
+            choices=("sa-neg", "sst"),
         ),
         "transition": {
             "mode": Opt(
@@ -416,7 +417,7 @@ SCHEMA = {
         "nu_tilde_step_limit": Opt(
             "float",
             None,
-            "RANS, implicit and unsteady (inner iterations): cap every update "
+            "SA, implicit and unsteady (inner iterations): cap every update "
             "of nu_tilde to this multiple of max(|nu_tilde|, nu) per cell "
             "before the line search (e.g. 1 = at most double); off by default. "
             "Stops a Newton step from multiplying nu_tilde in one "

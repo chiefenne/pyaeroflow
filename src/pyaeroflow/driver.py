@@ -14,7 +14,7 @@ from pyaeroflow.numerics import build_geometry, lsq_gradient
 from pyaeroflow.numerics.wall_distance import mesh_wall_distance, mesh_wall_normal
 from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
-from pyaeroflow.physics import rans
+from pyaeroflow.physics import rans, rans_sst, sst
 from pyaeroflow.solver import (
     JacobianPattern,
     PseudoTimeSettings,
@@ -28,6 +28,26 @@ from pyaeroflow.solver import (
 
 PRESSURE_FIXING = {"pressure-outlet", "farfield", "total-pressure-inlet"}
 INFLOW_TYPES = {"velocity-inlet", "total-pressure-inlet", "farfield"}
+TURBULENCE_MODELS = ("sa-neg", "sst")
+# Default SST inflow of the Python API: Tu = 0.1 %, nu_t / nu = 1.
+SST_DEFAULT_INTENSITY = 0.001
+SST_DEFAULT_VISCOSITY_RATIO = 1.0
+# SU2's MAX_UPDATE_SST: an update may lower k or omega by at most this
+# fraction of the current value (the cell's turbulence update is scaled).
+SST_MAX_UPDATE = 0.99
+
+
+def sst_default_values(nu, speed):
+    """Default SST (k, omega) for the inflow speed (Tu 0.1 %, nu_t/nu = 1)."""
+    k = 1.5 * (SST_DEFAULT_INTENSITY * max(speed, 1e-12)) ** 2
+    return sst.freestream(SST_DEFAULT_VISCOSITY_RATIO, k, nu)
+
+
+def _inflow_speed(bc):
+    vel = bc.get("velocity")
+    if vel is None or callable(vel):
+        return 1.0
+    return float(np.hypot(*vel))
 
 
 class FarfieldVortex:
@@ -149,18 +169,26 @@ class IncompressibleProblem:
         self.mesh = mesh
         self.turbulent = model.turbulence != "none"
         if self.turbulent:
-            if model.turbulence != "sa-neg":
+            if model.turbulence not in TURBULENCE_MODELS:
                 raise ValueError(f"unknown turbulence model '{model.turbulence}'")
             if model.viscosity <= 0.0:
                 raise ValueError("a turbulence model needs a positive viscosity")
-            # Default inflow value nu_tilde = 3 nu (NASA TMR, D33).
+            if model.turbulence == "sst" and model.transition != "none":
+                raise ValueError("transition models are available with SA only")
+            nu = model.viscosity / model.density
+            # Default inflow values: nu_tilde = 3 nu (NASA TMR, D33); SST
+            # k and omega from Tu = 0.1 %, nu_t / nu = 1.
+            defaults = {}
+            for name, bc in regular.items():
+                if bc["type"] not in INFLOW_TYPES:
+                    continue
+                if model.turbulence == "sst":
+                    k, om = sst_default_values(nu, _inflow_speed(bc))
+                    defaults[name] = {"k": k, "omega": om}
+                else:
+                    defaults[name] = {"nu_tilde": 3.0 * nu}
             regular = {
-                name: (
-                    {"nu_tilde": 3.0 * model.viscosity / model.density, **bc}
-                    if bc["type"] in INFLOW_TYPES
-                    else bc
-                )
-                for name, bc in regular.items()
+                name: {**defaults.get(name, {}), **bc} for name, bc in regular.items()
             }
         self.disc = build_geometry(
             mesh, weight_exponent, periodic, inc.lsq_include(regular, model.n_var)
@@ -186,6 +214,8 @@ class IncompressibleProblem:
                     wall_normal=jnp.asarray(mesh_wall_normal(mesh, nearest))
                 )
         self.bc = inc.boundary_data(self.disc, regular, model.density)
+        if model.turbulence == "sst":
+            self._set_wall_omega(model)
         self.conditions = regular
         self.periodic = periodic
         self.check_mass_balance()
@@ -202,10 +232,29 @@ class IncompressibleProblem:
             model = model._replace(pin=(cell, float(pin_pressure)))
             self.pinned_cell = cell
         self.model = model
-        self.physics = rans if self.turbulent else inc
+        self.physics = {"sa-neg": rans, "sst": rans_sst}.get(model.turbulence, inc)
         self._pattern = None  # Jacobian sparsity, built at the first assembly
         self._fi = partial(self.physics.interior_flux, model)
         self._fb = partial(self.physics.boundary_flux, model)
+
+    def _set_wall_omega(self, model):
+        """SST wall values: k = 0, omega = 60 nu / (beta_1 d1^2) per wall face.
+
+        d1 is the height of the wall cell, twice the wall-normal distance of
+        its centroid: on the same mesh points SU2 (vertex-based) uses the
+        distance from the wall node to its nearest neighbour, the first mesh
+        spacing. The skin friction depends on this choice (about 2 % lower
+        with d1 = the centroid distance, on the flat plate at every grid
+        level): the 1/y^2 profile of omega is not resolved by the wall cell.
+        """
+        nu = model.viscosity / model.density
+        delta, normal = np.asarray(self.geom.b_delta), np.asarray(self.geom.b_normal)
+        d1 = 2.0 * np.abs(np.einsum("fk,fk->f", delta, normal))
+        turb = np.array(self.bc.turbulence)
+        wall = np.asarray(self.bc.kind) == inc.WALL
+        turb[wall, 0] = 0.0
+        turb[wall, 1] = sst.wall_omega(nu, d1[wall])
+        self.bc = self.bc._replace(turbulence=jnp.asarray(turb))
 
     def _production_switch(self, mesh, conditions, regions):
         """1 where SA production is active, 0 in the laminar regions (D15).
@@ -324,9 +373,17 @@ class IncompressibleProblem:
         """
         w = jnp.asarray(w)
         b_args = (self.bc.kind, self.bc.value)
+        f_args = ()
         mask = None
-        if self.turbulent:
+        if self.model.turbulence == "sst":
+            mu_f, dc_f, mu_b, dc_b = rans_sst.jacobian_coefficients(
+                self.model, self.geom, self.bc, w
+            )
+            b_args = b_args + (self.bc.turbulence, mu_b, dc_b)
+            f_args = (mu_f, dc_f)
+        elif self.turbulent:
             b_args = b_args + (self.bc.nu_tilde,)
+        if self.turbulent:
             mask = (
                 rans.segregated_mask(self.model.n_var)
                 if self.model.coupling == "segregated"
@@ -343,10 +400,13 @@ class IncompressibleProblem:
             b_args=b_args,
             block_mask=mask,
             pattern=self._pattern,
+            f_args=f_args,
         )
         if self.turbulent:
             j = j + block_diagonal(
-                np.asarray(rans.source_blocks(self.model, self.geom, self.bc, w))
+                np.asarray(
+                    self.physics.source_blocks(self.model, self.geom, self.bc, w)
+                )
             )
         if self.model.pin is not None:
             j = replace_rows(j, [self.model.pin[0] * self.model.n_var + inc.P])
@@ -418,7 +478,17 @@ class IncompressibleProblem:
         """Kinematic eddy viscosity per cell (zeros without a turbulence model)."""
         if not self.turbulent:
             return np.zeros(self.mesh.n_cells)
+        if self.model.turbulence == "sst":
+            return np.asarray(
+                rans_sst.eddy_viscosity(self.model, self.geom, self.bc, jnp.asarray(w))
+            )
         return np.asarray(rans.eddy_viscosity(self.model, jnp.asarray(w)))
+
+    def blending_f1(self, w):
+        """Menter's first SST blending function per cell (SST only)."""
+        return np.asarray(
+            rans_sst.blending_f1(self.model, self.geom, self.bc, jnp.asarray(w))
+        )
 
     def boundary_faces(self, names):
         """Boundary-face indices (``b_*`` order) of the named boundaries."""
@@ -510,10 +580,14 @@ class IncompressibleProblem:
         value[vortex.faces, 1:3] = vel
         self.bc = self.bc._replace(value=jnp.asarray(value))
 
-    def initial_state(self, velocity=(0.0, 0.0), pressure=0.0, nu_tilde=None):
+    def initial_state(
+        self, velocity=(0.0, 0.0), pressure=0.0, nu_tilde=None, k_omega=None
+    ):
         """Uniform initial field, shape (n_cells, n_var); nu_tilde default 3 nu.
 
         The SA-AFT columns start at gamma_tilde = 0 and n = 0 (freestream).
+        SST takes ``k_omega`` = (k, omega); default Tu = 0.1 % of the given
+        velocity (or 1) and nu_t / nu = 1.
         """
         w = np.zeros((self.mesh.n_cells, self.model.n_var))
         w[:, inc.P] = pressure
@@ -521,7 +595,14 @@ class IncompressibleProblem:
         w[:, inc.V] = velocity[1]
         if self.turbulent:
             nu = self.model.viscosity / self.model.density
-            w[:, rans.NT] = 3.0 * nu if nu_tilde is None else nu_tilde
+            if self.model.turbulence == "sst":
+                if k_omega is None:
+                    speed = float(np.hypot(*velocity)) or 1.0
+                    k_omega = sst_default_values(nu, speed)
+                w[:, rans_sst.NK] = k_omega[0]
+                w[:, rans_sst.NW] = k_omega[1]
+            else:
+                w[:, rans.NT] = 3.0 * nu if nu_tilde is None else nu_tilde
         return w
 
     def solve(
@@ -683,10 +764,42 @@ class IncompressibleProblem:
             jvp=lambda w, dw: self.jvp(
                 w, dw, state["beta2"], state["psi"], state["gamma"]
             ),
-            limit_step=self._nu_tilde_limiter(nu_tilde_step_limit),
+            limit_step=self._step_limiter(nu_tilde_step_limit),
             resume=resume,
         )
         return result._replace(state={**result.state, **driver_state()})
+
+    def _step_limiter(self, factor):
+        """Step limiter of the turbulence variables, or None.
+
+        SST always gets SU2's under-relaxation (:meth:`_sst_limiter`); SA the
+        nu_tilde cap of ``factor`` (None = no cap).
+        """
+        if self.model.turbulence == "sst":
+            return self._sst_limiter()
+        return self._nu_tilde_limiter(factor)
+
+    def _sst_limiter(self, max_update=SST_MAX_UPDATE):
+        """SU2's SST under-relaxation: k and omega stay positive.
+
+        Per cell the (k, omega) update is scaled by min(1, max_update /
+        ratio) with ratio the larger of |dk| / k and |domega| / omega, only
+        where the update lowers a variable (SU2 scales on any change; growth
+        is left to the line search here, so that the turbulence can develop
+        from a low freestream).
+        """
+        cols = [rans_sst.NK, rans_sst.NW]
+
+        def limit_step(u, du):
+            val = np.maximum(u[:, cols], 1e-300)
+            drop = np.maximum(-du[:, cols], 0.0) / val
+            ratio = drop.max(axis=1)
+            scale = np.minimum(1.0, max_update / np.maximum(ratio, 1e-300))
+            du = du.copy()
+            du[:, cols] *= scale[:, None]
+            return du
+
+        return limit_step
 
     def _nu_tilde_limiter(self, factor):
         """Step limiter capping the nu_tilde update to factor max(|nu_tilde|, nu).
@@ -797,7 +910,7 @@ class IncompressibleProblem:
             callback=callback,
             inner_callback=inner_callback,
             jvp=lambda w, dw: self.jvp(w, dw, state["beta2"]),
-            limit_step=self._nu_tilde_limiter(nu_tilde_step_limit),
+            limit_step=self._step_limiter(nu_tilde_step_limit),
             resume=resume,
         )
 

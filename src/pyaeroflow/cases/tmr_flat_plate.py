@@ -85,6 +85,8 @@ def solve(
     turbulence_intensity=0.0,
     nu_tilde_ratio=3.0,
     critical_amplification=None,
+    turbulence="sa-neg",
+    k_omega=None,
 ):
     """Run the turbulent flat plate and evaluate C_f(x) and the drag.
 
@@ -94,22 +96,29 @@ def solve(
     the fully turbulent 3), its second term reads existing eddy viscosity as
     turbulence. ``transition = "aft"`` runs SA-AFT2019b with N_crit from
     ``critical_amplification`` or, if None, from ``turbulence_intensity``.
+
+    ``turbulence = "sst"`` runs k-omega SST with the freestream ``k_omega`` =
+    (k, omega); default the NASA TMR SST values for this case, k = 9e-9 a^2
+    at M = 0.2 (k = 2.25e-7 U^2, Tu = 0.039 %) and mu_t / mu = 0.009.
     """
     u_inf, nu = 1.0, 1.0 / reynolds
     nt_inf = nu_tilde_ratio * nu
+    if turbulence == "sst":
+        if k_omega is None:
+            k_inf = 9.0e-9 / 0.2**2 * u_inf**2
+            k_omega = (k_inf, k_inf / (0.009 * nu))
+        turb = {"k": k_omega[0], "omega": k_omega[1]}
+    else:
+        turb = {"nu_tilde": nt_inf}
     mesh = plate_mesh(nx_plate, nx_front, ny, reynolds)
     conditions = {
-        "left": {
-            "type": "velocity-inlet",
-            "velocity": (u_inf, 0.0),
-            "nu_tilde": nt_inf,
-        },
+        "left": {"type": "velocity-inlet", "velocity": (u_inf, 0.0), **turb},
         "right": {"type": "pressure-outlet", "pressure": 0.0},
         "top": {
             "type": "farfield",
             "velocity": (u_inf, 0.0),
             "pressure": 0.0,
-            "nu_tilde": nt_inf,
+            **turb,
         },
         "symmetry": {"type": "symmetry"},
         "plate": {"type": "wall"},
@@ -117,7 +126,7 @@ def solve(
     model = inc.IncompressibleModel(
         density=1.0,
         viscosity=nu,
-        turbulence="sa-neg",
+        turbulence=turbulence,
         coupling=coupling,
         transition=transition,
         turbulence_intensity=turbulence_intensity,
@@ -125,7 +134,7 @@ def solve(
     )
     problem = IncompressibleProblem(mesh, model, conditions)
     result = problem.solve(
-        problem.initial_state((u_inf, 0.0), nu_tilde=nt_inf),
+        problem.initial_state((u_inf, 0.0), nu_tilde=nt_inf, k_omega=k_omega),
         settings or PseudoTimeSettings(residual_drop=8.0, max_iterations=400),
     )
     faces = problem.boundary_faces(["plate"])

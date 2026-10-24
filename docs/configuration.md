@@ -1,6 +1,6 @@
 # PyAeroFlow – Case configuration
 
-**Status:** implemented for steady and unsteady laminar, Euler and RANS (SA-neg) cases (stage 6). Keys of
+**Status:** implemented for steady and unsteady laminar, Euler and RANS (SA-neg, k-ω SST) cases (stage 6). Keys of
 later stages are listed here for completeness and rejected by the validator
 with a pointer to the stage. The schema of record is
 `src/pyaeroflow/config/schema.py`; `pyaeroflow check case.toml` prints the resolved
@@ -188,7 +188,7 @@ case file (D42).
 | Key | Type | Default | Description | # |
 |-----|------|---------|-------------|---|
 | `model` | `"euler"` \| `"laminar"` \| `"rans"` | req. | Governing equations | D10 |
-| `turbulence` | `"sa-neg"` | `"sa-neg"` if `model = "rans"` | Turbulence model; `"sst"` later | D11, L2 |
+| `turbulence` | `"sa-neg"` \| `"sst"` | `"sa-neg"` if `model = "rans"` | Turbulence model: `"sa-neg"` Spalart–Allmaras, negative variant (NASA TMR); `"sst"` Menter k-ω SST, version SST-2003m as in SU2 (see [k-ω SST](#k-ω-sst)). The transition models need `"sa-neg"` | D11, D12, L2 |
 | `mean_pressure_gradient` | [float, float] | – | Driving force for periodic channels: constant mean pressure gradient (dp/dx, dp/dy) in Pa/m, applied as a momentum source | D39 |
 
 `[physics.transition]`, only for `model = "rans"`:
@@ -254,11 +254,46 @@ dependence: P7). Types marked "inflow" take a `turbulence` table
 | `"periodic"` | `partner` (name of the matching boundary faces; gets no entry of its own), `translation = [dx, dy]` (m); driving force: `physics.mean_pressure_gradient` |
 | `"transpiration-wall"` | `normal_velocity` (m/s; + blowing into the domain, − suction), zero tangential velocity; time dependence: P7 (D18); inflow (blowing): `turbulence` |
 
+#### k-ω SST
+
+`turbulence = "sst"` solves two equations, for the turbulent kinetic energy k
+and the specific dissipation rate ω (5 unknowns per cell; log residual
+columns `k` and `om`). Formulation and constants are SU2's SST-2003m
+(Menter, Kuntz & Langtry 2003; NASA TMR "SST-2003m"):
+
+- ν_t = a₁k / max(a₁ω, S F₂), S the strain-rate magnitude;
+- P_k = min(ν_t S², 10 β* k ω), P_ω = γ P_k / ν_t; destruction β* k ω and
+  β ω²; cross diffusion (1 − F₁) 2σ_ω2 ∇k·∇ω / ω as a source;
+- σ_k, σ_ω, β, γ blended with F₁ between (0.85, 0.5, 0.075, γ₁) and
+  (1.0, 0.856, 0.0828, γ₂), γᵢ = βᵢ/β* − σ_ωᵢ κ²/√β*, β* = 0.09, a₁ = 0.31;
+- walls: k = 0, ω = 60 ν / (β₁ d₁²) with d₁ the height of the wall cell
+  (twice the wall distance of its centroid; SU2's first mesh spacing);
+  inflow: the prescribed k and ω; outflow, symmetry: zero gradient.
+
+Numerics that differ from SA: k and ω diffuse with the two-point normal
+derivative (the least-squares gradient of the 1/y² profile of ω makes the
+α-damping face gradient reverse its sign next to the wall); the ω equation
+is solved multiplied by ν so that its residual has the scale of the k
+residual (the log column `om` and the `residual_omega` field are ν times
+and 1 times the ω residual); every update of k and ω is scaled per cell so
+that neither drops by more than 99 % (SU2's under-relaxation), so
+`solver.nu_tilde_step_limit` does not apply; the first-order Jacobian uses the
+residual's face viscosities and SU2's implicit source part (destruction
+only), Newton–Krylov the exact Jacobian-vector product.
+
+Turbulence input: form b needs `intensity` with SST (k = 1.5 (Tu U)²,
+ω = k/ν_t), form a gives k and ν_t, form c (ν̃/ν) is SA only. Default
+without a table: Tu = 0.1 %, ν_t/ν = 1. Fields: `k`, `omega`, `blending_f1`,
+`mu_t`, `residual_k`, `residual_omega` in addition to the eddy-viscosity
+fields. A restart between SA and SST takes over p, u, v only.
+Validation: `docs/validation.md` §9.
+
 ### Turbulence values
 
 Used in `[initial]` and at inflow boundaries (D33). The SA working variable ν̃
-is needed wherever flow enters the domain and in the initial field. Walls
-(ν̃ = 0), outflow and symmetry need no input.
+(SST: k and ω) is needed wherever flow enters the domain and in the initial
+field. Walls (ν̃ = 0; SST k = 0 and the wall ω), outflow and symmetry need no
+input.
 
 Exactly one of three input forms:
 
@@ -268,7 +303,8 @@ Exactly one of three input forms:
 | a | `kinetic_energy`, `length_scale`, optional `c_mu` | m²/s², m, – | k and the k-ε length scale ℓ (size of the energy-carrying eddies). `c_mu` defaults to 0.09 |
 | c | `nu_tilde_ratio` | – | SA only: ν̃/ν, the notation of NASA TMR |
 
-Default, if no `turbulence` table is given: ν̃/ν = 3 (NASA TMR, SU2 default).
+Default, if no `turbulence` table is given: ν̃/ν = 3 (NASA TMR, SU2 default);
+SST: Tu = 0.1 %, ν_t/ν = 1.
 The resolved configuration writes it in form b as
 `turbulent_viscosity_ratio = 0.2104`.
 
@@ -327,7 +363,7 @@ Needed for force and moment coefficients, and for `fluid.reynolds_number`.
 | `cfl` | table | `{ start = 10.0, max = 1.0e10, max_approximate = 1.0e3, growth_factor = 2.0, cut_factor = 0.1, reject_factor = 10.0, explicit = 1.0, control = "growth", ser_exponent = 1.0, ser_growth_min = 1.2, ser_ratio_min = 0.3, ser_ratio_max = 2.0, ser_gmres_hold = 10, ser_gmres_reduce = 30 }` | Pseudo-time CFL number: SER control with at least `growth_factor` per accepted iteration. `max_approximate` caps the CFL while the Newton–Krylov switch is pending: a pseudo-time step at a very large CFL is a Newton step with the approximate first-order Jacobian and diverges for the second-order residual; `max` applies once Newton–Krylov is on (and throughout when it is disabled). An update is rejected (and the CFL multiplied by `cut_factor`) if the linear solve fails, the update is not finite, or the residual grows by more than `reject_factor`. `explicit` is the CFL of the explicit Runge–Kutta mode. `control = "ser"` switches to proportional SER (D55): the CFL is multiplied by (‖R_old‖/‖R_new‖)^`ser_exponent` of the RMS norm, at least `ser_growth_min` while it falls, clipped to [`ser_ratio_min`, `ser_ratio_max`]; in the Newton–Krylov phase a step with `ser_gmres_hold` or more GMRES iterations does not raise the CFL and one with more than `ser_gmres_reduce` halves it (this replaces the adaptive cap); the `ser_*` keys are ignored with `control = "growth"` | D35, D55 |
 | `newton_krylov` | table | `{ enabled = true, switch_at_residual_drop = 2.0, switch_at_iteration = none, linear_tolerance = 1e-2, restart = 50, max_iterations = 200 }` | Switch from approximate-Jacobian iterations to Newton–Krylov once the residual has dropped by the given orders (the switch latches), or at `switch_at_iteration` at the latest (the approximate-Jacobian iteration stalls one to three orders below the start, so a relative switch alone can miss; airfoil cases use 40); GMRES on the exact Jacobian (`jax.jvp`) preconditioned by the factorized first-order system. Newton safeguards (D54): a step that raises the residual is halved up to twice before it is rejected (line search), the GMRES tolerance follows the nonlinear progress (Eisenstat–Walker forcing, between `linear_tolerance` and 0.5), and the CFL is capped adaptively — a step needing 60 or more GMRES iterations quarters the cap, one needing 15 or fewer lets it grow (Python API `nk_forcing`, `line_search_steps`, `nk_cfl_adapt_iterations`) | D25 |
 | `linear_solver` | table | `{ type = "direct", tolerance = 1e-6, restart = 50, max_iterations = 500, ilu_drop_tolerance = 1e-5, ilu_fill_factor = 20, ordering = "mmd-at-plus-a" }` | `"direct"`: sparse LU (SciPy SuperLU, single-threaded, always available). `"pardiso"`: Intel MKL PARDISO through the optional `pypardiso` package (multithreaded, x86 only). `"umfpack"`: UMFPACK through the optional `scikit-umfpack` package. Both optional solvers are installed with `conda install -c conda-forge pypardiso scikit-umfpack`; a missing package is reported at the first factorization. Measured on a 295k-cell airfoil mesh (8-core Intel): factorization 20 s (SuperLU), 13.5 s (UMFPACK), 5.8 s (PARDISO), the whole run 1.9× faster with PARDISO, identical results. `"gmres-ilu"`: GMRES with an incomplete LU; the ILU options set its accuracy and memory. Measured on a 100k-cell airfoil mesh, SciPy's ILU is not cheaper than the exact LU at any useful accuracy (drop 1e-4 costs the same; fill 5 / drop 1e-3 leaves a relative residual of 0.8), so `"direct"` stays the choice. Both also precondition Newton–Krylov. `ordering`: SuperLU column ordering, `"mmd-at-plus-a"` (least fill for the mean-flow Jacobian) or `"colamd"` | D32 |
-| `nu_tilde_step_limit` | float | – | RANS, implicit and unsteady (every inner iteration): cap every update of ν̃ to this multiple of max(\|ν̃\|, ν) in each cell before the line search (`1` = at most double the value per step); the mean-flow update is untouched. Off by default. Stops a Newton step from multiplying ν̃ in one boundary-layer cell, which the line search cannot see because ν̃ is a small part of the overall residual norm (E387 α = 8, SER: ν̃ residual jumps of 2 orders every 100 to 150 iterations) | D54, D57 |
+| `nu_tilde_step_limit` | float | – | SA (ignored with SST, whose updates are always under-relaxed), implicit and unsteady (every inner iteration): cap every update of ν̃ to this multiple of max(\|ν̃\|, ν) in each cell before the line search (`1` = at most double the value per step); the mean-flow update is untouched. Off by default. Stops a Newton step from multiplying ν̃ in one boundary-layer cell, which the line search cannot see because ν̃ is a small part of the overall residual norm (E387 α = 8, SER: ν̃ residual jumps of 2 orders every 100 to 150 iterations) | D54, D57 |
 | `turbulence_coupling` | `"segregated"` \| `"coupled"` | `"segregated"` | First-order Jacobian of RANS runs: `"segregated"` drops the mean-flow/turbulence coupling blocks (mean flow and ν̃ updated from the same state, as in SU2's segregated solver), `"coupled"` keeps them. The Newton–Krylov phase uses the exact coupled Jacobian-vector products in both. On the flat plate the coupled Jacobian needs more iterations and a 100× larger LU fill with the default ordering: use `linear_solver.ordering = "colamd"` with it | D34 |
 
 ### `[time]`
@@ -374,31 +410,37 @@ All values are in SI units except the residuals and the wall coefficients (non-d
 
 The table is generated from the field registry (`pyaeroflow.io.fields`); a column marks the model combinations for which a field exists. A field also needs the conditions of the column "Needs".
 
-| Field | Unit | Description | Needs | euler | laminar | SA | SA + BCM | SA + AFT |
-|---|---|---|---|---|---|---|---|---|
-| `pressure` | Pa | Static pressure | always | x | x | x | x | x |
-| `velocity` | m/s | Velocity vector | always | x | x | x | x | x |
-| `velocity_magnitude` | m/s | Speed | always | x | x | x | x | x |
-| `vorticity` | 1/s | dv/dx - du/dy from the least-squares gradient (signed) | always | x | x | x | x | x |
-| `kinematic_viscosity` | m^2/s | Laminar kinematic viscosity (constant) | laminar, rans |  | x | x | x | x |
-| `eddy_viscosity` | m^2/s | Kinematic eddy viscosity nu_t | rans |  |  | x | x | x |
-| `eddy_viscosity_ratio` | 1 | nu_t / nu | rans |  |  | x | x | x |
-| `effective_viscosity` | m^2/s | nu + nu_t (the laminar value without a turbulence model) | laminar, rans |  | x | x | x | x |
-| `nu_tilde` | m^2/s | SA working variable | rans |  |  | x | x | x |
-| `wall_distance` | m | Distance to the nearest wall used by the turbulence model | rans |  |  | x | x | x |
-| `intermittency` | 1 | Transition intermittency gamma | rans with a transition model |  |  |  | x | x |
-| `amplification_factor` | 1 | Amplification factor n of SA-AFT | rans with transition.model = aft |  |  |  |  | x |
-| `residual_p` | 1 | Pressure (continuity) residual per cell volume | steady, implicit | x | x | x | x | x |
-| `residual_u` | 1 | x-momentum residual per cell volume | steady, implicit | x | x | x | x | x |
-| `residual_v` | 1 | y-momentum residual per cell volume | steady, implicit | x | x | x | x | x |
-| `residual_nu_tilde` | 1 | nu_tilde residual per cell volume | steady, implicit, rans |  |  | x | x | x |
-| `residual_gamma` | 1 | log-intermittency residual per cell volume | steady, implicit, transition.model = aft |  |  |  |  | x |
-| `residual_n` | 1 | Amplification-factor residual per cell volume | steady, implicit, transition.model = aft |  |  |  |  | x |
-| `cf` | 1 | Skin-friction coefficient with attached flow positive on every side (the wall CSV keeps the sign of the wall traversal); wall cells only | wall in output.force_boundaries, laminar or rans |  | x | x | x | x |
-| `cp_wall` | 1 | Pressure coefficient at the wall; wall cells only | wall in output.force_boundaries | x | x | x | x | x |
-| `tau_wall_x` | 1 | Wall shear stress x component (non-dimensional, rho U^2); wall cells only | wall in output.force_boundaries, laminar or rans |  | x | x | x | x |
-| `tau_wall_y` | 1 | Wall shear stress y component (non-dimensional, rho U^2); wall cells only | wall in output.force_boundaries, laminar or rans |  | x | x | x | x |
-| `y_plus` | 1 | y+ of the first cell centre; wall cells only | wall in output.force_boundaries, rans |  |  | x | x | x |
+| Field | Unit | Description | Needs | euler | laminar | SA | SA + BCM | SA + AFT | SST |
+|---|---|---|---|---|---|---|---|---|---|
+| `pressure` | Pa | Static pressure | always | x | x | x | x | x | x |
+| `velocity` | m/s | Velocity vector | always | x | x | x | x | x | x |
+| `velocity_magnitude` | m/s | Speed | always | x | x | x | x | x | x |
+| `vorticity` | 1/s | dv/dx - du/dy from the least-squares gradient (signed) | always | x | x | x | x | x | x |
+| `kinematic_viscosity` | m^2/s | Laminar kinematic viscosity (constant) | laminar, rans |  | x | x | x | x | x |
+| `eddy_viscosity` | m^2/s | Kinematic eddy viscosity nu_t | rans |  |  | x | x | x | x |
+| `eddy_viscosity_ratio` | 1 | nu_t / nu | rans |  |  | x | x | x | x |
+| `effective_viscosity` | m^2/s | nu + nu_t (the laminar value without a turbulence model) | laminar, rans |  | x | x | x | x | x |
+| `mu_t` | Pa s | Dynamic eddy viscosity rho nu_t | rans |  |  | x | x | x | x |
+| `nu_tilde` | m^2/s | SA working variable | rans with turbulence = sa-neg |  |  | x | x | x |  |
+| `k` | m^2/s^2 | Turbulent kinetic energy (SST) | rans with turbulence = sst |  |  |  |  |  | x |
+| `omega` | 1/s | Specific dissipation rate (SST) | rans with turbulence = sst |  |  |  |  |  | x |
+| `blending_f1` | 1 | Menter's blending function F1 (1: k-omega near the wall, 0: k-epsilon) | rans with turbulence = sst |  |  |  |  |  | x |
+| `wall_distance` | m | Distance to the nearest wall used by the turbulence model | rans |  |  | x | x | x | x |
+| `intermittency` | 1 | Transition intermittency gamma | rans with a transition model |  |  |  | x | x |  |
+| `amplification_factor` | 1 | Amplification factor n of SA-AFT | rans with transition.model = aft |  |  |  |  | x |  |
+| `residual_p` | 1 | Pressure (continuity) residual per cell volume | steady, implicit | x | x | x | x | x | x |
+| `residual_u` | 1 | x-momentum residual per cell volume | steady, implicit | x | x | x | x | x | x |
+| `residual_v` | 1 | y-momentum residual per cell volume | steady, implicit | x | x | x | x | x | x |
+| `residual_nu_tilde` | 1 | nu_tilde residual per cell volume | steady, implicit, turbulence = sa-neg |  |  | x | x | x |  |
+| `residual_k` | 1 | k residual per cell volume | steady, implicit, turbulence = sst |  |  |  |  |  | x |
+| `residual_omega` | 1 | omega residual per cell volume | steady, implicit, turbulence = sst |  |  |  |  |  | x |
+| `residual_gamma` | 1 | log-intermittency residual per cell volume | steady, implicit, transition.model = aft |  |  |  |  | x |  |
+| `residual_n` | 1 | Amplification-factor residual per cell volume | steady, implicit, transition.model = aft |  |  |  |  | x |  |
+| `cf` | 1 | Skin-friction coefficient with attached flow positive on every side (the wall CSV keeps the sign of the wall traversal); wall cells only | wall in output.force_boundaries, laminar or rans |  | x | x | x | x | x |
+| `cp_wall` | 1 | Pressure coefficient at the wall; wall cells only | wall in output.force_boundaries | x | x | x | x | x | x |
+| `tau_wall_x` | 1 | Wall shear stress x component (non-dimensional, rho U^2); wall cells only | wall in output.force_boundaries, laminar or rans |  | x | x | x | x | x |
+| `tau_wall_y` | 1 | Wall shear stress y component (non-dimensional, rho U^2); wall cells only | wall in output.force_boundaries, laminar or rans |  | x | x | x | x | x |
+| `y_plus` | 1 | y+ of the first cell centre; wall cells only | wall in output.force_boundaries, rans |  |  | x | x | x | x |
 
 ### Saved-state files and housekeeping
 

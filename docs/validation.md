@@ -26,6 +26,7 @@ Click a case to jump to its section; each section ends with a link back here.
 | 6 | [NACA 0012, Re 6·10⁶](#sec-6) | validation | Ladson 1988, Gregory & O'Reilly 1970, NASA TMR | `examples/stage6_pyaero_validation.py` |
 | 7 (0.8) | [BCM transition, flat plate](#sec-7-plate) | verification/validation | Blasius, ERCOFTAC T3A | `tests/verification/test_rans_plate.py`, `pyaeroflow run examples/cases/flat_plate_transition.toml` |
 | 7 (0.8) | [BCM transition, Eppler 387](#sec-7-e387) | validation | McGhee, Walker & Millard 1988 (NASA TM 4062) | `pyaeroflow polar examples/cases/e387_transition.toml --alpha 4 6 8 2 0 -2` |
+| L2 (0.9) | [k-ω SST: flat plate, SD7003](#sec-9) | verification/validation | NASA TMR (SA values), LES/DNS, XFOIL, SA-AFT | `tests/verification/test_rans_plate.py::test_sst_turbulent_plate`, `pyaeroflow run examples/cases/sst_sd7003.toml` |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
 the scripts write) is not tracked.
@@ -289,6 +290,63 @@ stall it here. The upstream-moving transition that Coder reports (thousands
 of iterations) was not seen: the pseudo-time CFL ramp reaches the Newton
 phase in a few hundred iterations. T3A-series and airfoil cases (E387,
 XFOIL comparison) are next.
+
+<a id="sec-9"></a>
+
+## 9. k-ω SST (SST-2003m)
+
+### Flat plate
+
+TMR 2DZP domain, Re_L = 5·10⁶, TMR SST freestream (k = 9·10⁻⁹ a² at
+M = 0.2, i.e. k = 2.25·10⁻⁷ U², μ_t/μ = 0.009). The TMR SST reference values
+could not be fetched (the TMR site has moved), so the table compares with
+the TMR SA values; on this plate SST and SA agree to about 1 % in the
+literature.
+
+| mesh | cells | C_f(0.97) | C_D | y⁺ max | iterations |
+|---|---|---|---|---|---|
+| 48 × 48 | 2 880 | 0.002684 (−0.8 %) | 0.002869 (+0.4 %) | 0.64 | 153 |
+| 96 × 64 | 7 680 | 0.002684 (−0.8 %) | 0.002866 (+0.3 %) | 0.68 | 158 |
+| 192 × 96 | 23 040 | 0.002689 (−0.6 %) | 0.002864 (+0.3 %) | 0.74 | 181 |
+
+The solution is grid-converged. It depends on the wall value of ω, which a
+cell-centred scheme does not resolve (ω ~ 1/y²): with d₁ = the wall-cell
+height (the default, SU2's first mesh spacing on the same points) C_f(0.97)
+is 0.002689, with d₁ = the centroid distance (ω_wall four times larger)
+0.002630 at 192 × 96, about 2 % lower at every grid level.
+
+![SST flat plate](figures/sst_plate_cf.png)
+
+### SD7003, Re 6·10⁴, α = 4°
+
+O-grid (38 880 cells, 324 surface nodes, first spacing 1.2·10⁻⁴ c, farfield
+100 c with the point-vortex correction) around the SD7003 contour of the
+PyAero mesh of the AFT runs; SST freestream Tu = 0.1 %, ν_t/ν = 1; SA-neg
+with ν̃/ν = 3. SA-AFT values from the run on the PyAero C-mesh
+(`examples/cases/aft_sd7003.toml`), XFOIL 6.99 with N_crit 8.15.
+
+| | C_L | C_D | upper surface |
+|---|---|---|---|
+| SST | 0.575 | 0.0190 | laminar-like to x ≈ 0.3 (C_f minimum 0.0011), no separation, turbulent behind |
+| SA-neg (fully turbulent) | 0.583 | 0.0200 | turbulent from the leading edge |
+| SA-AFT, N_crit 8.15 | 0.592 | 0.0184 | bubble 0.231–0.644 |
+| XFOIL, N_crit 8.15 | 0.620 | 0.0188 | bubble 0.224–0.582, transition 0.550 |
+| LES/DNS/FR | 0.59–0.60 | 0.0196–0.0221 | bubble 0.20–0.24 to 0.60–0.665 |
+
+SST converges in 127 iterations (90 Newton–Krylov, 7 orders). With the low
+freestream k its production stays small in the laminar leading-edge flow
+and the boundary layer becomes turbulent around x = 0.3 without
+separating, so there is no laminar bubble and no pressure plateau; the
+lower side is turbulent throughout (C_f 0.004 at x = 0.5, XFOIL's laminar
+side 0.003). C_L is 3 % below SA-AFT and 7 % below XFOIL. The drag is
+close to XFOIL and AFT only because the turbulent lower side compensates
+the missing bubble: SST without a transition model is a fully turbulent
+baseline at this Reynolds number, not a predictor of the laminar bubble
+(that needs γ-Re_θ on SST, L3 step 4).
+
+![SST SD7003](figures/sst_sd7003_a4.png)
+
+[↑ back to table](#stage-table)
 
 ## References
 

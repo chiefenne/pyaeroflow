@@ -24,6 +24,8 @@ from pyaeroflow.driver import (
     GAMMA_DIAGNOSTICS,
     GAMMA_STEP_DIAGNOSTICS,
     INFLOW_TYPES,
+    SST_DEFAULT_INTENSITY,
+    SST_DEFAULT_VISCOSITY_RATIO,
     IncompressibleProblem,
 )
 from pyaeroflow.housekeeping import backup_name, latest_backup
@@ -71,8 +73,8 @@ class RunResult(NamedTuple):
     mesh : Mesh
         The mesh in physical units.
     w : ndarray, shape (n_cells, 3)
-        (p, u, v) in physical units, plus nu_tilde (m^2/s) with a turbulence
-        model.
+        (p, u, v) in physical units, plus nu_tilde (m^2/s) with SA or k
+        (m^2/s^2) and omega (1/s) with SST.
     converged : bool
     history : dict
     output_dir : Path
@@ -95,17 +97,22 @@ class RunResult(NamedTuple):
 class TurbulenceValues(NamedTuple):
     """Equivalent turbulence values of one input table (D33), SI units."""
 
-    chi: float  # nu_tilde / nu
+    chi: float  # nu_tilde / nu (None for SST)
     viscosity_ratio: float  # nu_t / nu
     kinetic_energy: float = None  # m^2/s^2
     length_scale: float = None  # m
     intensity: float = None  # Tu as a fraction
+    omega: float = None  # 1/s (SST)
 
     def report(self):
         """Log line: equivalent values."""
-        text = f"nu_t/nu = {self.viscosity_ratio:.4g}, nu_tilde/nu = {self.chi:.4g}"
+        text = f"nu_t/nu = {self.viscosity_ratio:.4g}"
+        if self.chi is not None:
+            text += f", nu_tilde/nu = {self.chi:.4g}"
         if self.kinetic_energy is not None:
             text += f", k = {self.kinetic_energy:.4g} m^2/s^2"
+        if self.omega is not None:
+            text += f", omega = {self.omega:.4g} 1/s"
         if self.length_scale is not None:
             text += f", l = {self.length_scale:.4g} m"
         if self.intensity is not None:
@@ -113,7 +120,29 @@ class TurbulenceValues(NamedTuple):
         return text
 
 
-def turbulence_values(table, nu, velocity):
+def sst_turbulence_values(table, nu, velocity):
+    """Convert a turbulence table to SST's k and omega = k / nu_t (D33).
+
+    None gives the default Tu = 0.1 %, nu_t / nu = 1; form b needs the
+    intensity (checked with the configuration).
+    """
+    if table is None:
+        table = {
+            "turbulent_viscosity_ratio": SST_DEFAULT_VISCOSITY_RATIO,
+            "intensity": SST_DEFAULT_INTENSITY,
+        }
+    if "kinetic_energy" in table:
+        k, ell = table["kinetic_energy"], table["length_scale"]
+        ratio = table.get("c_mu", 0.09) ** 0.25 * math.sqrt(k) * ell / nu
+        tu = math.sqrt(2.0 * k / 3.0) / velocity if velocity > 0.0 else None
+    else:
+        ratio, tu, ell = table["turbulent_viscosity_ratio"], table["intensity"], None
+        k = 1.5 * (tu * velocity) ** 2
+    omega = k / (ratio * nu) if ratio > 0.0 else 0.0
+    return TurbulenceValues(None, ratio, k, ell, tu, omega)
+
+
+def turbulence_values(table, nu, velocity, model="sa-neg"):
     """Convert a turbulence table to the SA working variable (D33).
 
     Parameters
@@ -124,7 +153,11 @@ def turbulence_values(table, nu, velocity):
         Kinematic viscosity in m^2/s.
     velocity : float
         Local velocity magnitude in m/s (for Tu <-> k).
+    model : str
+        ``"sst"`` gives k and omega instead (:func:`sst_turbulence_values`).
     """
+    if model == "sst":
+        return sst_turbulence_values(table, nu, velocity)
     if table is None:
         chi = 3.0
         return TurbulenceValues(chi, float(sa.eddy_viscosity_ratio(chi)))
@@ -178,6 +211,7 @@ def setup(config, mesh=None):
         mu_nd = 1.0 / fluid["reynolds_number"]
     rho_nd = fluid["density"] / scaling.density
     rans = physics["model"] == "rans"
+    turb_model = physics["turbulence"] if rans else "none"
     nu_si = mu_nd * scaling.viscosity / fluid["density"]  # m^2/s
     turbulence = {}  # reported values per inflow boundary and "initial"
 
@@ -211,9 +245,9 @@ def setup(config, mesh=None):
                 speed = math.hypot(*b["velocity"])
             else:
                 speed = scaling.velocity
-            tv = turbulence_values(b.get("turbulence"), nu_si, speed)
+            tv = turbulence_values(b.get("turbulence"), nu_si, speed, turb_model)
             turbulence[name] = tv
-            entry["nu_tilde"] = tv.chi * mu_nd / rho_nd
+            entry.update(_turbulence_entry(tv, mu_nd, rho_nd, scaling))
         conditions[name] = entry
 
     num = cfg["numerics"]
@@ -269,11 +303,13 @@ def setup(config, mesh=None):
     )
 
     init = cfg["initial"]
-    nu_tilde = None
+    nu_tilde = k_omega = None
     if init["from_boundary"] is not None:
         src = conditions[init["from_boundary"]]
         velocity, pressure = src["velocity"], src.get("pressure", 0.0)
         nu_tilde = src.get("nu_tilde")
+        if "k" in src:
+            k_omega = (src["k"], src["omega"])
         if rans and init["turbulence"] is None and init["from_boundary"] in turbulence:
             turbulence["initial"] = turbulence[init["from_boundary"]]
     elif init["velocity"] is not None:
@@ -283,10 +319,12 @@ def setup(config, mesh=None):
         velocity, pressure = (1.0, 0.0), init["pressure"] / scaling.pressure
     if rans and "initial" not in turbulence:
         speed = math.hypot(*velocity) * scaling.velocity
-        tv = turbulence_values(init["turbulence"], nu_si, speed)
+        tv = turbulence_values(init["turbulence"], nu_si, speed, turb_model)
         turbulence["initial"] = tv
-        nu_tilde = tv.chi * mu_nd / rho_nd
-    w0 = problem.initial_state(velocity, pressure, nu_tilde)
+        entry = _turbulence_entry(tv, mu_nd, rho_nd, scaling)
+        nu_tilde = entry.get("nu_tilde")
+        k_omega = (entry["k"], entry["omega"]) if "k" in entry else None
+    w0 = problem.initial_state(velocity, pressure, nu_tilde, k_omega)
     if init["restart"] is not None:
         restart = config.resolve_path(init["restart"])
         w0, n_read = load_restart(restart, mesh, w0)
@@ -301,6 +339,16 @@ def setup(config, mesh=None):
         config.notices.append(note)
     problem.turbulence_values = turbulence
     return problem, scaling, w0, mesh
+
+
+def _turbulence_entry(tv, mu_nd, rho_nd, scaling):
+    """Non-dimensional turbulence values of a boundary or the initial state."""
+    if tv.chi is not None:
+        return {"nu_tilde": tv.chi * mu_nd / rho_nd}
+    return {
+        "k": tv.kinetic_energy / scaling.velocity**2,
+        "omega": tv.omega * scaling.length / scaling.velocity,
+    }
 
 
 def mesh_fingerprint(mesh):
@@ -490,13 +538,17 @@ def load_restart(path, mesh, w_default):
     """Read a restart file for ``mesh``; missing variables keep ``w_default``.
 
     A laminar restart used for a RANS case keeps the default nu_tilde, a RANS
-    restart used for a laminar case drops it.
+    restart used for a laminar case drops it. The column count tells the
+    turbulence model (4 SA, 5 SST, 6 SA-AFT): between SST and SA only p, u, v
+    are taken over.
     """
     with np.load(path) as data:
         if str(data["fingerprint"]) != mesh_fingerprint(mesh):
             raise ValueError(f"restart file {path} belongs to a different mesh")
         w = np.array(data["w"], dtype=float)
     n = min(w.shape[1], w_default.shape[1])
+    if (w.shape[1] == 5) != (w_default.shape[1] == 5):
+        n = min(n, 3)
     w0 = np.array(w_default, dtype=float)
     w0[:, :n] = w[:, :n]
     return w0, n
@@ -668,7 +720,9 @@ def run_case(path, console=True, mesh=None, restart_mode="continue"):
     restart_file = out_dir / backup_name(name, n_steps)  # the final backup (D56)
     save_restart(restart_file, mesh, result.u, n_steps, t_phys, state)
     scale = [scaling.pressure, scaling.velocity, scaling.velocity]
-    if problem.turbulent:
+    if problem.model.turbulence == "sst":
+        scale += [scaling.velocity**2, scaling.velocity / scaling.length]
+    elif problem.turbulent:
         scale.append(scaling.viscosity / scaling.density)
     scale += [1.0] * (problem.model.n_var - len(scale))  # AFT: dimensionless
     w = result.u * np.array(scale)
@@ -717,7 +771,9 @@ def _pseudo_time_settings(cfg):
 def _residual_names(problem):
     """Names of the residual columns in the log and history."""
     names = ("p", "u", "v")
-    if problem.turbulent:
+    if problem.model.turbulence == "sst":
+        names += ("k", "om")
+    elif problem.turbulent:
         names += ("nu",)
     if problem.model.n_var == 6:
         names += ("gam", "n")
@@ -1209,8 +1265,10 @@ def _mode_rows(cfg):
             rows.append(("Newton-Krylov", when))
         else:
             rows.append(("Newton-Krylov", "off"))
-    if solver["nu_tilde_step_limit"] is not None and (
-        unsteady or solver["method"] == "implicit"
+    if (
+        solver["nu_tilde_step_limit"] is not None
+        and cfg["physics"]["turbulence"] != "sst"
+        and (unsteady or solver["method"] == "implicit")
     ):
         rows.append(
             (
@@ -1290,7 +1348,9 @@ def _log_setup(log, config, problem, scaling, mesh):
             n_off = int(
                 np.count_nonzero(np.asarray(problem.geom.production_switch) == 0)
             )
-            rows.append(("laminar regions", f"{n_off} cells without SA production"))
+            rows.append(
+                ("laminar regions", f"{n_off} cells without turbulence production")
+            )
         if problem.model.transition == "aft":
             tu = problem.model.turbulence_intensity
             n_crit = rans.critical_amplification(problem.model)
@@ -1324,7 +1384,7 @@ def _log_setup(log, config, problem, scaling, mesh):
         bcm = problem.model.transition == "bcm"
         aft_model = problem.model.transition == "aft"
         for name, v in tv.items():
-            if name == "initial" and restarted:
+            if (name == "initial" and restarted) or v.chi is None:
                 continue
             if aft_model:
                 if not 0.05 <= v.chi <= 0.5:

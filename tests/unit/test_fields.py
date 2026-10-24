@@ -24,6 +24,7 @@ from pyaeroflow.run import FieldWriter, run_case
 LAMINAR = Capabilities("laminar", "none", True, True, True)
 SA = Capabilities("rans", "none", True, True, True)
 AFT = Capabilities("rans", "aft", True, True, True)
+SST = Capabilities("rans", "none", True, True, True, "sst")
 EULER = Capabilities("euler", "none", True, True, True)
 EXPLICIT = Capabilities("laminar", "none", True, False, True)
 UNSTEADY_CAPS = Capabilities("laminar", "none", False, False, True)
@@ -60,10 +61,15 @@ def test_default_selection_is_todays_output():
         "eddy_viscosity_ratio",
     ]
     assert default_fields(AFT)[-2:] == ["intermittency", "amplification_factor"]
+    assert default_fields(SST)[3:] == ["k", "omega", "eddy_viscosity_ratio"]
 
 
 def test_availability_by_model_combination():
     assert "residual_gamma" in available(AFT) and "residual_gamma" not in available(SA)
+    sst_only = {"k", "omega", "blending_f1", "residual_k", "residual_omega"}
+    assert sst_only <= set(available(SST)) and not sst_only & set(available(SA))
+    assert not {"nu_tilde", "residual_nu_tilde"} & set(available(SST))
+    assert "mu_t" in available(SA) and "mu_t" in available(SST)
     assert "eddy_viscosity" not in available(LAMINAR)
     assert "kinematic_viscosity" not in available(EULER)
     assert "cp_wall" in available(EULER) and "cf" not in available(EULER)
@@ -81,10 +87,10 @@ def test_resolve_fields_messages():
     _, problems = resolve_fields(["presure"], LAMINAR)
     assert "unknown field 'presure' (did you mean 'pressure'?)" in problems[0]
     _, problems = resolve_fields(["nu_tilde"], LAMINAR)
-    assert "'nu_tilde' needs rans" in problems[0]
+    assert "'nu_tilde' needs rans with turbulence = sa-neg" in problems[0]
     _, problems = resolve_fields(["residual_gamma"], SA)
     assert "needs steady, implicit, transition.model = aft" in problems[0]
-    assert "model rans, transition none, steady, implicit" in problems[0]
+    assert "model rans, turbulence sa-neg, transition none, steady" in problems[0]
 
 
 def test_config_interval_is_an_alias(tmp_path):

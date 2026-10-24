@@ -88,9 +88,10 @@ class IncompressibleModel(NamedTuple):
         ``(cell, pressure)``: the continuity residual of that cell is replaced
         by p_cell - pressure (D39 R2), used when no boundary fixes the
         pressure level.
-    turbulence : {"none", "sa-neg"}
-        Turbulence model (D11); "sa-neg" adds nu_tilde as fourth variable
-        (see :mod:`pyaeroflow.physics.rans`).
+    turbulence : {"none", "sa-neg", "sst"}
+        Turbulence model (D11, D12); "sa-neg" adds nu_tilde as fourth variable
+        (see :mod:`pyaeroflow.physics.rans`), "sst" adds k and omega
+        (:mod:`pyaeroflow.physics.rans_sst`).
     turbulence_spatial_order : int
         1 or 2: convective states of the turbulence equation.
     coupling : {"segregated", "coupled"}
@@ -124,9 +125,11 @@ class IncompressibleModel(NamedTuple):
 
     @property
     def n_var(self):
-        """Number of variables: 3, 4 with a turbulence model, 6 with AFT."""
+        """Number of variables: 3, 4 with SA, 5 with SST, 6 with SA-AFT."""
         if self.turbulence == "none":
             return 3
+        if self.turbulence == "sst":
+            return 5
         return 6 if self.transition == "aft" else 4
 
 
@@ -149,12 +152,15 @@ class BoundaryData(NamedTuple):
         direction d.
     nu_tilde : float array, shape (n_bfaces,) or None
         Prescribed SA working variable at inflow faces (zero elsewhere).
+    turbulence : float array, shape (n_bfaces, 2) or None
+        Prescribed SST (k, omega) at inflow faces and walls (zero elsewhere).
     """
 
     kind: jnp.ndarray
     value: jnp.ndarray
     density: float = 1.0
     nu_tilde: jnp.ndarray = None
+    turbulence: jnp.ndarray = None
 
 
 def boundary_data(disc, conditions, density=1.0):
@@ -180,6 +186,7 @@ def boundary_data(disc, conditions, density=1.0):
     kind = np.zeros(nb, dtype=np.int64)
     value = np.zeros((nb, 3))
     nu_tilde = np.zeros(nb)
+    turbulence = np.zeros((nb, 2))
     missing = set(disc.boundary_slices) - set(conditions)
     extra = set(conditions) - set(disc.boundary_slices)
     if missing or extra:
@@ -216,8 +223,16 @@ def boundary_data(disc, conditions, density=1.0):
         nu_tilde[sl] = np.broadcast_to(
             _evaluate(bc.get("nu_tilde", 0.0), x, y), x.shape
         )
+        for col, key in enumerate(("k", "omega")):
+            turbulence[sl, col] = np.broadcast_to(
+                _evaluate(bc.get(key, 0.0), x, y), x.shape
+            )
     return BoundaryData(
-        jnp.asarray(kind), jnp.asarray(value), float(density), jnp.asarray(nu_tilde)
+        jnp.asarray(kind),
+        jnp.asarray(value),
+        float(density),
+        jnp.asarray(nu_tilde),
+        jnp.asarray(turbulence),
     )
 
 

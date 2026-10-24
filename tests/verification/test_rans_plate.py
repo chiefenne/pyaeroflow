@@ -103,3 +103,15 @@ def test_aft_transition_on_the_plate():
     assert 5.5e5 < onset < 7.0e5
     gamma = np.exp(r.w[:, 4])
     assert gamma.min() == pytest.approx(1.0 / 50.0, rel=1e-2)  # laminar layer
+
+
+def test_sst_turbulent_plate():
+    """k-omega SST-2003m on the TMR plate, TMR SST freestream (k = 2.25e-7 U^2,
+    mu_t/mu = 0.009): C_f(0.97) 0.002684 / 0.002684 / 0.002689 and C_D
+    0.002869 / 0.002866 / 0.002864 on 48 x 48 / 96 x 64 / 192 x 96 cells, i.e.
+    grid-converged, 0.8 % below and 0.3 % above the TMR SA values."""
+    r = tp.solve(48, 12, 48, turbulence="sst")
+    assert r.converged and r.y_plus_max < 1.0
+    assert r.cf_097 == pytest.approx(r.reference["cf_097"], rel=0.015)
+    assert r.cd == pytest.approx(r.reference["cd"], rel=0.015)
+    assert r.cf[r.x > 0.2].min() > 0.002

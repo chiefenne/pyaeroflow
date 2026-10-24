@@ -262,8 +262,11 @@ def _transition_by_alpha(tr, boundaries, farfields, ref, problems):
     tr["laminar_region"] = regions
 
 
-def _turbulence_table(holder, dotted, problems):
-    """Check a turbulence table (D33): exactly one of the three forms."""
+def _turbulence_table(holder, dotted, problems, model="sa-neg"):
+    """Check a turbulence table (D33): exactly one of the three forms.
+
+    SST needs k: form b then needs ``intensity``, form c (nu_tilde) is SA only.
+    """
     table = holder.get("turbulence")
     if table is None:
         return
@@ -286,9 +289,21 @@ def _turbulence_table(holder, dotted, problems):
         "b": ("turbulent_viscosity_ratio",),
         "c": ("nu_tilde_ratio",),
     }[form]
+    if model == "sst":
+        if form == "c":
+            problems.append(
+                f"{dotted}: nu_tilde_ratio is for SA only; SST takes "
+                "{turbulent_viscosity_ratio, intensity} or {kinetic_energy, "
+                "length_scale}"
+            )
+        elif form == "b":
+            required = required + ("intensity",)
     for key in required:
         if key not in table:
-            problems.append(f"{dotted}: {key} is required")
+            problems.append(
+                f"{dotted}: {key} is required"
+                + (" with turbulence = sst" if key == "intensity" else "")
+            )
     for key, value in table.items():
         if not isinstance(value, int | float) or isinstance(value, bool) or value < 0:
             problems.append(f"{dotted}.{key}: expected a number >= 0, got {value!r}")
@@ -451,11 +466,23 @@ def _consistency(data, explicit, problems, notices, path):
         notices.append(
             "physics.transition.critical_amplification ignored: model = none"
         )
+    if rans and physics["turbulence"] == "sst":
+        if tr["model"] != "none":
+            problems.append(
+                f"physics.transition.model = {tr['model']} needs turbulence = sa-neg "
+                "(the transition models are built on SA)"
+            )
+        if data["solver"]["nu_tilde_step_limit"] is not None:
+            notices.append(
+                "solver.nu_tilde_step_limit ignored with turbulence = sst (k and "
+                "omega updates are under-relaxed as in SU2)"
+            )
     if rans:
-        _turbulence_table(data["initial"], "initial", problems)
+        model = physics["turbulence"]
+        _turbulence_table(data["initial"], "initial", problems, model)
         for name, b in boundaries.items():
             if "turbulence" in b:
-                _turbulence_table(b, f"boundary.{name}", problems)
+                _turbulence_table(b, f"boundary.{name}", problems, model)
     else:
         for holder, dotted in [(data["initial"], "initial")] + [
             (b, f"boundary.{n}") for n, b in boundaries.items()

@@ -2,6 +2,17 @@
 
 ## Unreleased (0.9) – Transition, step 2: SA-AFT2019b
 
+- k-ω SST turbulence model (D12, L2): `physics.turbulence = "sst"`, Menter's
+  SST-2003m with SU2's formulation and constants (strain-rate ν_t limiter,
+  production limiter, F1/F2 blending, cross diffusion, wall ω = 60ν/(β₁d₁²)).
+  Two transport equations for k and ω (5 unknowns per cell), exact
+  Newton–Krylov JVP, SU2's update under-relaxation. Turbulence tables give
+  k and ω (form b needs `intensity`; default Tu 0.1 %, ν_t/ν = 1). New VTU
+  fields `k`, `omega`, `blending_f1`, `residual_k`, `residual_omega`, and
+  `mu_t` for every RANS model; `nu_tilde` and `residual_nu_tilde` are SA
+  only. Flat plate: C_f(0.97) grid-converged, 0.8 % below the TMR SA value;
+  SD7003 comparison in `docs/validation.md` §9.
+
 - Saved-state files renamed (D56, D60). Backups are `<name>.backup_000100.npz`
   and so on; the final state of every run is the backup with the last
   iteration or step (`<name>.backup_000645.npz`), and `<name>.restart.npz` is
