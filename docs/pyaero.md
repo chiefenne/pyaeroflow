@@ -255,8 +255,8 @@ coefficients are converged to all printed digits.
 
 ## 6. Polars and restarts
 
-Every run writes `<name>.restart.npz`; `initial.restart = "<file>"` starts
-from it (same mesh, checked by a fingerprint). An angle-of-attack sweep is
+Every run writes its final state as `<name>.backup_<iteration>.npz`;
+`initial.restart = "<file>"` starts from it (same mesh, checked by a fingerprint). An angle-of-attack sweep is
 one command:
 
 ```

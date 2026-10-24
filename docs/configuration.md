@@ -225,7 +225,7 @@ Either explicit values or `from_boundary`, not both.
 | `pressure` | float | – | Gauge pressure in Pa | D16 |
 | `turbulence` | table | ν̃/ν = 3 | See [Turbulence values](#turbulence-values) | D16, D33 |
 | `from_boundary` | string | name of the farfield boundary, if exactly one exists | Uniform field equal to the state of this boundary | D28 |
-| `restart` | path | – | Restart file `<name>.restart.npz` of a previous run on the same mesh (relative to the case file); overrides `velocity`/`pressure`/`from_boundary` for the field. The mesh is checked by a fingerprint; a laminar restart used for a RANS case keeps the default ν̃. **A restart continues the run that wrote the file** (D58): the iteration or time step counter goes on (`solver.max_iterations` and `time.end_time` are totals), the CFL, the residual peaks that `residual_drop` refers to, the Newton–Krylov switch, the frozen or released limiter, the lagged intermittency and the farfield vortex are restored, so the start-up phase is not repeated; an unsteady run continues with BDF2 at once (previous time level stored; a changed `time_step` gives a BDF1 first step). With the same case name and `output.directory` the log is appended (a `RESTART` marker, then the usual header and the continued lines, the wall column continues) and the history CSV is continued (rows beyond the restart iteration, from a restart from an older file, move to `<name>.history.cut_<n>.csv`). In the digits the continuation differs from an uninterrupted run only by the Jacobian refactorisation schedule. A restart file written before 0.9 has no solver state: the run starts as a new run from its fields (the log says so). `pyaeroflow polar case.toml --alpha 0 4 8` runs an angle sweep as a restart chain and writes `<name>.polar.csv`; the next angle takes over the CFL, Newton–Krylov switch, limiter and vortex of the previous one but starts its own counter and residual reference | D45, D58 |
+| `restart` | path | – | Backup or restart file of a previous run (`<name>.backup_<n>.npz`, `<name>.restart_a.npz`; `pyaeroflow restart-info FILE` shows its iteration) on the same mesh (relative to the case file); overrides `velocity`/`pressure`/`from_boundary` for the field. The mesh is checked by a fingerprint; a laminar restart used for a RANS case keeps the default ν̃. **A restart continues the run that wrote the file** (D58): the iteration or time step counter goes on (`solver.max_iterations` and `time.end_time` are totals), the CFL, the residual peaks that `residual_drop` refers to, the Newton–Krylov switch, the frozen or released limiter, the lagged intermittency and the farfield vortex are restored, so the start-up phase is not repeated; an unsteady run continues with BDF2 at once (previous time level stored; a changed `time_step` gives a BDF1 first step). With the same case name and `output.directory` the log is appended (a `RESTART` marker, then the usual header and the continued lines, the wall column continues) and the history CSV is continued (rows beyond the restart iteration, from a restart from an older file, move to `<name>.history.cut_<n>.csv`). In the digits the continuation differs from an uninterrupted run only by the Jacobian refactorisation schedule. A restart file written before 0.9 has no solver state: the run starts as a new run from its fields (the log says so). `pyaeroflow polar case.toml --alpha 0 4 8` runs an angle sweep as a restart chain and writes `<name>.polar.csv`; the next angle takes over the CFL, Newton–Krylov switch, limiter and vortex of the previous one but starts its own counter and residual reference | D45, D58 |
 
 If `[initial]` is missing and the case has no single farfield boundary, the
 case is rejected with a message asking for `[initial]`.
@@ -355,9 +355,9 @@ The other `[solver]` settings (CFL control, Newton–Krylov, linear solver) appl
 | `fields_at` | int array | `[]` | Also write the fields at these iterations / time steps, e.g. `[120, 147, 211]`; adds to `fields_interval` (or works alone) | D59 |
 | `fields_final` | bool | `true` | Write the final fields to `<name>.vtu` (unsteady runs also add the last step to the series) | D59 |
 | `interval` | int | `0` | The older name of `fields_interval`, kept for existing case files; setting both to different values is an error | D59 |
-| `restart_interval` | int | `0` | Write a restart file every n iterations (steady) or time steps (unsteady), alternately to `<name>.restart_a.npz` and `<name>.restart_b.npz`: each write replaces the older of the two and goes through a temporary file, so after a crash or a stopped run the newer file (check the modification time) is complete. A write that falls on a rejected iteration or an unsteady step that hit the inner limit waits for the next good one. 0 = only the final `<name>.restart.npz`, which is always written at the end. Restart from one of them with `initial.restart`; the file carries the iteration or step, the time and the solver state, so the run continues where it stopped (see `initial.restart`) | |
-| `restart_backup_interval` | int | `0` | Write a restart file `<name>.restart_<iteration or step, 6 digits>.npz` every n iterations / time steps that is never replaced (same content as the rolling files); 0 = none. The two intervals are independent | D56 |
-| `restart_backup_at` | int array | `[]` | Also write a backup `<name>.restart_<number>.npz` at these iterations / time steps, e.g. `[120, 147, 211]`; adds to `restart_backup_interval` (or works alone when that is 0); a number due from both gives one file. A listed number that falls on a rejected iteration or an unsteady step at the inner limit is written at the next good one | D56 |
+| `restart_interval` | int | `0` | Write a restart file every n iterations (steady) or time steps (unsteady), alternately to `<name>.restart_a.npz` and `<name>.restart_b.npz`: each write replaces the older of the two and goes through a temporary file, so after a crash or a stopped run the newer file (check the modification time) is complete. A write that falls on a rejected iteration or an unsteady step that hit the inner limit waits for the next good one. 0 = none during the run; the final state is always written as a backup (`<name>.backup_<last number>.npz`). Restart from one of them with `initial.restart`; the file carries the iteration or step, the time and the solver state, so the run continues where it stopped (see `initial.restart`) | |
+| `restart_backup_interval` | int | `0` | Write a backup `<name>.backup_<iteration or step, 6 digits>.npz` every n iterations / time steps that is never replaced (same content as the rolling files); 0 = none. The two intervals are independent | D56 |
+| `restart_backup_at` | int array | `[]` | Also write a backup `<name>.backup_<number>.npz` at these iterations / time steps, e.g. `[120, 147, 211]`; adds to `restart_backup_interval` (or works alone when that is 0); a number due from both gives one file. A listed number that falls on a rejected iteration or an unsteady step at the inner limit is written at the next good one | D56 |
 | `transition_diagnostics` | bool | `false` | Runs with a transition model: adds the columns `gamma_cells` (cells with γ > 0.01), `gamma_area` (Σ γ·area), `gamma_jumped` (cells whose γ changed by more than 0.05 since the last accepted iteration), `gamma_dmax` and its cell centre `gamma_dmax_x`, `gamma_dmax_y`, and `rnu_max` (largest \|R_ν\|) with `rnu_max_x`, `rnu_max_y` to the history CSV (coordinates divided by the length scale). Counts only cells within 0.05 chords of a wall. Costs one extra residual evaluation per iteration. Unsteady runs: one row per time step with the first six columns (no `rnu_max*`), changes counted relative to the previous step (the first one relative to the restart state); costs one intermittency evaluation per step | L3 |
 | `verbosity` | `"normal"` \| `"detailed"` | `"normal"` | `"detailed"` also logs the inner iterations of unsteady runs | D45 |
 | `force_boundaries` | array of strings | all wall boundaries | Boundary faces over which forces and moments are integrated (walls, transpiration walls; slip walls allowed, and included by default in Euler mode); C_L, C_D, C_M per iteration in the log and history, and a wall CSV (x, y, p, Cp, τ_x, τ_y, Cf, and y⁺ of the first cell centre with a turbulence model) per boundary at the end. Forces are those of the fluid on the wall; Cf uses the face tangent oriented counter-clockwise with respect to the fluid (+x on a bottom wall) | D45 |
@@ -399,6 +399,29 @@ The table is generated from the field registry (`pyaeroflow.io.fields`); a colum
 | `tau_wall_x` | 1 | Wall shear stress x component (non-dimensional, rho U^2); wall cells only | wall in output.force_boundaries, laminar or rans |  | x | x | x | x |
 | `tau_wall_y` | 1 | Wall shear stress y component (non-dimensional, rho U^2); wall cells only | wall in output.force_boundaries, laminar or rans |  | x | x | x | x |
 | `y_plus` | 1 | y+ of the first cell centre; wall cells only | wall in output.force_boundaries, rans |  |  | x | x | x |
+
+### Saved-state files and housekeeping
+
+| File | Written | Content |
+|---|---|---|
+| `<name>.backup_000100.npz`, `…000200.npz` | every `restart_backup_interval`, at `restart_backup_at` | solution and solver state, never replaced |
+| `<name>.backup_000645.npz` | once at the end of every run | final state; the highest number is where the run stopped |
+| `<name>.restart_a.npz`, `<name>.restart_b.npz` | every `restart_interval`, alternately | the same content, the older one replaced |
+
+All of them are valid `initial.restart` files. A polar run writes them in
+`alpha_<α>/` with the case name `<name>_alpha_<α>`. Files of earlier versions
+(`<name>.restart.npz`, `<name>.restart_<n>.npz`) are still read.
+
+```
+pyaeroflow restart-info out/case.backup_000645.npz [--json]
+pyaeroflow clean case.toml                      # inventory, nothing deleted
+pyaeroflow clean case.toml --backup --fields    # dry run of two categories
+pyaeroflow clean case.toml --log --history --yes
+pyaeroflow clean case.toml --all --yes          # everything the case wrote
+```
+
+`clean` options: `--restarts`, `--backup`, `--fields`, `--history`, `--wall`,
+`--log`, `--all`; without `--yes` it only lists (D60).
 
 ## 6. Open questions
 

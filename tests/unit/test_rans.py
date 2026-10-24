@@ -410,12 +410,12 @@ def test_unsteady_gamma_diagnostics(tmp_path):
 def test_restart_log_marks_the_initial_turbulence_values(tmp_path):
     """With a restart file the initial turbulence values are not the start
     values: the log says so instead of listing (and warning about) the defaults."""
-    _bcm_plate(tmp_path)
+    first = _bcm_plate(tmp_path)
     case = tmp_path / "plate.toml"
     case.write_text(
         case.read_text().replace(
             '[initial]\nfrom_boundary = "left"',
-            '[initial]\nfrom_boundary = "left"\nrestart = "out/plate.restart.npz"',
+            f'[initial]\nfrom_boundary = "left"\nrestart = "{first.restart_file}"',
         )
     )
     run_case(case, console=False)

@@ -151,8 +151,9 @@ SCHEMA = {
         "restart": Opt(
             "string",
             None,
-            "Restart file (<name>.restart.npz of a previous run on the same "
-            "mesh), relative to the case file; overrides velocity/pressure",
+            "Restart or backup file (<name>.backup_<n>.npz or "
+            "<name>.restart_a.npz of a previous run on the same mesh), relative "
+            "to the case file; overrides velocity/pressure",
         ),
     },
     "reference": {
@@ -501,21 +502,21 @@ SCHEMA = {
             "Write a restart file every n iterations (steady) or time steps "
             "(unsteady), alternately to <name>.restart_a.npz and "
             "<name>.restart_b.npz (each write replaces the older one); "
-            "0 = only the final <name>.restart.npz",
+            "0 = none (the final state is always written as a backup)",
             minimum=0,
         ),
         "restart_backup_interval": Opt(
             "int",
             0,
-            "Write a restart file <name>.restart_<number>.npz that is never "
+            "Write a backup <name>.backup_<number>.npz that is never "
             "replaced every n iterations (steady) or time steps (unsteady); "
-            "0 = none",
+            "0 = none (the final state is always written as a backup)",
             minimum=0,
         ),
         "restart_backup_at": Opt(
             "int_list",
             [],
-            "Also write a backup restart file <name>.restart_<number>.npz at "
+            "Also write a backup <name>.backup_<number>.npz at "
             "these iterations (steady) or time steps (unsteady), in addition "
             "to restart_backup_interval",
             minimum=1,

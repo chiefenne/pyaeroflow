@@ -26,6 +26,7 @@ from pyaeroflow.driver import (
     INFLOW_TYPES,
     IncompressibleProblem,
 )
+from pyaeroflow.housekeeping import backup_name, latest_backup
 from pyaeroflow.io import (
     HistoryWriter,
     RunLog,
@@ -77,6 +78,8 @@ class RunResult(NamedTuple):
     output_dir : Path
     coefficients : Coefficients or None
         Final force coefficients over ``output.force_boundaries``.
+    restart_file : Path or None
+        The final backup ``<name>.backup_<iteration or step>.npz``.
     """
 
     config: Resolved
@@ -86,6 +89,7 @@ class RunResult(NamedTuple):
     history: dict
     output_dir: Path
     coefficients: object = None
+    restart_file: Path = None
 
 
 class TurbulenceValues(NamedTuple):
@@ -339,13 +343,13 @@ def save_restart(path, mesh, w_nd, step=None, time=None, state=None):
 
 
 class RestartWriter:
-    """Restart files written during a run (``output.restart_interval``).
+    """Restart and backup files written during a run (D56).
 
     ``restart_interval`` = n writes ``<name>.restart_a.npz`` and
     ``<name>.restart_b.npz`` alternately every n iterations (steady) or time
     steps (unsteady); each write replaces the older of the two, so the newer
-    one is always complete. ``restart_backup_interval`` = m writes a file
-    ``<name>.restart_<number>.npz`` that is never replaced, and
+    one is always complete. ``restart_backup_interval`` = m writes a backup
+    ``<name>.backup_<number>.npz`` that is never replaced, and
     ``restart_backup_at`` adds such files at the listed iterations or steps.
     A write that falls on a rejected iteration or a time step that hit the
     inner limit waits for the next good one.
@@ -387,7 +391,7 @@ class RestartWriter:
             self.backup_at = [n for n in self.backup_at if n > number]
             due = True
         if due:
-            file = f"{self.name}.restart_{number:06d}.npz"
+            file = backup_name(self.name, number)
             save_restart(
                 self.out_dir / file, self.mesh, w, number, time, state and state()
             )
@@ -661,16 +665,22 @@ def run_case(path, console=True, mesh=None, restart_mode="continue"):
             )
             n_steps = int(result.history["iteration"][-1])
             t_phys = None
-    save_restart(
-        out_dir / f"{name}.restart.npz", mesh, result.u, n_steps, t_phys, state
-    )
+    restart_file = out_dir / backup_name(name, n_steps)  # the final backup (D56)
+    save_restart(restart_file, mesh, result.u, n_steps, t_phys, state)
     scale = [scaling.pressure, scaling.velocity, scaling.velocity]
     if problem.turbulent:
         scale.append(scaling.viscosity / scaling.density)
     scale += [1.0] * (problem.model.n_var - len(scale))  # AFT: dimensionless
     w = result.u * np.array(scale)
     return RunResult(
-        config, mesh, w, result.converged, result.history, out_dir, coefficients
+        config,
+        mesh,
+        w,
+        result.converged,
+        result.history,
+        out_dir,
+        coefficients,
+        restart_file,
     )
 
 
@@ -1388,7 +1398,7 @@ def run_polar(path, angles, console=True):
             case.setdefault("initial", {})["restart"] = str(previous)
         config = resolve(case, path)
         result = run_case(config, console=console, restart_mode="state")
-        previous = result.output_dir / f"{config.name}.restart.npz"
+        previous = result.restart_file
         c = result.coefficients
         rows = [r for r in rows if abs(r[0] - alpha) > 1e-9]
         rows.append(
@@ -1426,7 +1436,7 @@ def _read_polar(path):
 
 
 def _nearest_restart(out_dir, name, alpha):
-    """Restart file of the previously computed angle nearest to ``alpha``.
+    """Newest backup of the previously computed angle nearest to ``alpha``.
 
     On a tie the lower angle wins (continuation upwards, as the restart
     chain of a polar is built); the angle itself is never a candidate.
@@ -1437,8 +1447,8 @@ def _nearest_restart(out_dir, name, alpha):
             a = float(d.name[6:])
         except ValueError:
             continue
-        file = d / f"{name}_alpha_{a:g}.restart.npz"
-        if not file.exists() or a == alpha:
+        file = latest_backup(d, f"{name}_alpha_{a:g}")
+        if file is None or a == alpha:
             continue
         rank = (abs(a - alpha), a > alpha)
         if best is None or rank < best[0]:

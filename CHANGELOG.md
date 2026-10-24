@@ -2,6 +2,14 @@
 
 ## Unreleased (0.9) – Transition, step 2: SA-AFT2019b
 
+- Saved-state files renamed (D56, D60). Backups are `<name>.backup_000100.npz`
+  and so on; the final state of every run is the backup with the last
+  iteration or step (`<name>.backup_000645.npz`), and `<name>.restart.npz` is
+  no longer written. Rolling files stay `<name>.restart_a/b.npz`. Old names
+  are still read. New commands: `pyaeroflow restart-info FILE [--json]` and
+  `pyaeroflow clean CASE` (inventory by default; `--restarts`, `--backup`,
+  `--fields`, `--history`, `--wall`, `--log`, `--all`; `--yes` deletes).
+
 - A restart also takes over the Newton–Krylov forcing term (the relative GMRES
   tolerance that the solver adapts to the residual reduction). Before, the
   first step after a restart used the tight default and solved the linear
