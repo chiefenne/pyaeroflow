@@ -357,8 +357,10 @@ baseline at this Reynolds number, not a predictor of the laminar bubble
 - Schäfer, M., Turek, S. (1996): Benchmark computations of laminar flow
   around a cylinder. In: Flow Simulation with High-Performance Computers
   II, Vieweg, 547–566.
-- NASA Langley Turbulence Modeling Resource (TMR), 2D zero-pressure-gradient
-  flat plate and 2D NACA 0012 airfoil cases, https://turbmodels.larc.nasa.gov.
+- Turbulence Modeling Resource (TMR, formerly hosted by NASA Langley), 2D
+  zero-pressure-gradient flat plate and 2D NACA 0012 airfoil cases,
+  https://tmbwg.github.io/turbmodels/ (source repository
+  github.com/TMBWG/turbmodels).
 - Ladson, C. L. (1988): Effects of independent variation of Mach and
   Reynolds numbers on the low-speed aerodynamic characteristics of the NACA
   0012 airfoil section. NASA TM 4074.
