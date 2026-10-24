@@ -515,7 +515,7 @@ def load_restart_state(path):
         step = int(data["step"])
         if "time" in data.files:
             state["time"] = float(data["time"])
-    for key in ("cfl", "cfl_cap", "elapsed", "vortex_gamma", "time_step"):
+    for key in ("cfl", "cfl_cap", "eta", "elapsed", "vortex_gamma", "time_step"):
         if key in state:
             state[key] = float(state[key])
     if "nk_on" in state:
@@ -1266,7 +1266,16 @@ def _log_setup(log, config, problem, scaling, mesh):
         log.section("Turbulence")
         tv = problem.turbulence_values
         rows = [("model", cfg["physics"]["turbulence"])]
-        rows += [(name, tv[name].report()) for name in tv]
+        restarted = cfg["initial"]["restart"] is not None
+        for name in tv:
+            if name == "initial" and restarted:
+                # The restart file overrides these; they only fill variables
+                # that the file lacks (see the notice on the initial state).
+                rows.append(
+                    (name, f"from the restart file (default {tv[name].report()})")
+                )
+            else:
+                rows.append((name, tv[name].report()))
         if cfg["physics"]["transition"]["mode"] == "prescribed":
             n_off = int(
                 np.count_nonzero(np.asarray(problem.geom.production_switch) == 0)
@@ -1305,6 +1314,8 @@ def _log_setup(log, config, problem, scaling, mesh):
         bcm = problem.model.transition == "bcm"
         aft_model = problem.model.transition == "aft"
         for name, v in tv.items():
+            if name == "initial" and restarted:
+                continue
             if aft_model:
                 if not 0.05 <= v.chi <= 0.5:
                     config.notices.append(

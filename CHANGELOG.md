@@ -2,6 +2,14 @@
 
 ## Unreleased (0.9) – Transition, step 2: SA-AFT2019b
 
+- A restart also takes over the Newton–Krylov forcing term (the relative GMRES
+  tolerance that the solver adapts to the residual reduction). Before, the
+  first step after a restart used the tight default and solved the linear
+  system far more accurately than the run before, so the residual dropped by
+  more than the iterations just before the restart (α 10 fine mesh: log R_p
+  −11.4 to −13.8 in one iteration). The initial turbulence values in the log
+  are marked as defaults when a restart file supplies the state. Restart files
+  of earlier versions start with the default forcing term.
 - Configurable field output (D59). `output.fields` selects the VTU cell
   fields by name (`"all"` for everything the case provides): vorticity,
   kinematic, eddy and effective viscosity, wall distance, the cell residuals

@@ -325,7 +325,10 @@ def solve_steady(
 
     nk_threshold = 10.0 ** (-s.nk_switch_residual_drop)
     cfl = float(resume.get("cfl", s.cfl_start))
-    eta = s.nk_linear_tolerance
+    # Forcing term of the Newton-Krylov steps: part of the state that a
+    # continuation takes over (restarted at the tight tolerance, the first step
+    # solves the linear system far more accurately than the run before did).
+    eta = float(resume.get("eta", s.nk_linear_tolerance))
     hist = {
         "iteration": [it0],
         "residual": [norm_abs],
@@ -352,6 +355,7 @@ def solve_steady(
             "cfl_cap": cfl_cap,
             "scale": scale.copy(),
             "nk_on": nk_on,
+            "eta": eta,
         }
 
     state["it"] = it0

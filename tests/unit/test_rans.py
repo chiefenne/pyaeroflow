@@ -405,3 +405,21 @@ def test_unsteady_gamma_diagnostics(tmp_path):
     assert "rnu_max" not in h.dtype.names
     assert (h["gamma_cells"] > 0).all() and (h["gamma_area"] > 0).all()
     assert (h["gamma_dmax"] >= 0).all() and (h["gamma_dmax"] <= 1).all()
+
+
+def test_restart_log_marks_the_initial_turbulence_values(tmp_path):
+    """With a restart file the initial turbulence values are not the start
+    values: the log says so instead of listing (and warning about) the defaults."""
+    _bcm_plate(tmp_path)
+    case = tmp_path / "plate.toml"
+    case.write_text(
+        case.read_text().replace(
+            '[initial]\nfrom_boundary = "left"',
+            '[initial]\nfrom_boundary = "left"\nrestart = "out/plate.restart.npz"',
+        )
+    )
+    run_case(case, console=False)
+    log = (tmp_path / "out" / "plate.log").read_text()
+    restarted = log[log.index("RESTART") :]
+    assert "initial     from the restart file (default " in restarted
+    assert "initial: nu_tilde/nu" not in restarted

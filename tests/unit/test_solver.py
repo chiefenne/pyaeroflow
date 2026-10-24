@@ -216,3 +216,32 @@ def test_unsteady_inner_iterations_use_limit_step():
     # 3 -> 2.75, then extrapolated to 2.5 and capped to 2.25.
     assert len(calls) == 2 and min(calls) > 0.25
     np.testing.assert_allclose(result.u, 2.25)
+
+
+def test_forcing_term_is_part_of_the_resume_state():
+    """A continuation takes over the Newton-Krylov forcing term (D58): restarted
+    at the tight default, its first step would solve the linear system far more
+    accurately than the run before did and the residual would jump."""
+    from scipy.sparse import identity
+
+    from pyaeroflow.solver import PseudoTimeSettings, solve_steady
+
+    def callback(it, u, residuals, cfl, accepted):
+        pass
+
+    settings = PseudoTimeSettings(max_iterations=5, newton_krylov=False)
+    for resume, expected in (
+        ({"iteration": 5, "eta": 0.3}, 0.3),
+        ({"iteration": 5}, settings.nk_linear_tolerance),
+    ):
+        callback.info = {}
+        solve_steady(
+            lambda u: u.copy(),
+            lambda u: identity(4, format="csc"),
+            lambda u, cfl: identity(4, format="csc") / cfl,
+            np.full((4, 1), 3.0),
+            settings,
+            callback=callback,
+            resume=resume,
+        )
+        assert callback.info["solver_state"]()["eta"] == expected

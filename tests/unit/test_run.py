@@ -316,6 +316,7 @@ def test_steady_restart_continues_the_run(case_dir):
     backup = out / "couette_test.restart_000005.npz"
     state = np.load(backup)
     assert int(state["step"]) == 5 and "state_cfl" in state.files
+    assert "state_eta" in state.files  # Newton-Krylov forcing term
     # Same case name and directory: the continuation appends.
     (case_dir / "couette.toml").write_text(_restart_toml(text, backup))
     second = run_case(case_dir / "couette.toml", console=False)
