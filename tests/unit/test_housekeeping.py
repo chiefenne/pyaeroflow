@@ -81,13 +81,13 @@ def test_clean_lists_by_default_and_deletes_by_category(run_dir, capsys):
     before = sorted(p.name for p in out.iterdir())
     assert main(["clean", case]) == 0  # nothing selected
     assert "nothing selected" in capsys.readouterr().out
-    assert main(["clean", case, "--backup", "--fields"]) == 0  # dry run
+    assert main(["clean", case, "--backups", "--fields"]) == 0  # dry run
     text = capsys.readouterr().out
     assert "dry run" in text and "would be deleted" in text
     assert sorted(p.name for p in out.iterdir()) == before
     found = case_files(out, "couette_test")
-    assert len(found["restarts"]) == 2 and len(found["backup"]) >= 2
-    assert main(["clean", case, "--backup", "--yes"]) == 0
+    assert len(found["restarts"]) == 2 and len(found["backups"]) >= 2
+    assert main(["clean", case, "--backups", "--yes"]) == 0
     assert not list(out.glob("*.backup_*.npz")) and (out / "couette_test.vtu").exists()
     assert (out / "couette_test.restart_a.npz").exists()
     assert main(["clean", case, "--restarts", "--fields", "--yes"]) == 0
@@ -112,7 +112,7 @@ def test_clean_takes_the_old_names_as_backups(run_dir):
     out = result.output_dir
     for name in ("couette_test.restart.npz", "couette_test.restart_000007.npz"):
         (out / name).write_bytes(b"")
-    found = case_files(out, "couette_test")["backup"]
+    found = case_files(out, "couette_test")["backups"]
     assert {"couette_test.restart.npz", "couette_test.restart_000007.npz"} <= {
         p.name for p in found
     }
@@ -123,8 +123,8 @@ def test_clean_a_polar_run(tmp_path):
     (tmp_path / "cyl.toml").write_text(POLAR)
     run_polar(tmp_path / "cyl.toml", [0.0, 5.0], console=False)
     out = tmp_path / "out"
-    assert len(case_files(out, "cyl")["backup"]) == 2  # one final state per angle
-    assert main(["clean", str(tmp_path / "cyl.toml"), "--backup", "--yes"]) == 0
+    assert len(case_files(out, "cyl")["backups"]) == 2  # one final state per angle
+    assert main(["clean", str(tmp_path / "cyl.toml"), "--backups", "--yes"]) == 0
     assert not list(out.glob("alpha_*/*.backup_*.npz"))
     assert (out / "cyl.polar.csv").exists()
     assert main(["clean", str(tmp_path / "cyl.toml"), "--all", "--yes"]) == 0

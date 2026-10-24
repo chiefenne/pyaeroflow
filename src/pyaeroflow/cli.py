@@ -44,7 +44,7 @@ def main(argv=None):
         "--restarts", action="store_true", help="rolling <name>.restart_a/b.npz"
     )
     clean.add_argument(
-        "--backup",
+        "--backups",
         action="store_true",
         help="<name>.backup_<n>.npz, including the final state of each run",
     )
@@ -121,7 +121,7 @@ def _clean(args):
         if key in chosen:
             total += size
     if not chosen:
-        print("nothing selected: add --restarts, --backup, --fields, --history,")
+        print("nothing selected: add --restarts, --backups, --fields, --history,")
         print("--wall, --log or --all (and --yes to delete)")
     elif args.yes:
         print(f"deleted {len(removed)} files")

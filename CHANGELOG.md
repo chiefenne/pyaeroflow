@@ -7,7 +7,7 @@
   iteration or step (`<name>.backup_000645.npz`), and `<name>.restart.npz` is
   no longer written. Rolling files stay `<name>.restart_a/b.npz`. Old names
   are still read. New commands: `pyaeroflow restart-info FILE [--json]` and
-  `pyaeroflow clean CASE` (inventory by default; `--restarts`, `--backup`,
+  `pyaeroflow clean CASE` (inventory by default; `--restarts`, `--backups`,
   `--fields`, `--history`, `--wall`, `--log`, `--all`; `--yes` deletes).
 
 - A restart also takes over the Newton–Krylov forcing term (the relative GMRES

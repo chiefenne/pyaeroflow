@@ -95,7 +95,7 @@ def restart_info(path):
 # ``{p}`` the case name or ``<case name>_alpha_<angle>`` of a polar run.
 CATEGORIES = {
     "restarts": (r"{p}\.restart_[ab]\.npz",),
-    "backup": (
+    "backups": (
         r"{p}\.backup_\d{{6}}\.npz",
         r"{p}\.restart_\d{{6}}\.npz",
         r"{p}\.restart\.npz",

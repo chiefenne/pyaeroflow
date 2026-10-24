@@ -415,12 +415,12 @@ All of them are valid `initial.restart` files. A polar run writes them in
 ```
 pyaeroflow restart-info out/case.backup_000645.npz [--json]
 pyaeroflow clean case.toml                      # inventory, nothing deleted
-pyaeroflow clean case.toml --backup --fields    # dry run of two categories
+pyaeroflow clean case.toml --backups --fields    # dry run of two categories
 pyaeroflow clean case.toml --log --history --yes
 pyaeroflow clean case.toml --all --yes          # everything the case wrote
 ```
 
-`clean` options: `--restarts`, `--backup`, `--fields`, `--history`, `--wall`,
+`clean` options: `--restarts`, `--backups`, `--fields`, `--history`, `--wall`,
 `--log`, `--all`; without `--yes` it only lists (D60).
 
 ## 6. Open questions
