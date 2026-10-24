@@ -10,11 +10,11 @@ from functools import partial
 import jax.numpy as jnp
 import numpy as np
 
-from pyaeroflow.numerics import build_geometry
-from pyaeroflow.numerics.wall_distance import mesh_wall_distance
+from pyaeroflow.numerics import build_geometry, lsq_gradient
+from pyaeroflow.numerics.wall_distance import mesh_wall_distance, mesh_wall_normal
 from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
-from pyaeroflow.physics import rans
+from pyaeroflow.physics import rans, rans_sst, sst
 from pyaeroflow.solver import (
     JacobianPattern,
     PseudoTimeSettings,
@@ -28,6 +28,26 @@ from pyaeroflow.solver import (
 
 PRESSURE_FIXING = {"pressure-outlet", "farfield", "total-pressure-inlet"}
 INFLOW_TYPES = {"velocity-inlet", "total-pressure-inlet", "farfield"}
+TURBULENCE_MODELS = ("sa-neg", "sst")
+# Default SST inflow of the Python API: Tu = 0.1 %, nu_t / nu = 1.
+SST_DEFAULT_INTENSITY = 0.001
+SST_DEFAULT_VISCOSITY_RATIO = 1.0
+# SU2's MAX_UPDATE_SST: an update may lower k or omega by at most this
+# fraction of the current value (the cell's turbulence update is scaled).
+SST_MAX_UPDATE = 0.99
+
+
+def sst_default_values(nu, speed):
+    """Default SST (k, omega) for the inflow speed (Tu 0.1 %, nu_t/nu = 1)."""
+    k = 1.5 * (SST_DEFAULT_INTENSITY * max(speed, 1e-12)) ** 2
+    return sst.freestream(SST_DEFAULT_VISCOSITY_RATIO, k, nu)
+
+
+def _inflow_speed(bc):
+    vel = bc.get("velocity")
+    if vel is None or callable(vel):
+        return 1.0
+    return float(np.hypot(*vel))
 
 
 class FarfieldVortex:
@@ -56,6 +76,35 @@ class FarfieldVortex:
         self.boundaries = boundaries
         self.relaxation = relaxation
         self.gamma = 0.0
+
+
+# The diagnostics count cells within this wall distance (non-dimensional,
+# chords): far from the wall Re_v = d^2 |omega| / nu is large and gamma flips
+# in the freestream, which would swamp the boundary-layer statistics.
+GAMMA_DIAGNOSTICS_DISTANCE = 0.05
+
+# Per-iteration transition diagnostics of :meth:`IncompressibleProblem.solve`:
+# cells with gamma > 0.01 (within GAMMA_DIAGNOSTICS_DISTANCE of a wall),
+# area-weighted sum of gamma, cells whose model
+# intermittency changed by more than 0.05 since the last accepted iteration,
+# the largest change and its cell centre (x, y), the largest |R_nu| and its
+# cell centre. Coordinates are non-dimensional (divided by the length scale).
+GAMMA_DIAGNOSTICS = (
+    "gamma_cells",
+    "gamma_area",
+    "gamma_jumped",
+    "gamma_dmax",
+    "gamma_dmax_x",
+    "gamma_dmax_y",
+    "rnu_max",
+    "rnu_max_x",
+    "rnu_max_y",
+)
+
+
+# The first six of them (no residual) are the per-time-step diagnostics of
+# unsteady runs, relative to the previous step.
+GAMMA_STEP_DIAGNOSTICS = GAMMA_DIAGNOSTICS[:6]
 
 
 class IncompressibleProblem:
@@ -120,18 +169,26 @@ class IncompressibleProblem:
         self.mesh = mesh
         self.turbulent = model.turbulence != "none"
         if self.turbulent:
-            if model.turbulence != "sa-neg":
+            if model.turbulence not in TURBULENCE_MODELS:
                 raise ValueError(f"unknown turbulence model '{model.turbulence}'")
             if model.viscosity <= 0.0:
                 raise ValueError("a turbulence model needs a positive viscosity")
-            # Default inflow value nu_tilde = 3 nu (NASA TMR, D33).
+            if model.turbulence == "sst" and model.transition != "none":
+                raise ValueError("transition models are available with SA only")
+            nu = model.viscosity / model.density
+            # Default inflow values: nu_tilde = 3 nu (NASA TMR, D33); SST
+            # k and omega from Tu = 0.1 %, nu_t / nu = 1.
+            defaults = {}
+            for name, bc in regular.items():
+                if bc["type"] not in INFLOW_TYPES:
+                    continue
+                if model.turbulence == "sst":
+                    k, om = sst_default_values(nu, _inflow_speed(bc))
+                    defaults[name] = {"k": k, "omega": om}
+                else:
+                    defaults[name] = {"nu_tilde": 3.0 * nu}
             regular = {
-                name: (
-                    {"nu_tilde": 3.0 * model.viscosity / model.density, **bc}
-                    if bc["type"] in INFLOW_TYPES
-                    else bc
-                )
-                for name, bc in regular.items()
+                name: {**defaults.get(name, {}), **bc} for name, bc in regular.items()
             }
         self.disc = build_geometry(
             mesh, weight_exponent, periodic, inc.lsq_include(regular, model.n_var)
@@ -152,7 +209,13 @@ class IncompressibleProblem:
                     self._production_switch(mesh, regular, laminar_regions or [])
                 ),
             )
+            if model.transition == "aft":
+                self.geom = self.geom._replace(
+                    wall_normal=jnp.asarray(mesh_wall_normal(mesh, nearest))
+                )
         self.bc = inc.boundary_data(self.disc, regular, model.density)
+        if model.turbulence == "sst":
+            self._set_wall_omega(model)
         self.conditions = regular
         self.periodic = periodic
         self.check_mass_balance()
@@ -169,10 +232,29 @@ class IncompressibleProblem:
             model = model._replace(pin=(cell, float(pin_pressure)))
             self.pinned_cell = cell
         self.model = model
-        self.physics = rans if self.turbulent else inc
+        self.physics = {"sa-neg": rans, "sst": rans_sst}.get(model.turbulence, inc)
         self._pattern = None  # Jacobian sparsity, built at the first assembly
         self._fi = partial(self.physics.interior_flux, model)
         self._fb = partial(self.physics.boundary_flux, model)
+
+    def _set_wall_omega(self, model):
+        """SST wall values: k = 0, omega = 60 nu / (beta_1 d1^2) per wall face.
+
+        d1 is the height of the wall cell, twice the wall-normal distance of
+        its centroid: on the same mesh points SU2 (vertex-based) uses the
+        distance from the wall node to its nearest neighbour, the first mesh
+        spacing. The skin friction depends on this choice (about 2 % lower
+        with d1 = the centroid distance, on the flat plate at every grid
+        level): the 1/y^2 profile of omega is not resolved by the wall cell.
+        """
+        nu = model.viscosity / model.density
+        delta, normal = np.asarray(self.geom.b_delta), np.asarray(self.geom.b_normal)
+        d1 = 2.0 * np.abs(np.einsum("fk,fk->f", delta, normal))
+        turb = np.array(self.bc.turbulence)
+        wall = np.asarray(self.bc.kind) == inc.WALL
+        turb[wall, 0] = 0.0
+        turb[wall, 1] = sst.wall_omega(nu, d1[wall])
+        self.bc = self.bc._replace(turbulence=jnp.asarray(turb))
 
     def _production_switch(self, mesh, conditions, regions):
         """1 where SA production is active, 0 in the laminar regions (D15).
@@ -241,17 +323,29 @@ class IncompressibleProblem:
         """Artificial compressibility beta^2 for the current state."""
         return inc.beta_squared(self.model, np.asarray(w)[:, :3], self.bc)
 
-    def residual(self, w, beta2, order=None, psi=None):
-        """R(w) for the current beta^2, spatial order and frozen limiter."""
+    def residual(self, w, beta2, order=None, psi=None, gamma=None):
+        """R(w) for the current beta^2, spatial order and frozen limiter.
+
+        ``gamma`` is a given transition intermittency (see :meth:`solve`).
+        """
         order = self.model.spatial_order if order is None else order
+        extra = {} if gamma is None else {"gamma": gamma}
         return np.asarray(
             self.physics.residual(
-                self.model, self.geom, self.bc, jnp.asarray(w), order, beta2, psi
+                self.model,
+                self.geom,
+                self.bc,
+                jnp.asarray(w),
+                order,
+                beta2,
+                psi,
+                **extra,
             )
         )
 
-    def jvp(self, w, dw, beta2, psi=None):
+    def jvp(self, w, dw, beta2, psi=None, gamma=None):
         """Exact dR/dw @ dw of the second-order residual (``jax.jvp``)."""
+        extra = {} if gamma is None else {"gamma": gamma}
         return np.asarray(
             self.physics.residual_jvp(
                 self.model,
@@ -262,6 +356,7 @@ class IncompressibleProblem:
                 self.model.spatial_order,
                 beta2,
                 psi,
+                **extra,
             )
         )
 
@@ -278,10 +373,22 @@ class IncompressibleProblem:
         """
         w = jnp.asarray(w)
         b_args = (self.bc.kind, self.bc.value)
+        f_args = ()
         mask = None
-        if self.turbulent:
+        if self.model.turbulence == "sst":
+            mu_f, dc_f, mu_b, dc_b = rans_sst.jacobian_coefficients(
+                self.model, self.geom, self.bc, w
+            )
+            b_args = b_args + (self.bc.turbulence, mu_b, dc_b)
+            f_args = (mu_f, dc_f)
+        elif self.turbulent:
             b_args = b_args + (self.bc.nu_tilde,)
-            mask = rans.SEGREGATED_MASK if self.model.coupling == "segregated" else None
+        if self.turbulent:
+            mask = (
+                rans.segregated_mask(self.model.n_var)
+                if self.model.coupling == "segregated"
+                else None
+            )
         if self._pattern is None:
             self._pattern = JacobianPattern(self.geom, self.model.n_var)
         j = first_order_jacobian(
@@ -293,10 +400,13 @@ class IncompressibleProblem:
             b_args=b_args,
             block_mask=mask,
             pattern=self._pattern,
+            f_args=f_args,
         )
         if self.turbulent:
             j = j + block_diagonal(
-                np.asarray(rans.source_blocks(self.model, self.geom, self.bc, w))
+                np.asarray(
+                    self.physics.source_blocks(self.model, self.geom, self.bc, w)
+                )
             )
         if self.model.pin is not None:
             j = replace_rows(j, [self.model.pin[0] * self.model.n_var + inc.P])
@@ -327,6 +437,15 @@ class IncompressibleProblem:
         return fz.wall_loads(
             self.model, self.geom, self.bc, jnp.asarray(w), self.physics.boundary_state
         )
+
+    def vorticity(self, w):
+        """Signed vorticity dv/dx - du/dy per cell (non-dimensional)."""
+        w = jnp.asarray(w)
+        w_b = self.physics.boundary_state(
+            self.bc, self.geom.b_normal, w[self.geom.b_owner]
+        )
+        grad = lsq_gradient(self.geom, w, w_b)
+        return np.asarray(grad[:, 2, 0] - grad[:, 1, 1])
 
     def intermittency(self, w):
         """Transition intermittency per cell (ones without a transition model)."""
@@ -359,7 +478,17 @@ class IncompressibleProblem:
         """Kinematic eddy viscosity per cell (zeros without a turbulence model)."""
         if not self.turbulent:
             return np.zeros(self.mesh.n_cells)
+        if self.model.turbulence == "sst":
+            return np.asarray(
+                rans_sst.eddy_viscosity(self.model, self.geom, self.bc, jnp.asarray(w))
+            )
         return np.asarray(rans.eddy_viscosity(self.model, jnp.asarray(w)))
+
+    def blending_f1(self, w):
+        """Menter's first SST blending function per cell (SST only)."""
+        return np.asarray(
+            rans_sst.blending_f1(self.model, self.geom, self.bc, jnp.asarray(w))
+        )
 
     def boundary_faces(self, names):
         """Boundary-face indices (``b_*`` order) of the named boundaries."""
@@ -429,6 +558,18 @@ class IncompressibleProblem:
         lift = -f.fx * direction[1] + f.fy * direction[0]
         gamma = lift / (self.model.density * speed)
         vortex.gamma += vortex.relaxation * (gamma - vortex.gamma)
+        self._set_vortex_values(vortex)
+
+    def restore_farfield_vortex(self, vortex, gamma):
+        """Set the circulation (e.g. from a restart file) and the farfield values."""
+        vortex.gamma = float(gamma)
+        self._set_vortex_values(vortex)
+
+    def _set_vortex_values(self, vortex):
+        """Farfield p, u, v of freestream plus the vortex of ``vortex.gamma``."""
+        base = vortex.base
+        u_inf = base[:, 1:3]
+        speed = np.hypot(u_inf[:, 0], u_inf[:, 1]).mean()
         r = vortex.offset
         r2 = np.sum(r**2, axis=1)
         coeff = vortex.gamma / (2.0 * np.pi * r2)
@@ -439,15 +580,29 @@ class IncompressibleProblem:
         value[vortex.faces, 1:3] = vel
         self.bc = self.bc._replace(value=jnp.asarray(value))
 
-    def initial_state(self, velocity=(0.0, 0.0), pressure=0.0, nu_tilde=None):
-        """Uniform initial field, shape (n_cells, n_var); nu_tilde default 3 nu."""
+    def initial_state(
+        self, velocity=(0.0, 0.0), pressure=0.0, nu_tilde=None, k_omega=None
+    ):
+        """Uniform initial field, shape (n_cells, n_var); nu_tilde default 3 nu.
+
+        The SA-AFT columns start at gamma_tilde = 0 and n = 0 (freestream).
+        SST takes ``k_omega`` = (k, omega); default Tu = 0.1 % of the given
+        velocity (or 1) and nu_t / nu = 1.
+        """
         w = np.zeros((self.mesh.n_cells, self.model.n_var))
         w[:, inc.P] = pressure
         w[:, inc.U] = velocity[0]
         w[:, inc.V] = velocity[1]
         if self.turbulent:
             nu = self.model.viscosity / self.model.density
-            w[:, rans.NT] = 3.0 * nu if nu_tilde is None else nu_tilde
+            if self.model.turbulence == "sst":
+                if k_omega is None:
+                    speed = float(np.hypot(*velocity)) or 1.0
+                    k_omega = sst_default_values(nu, speed)
+                w[:, rans_sst.NK] = k_omega[0]
+                w[:, rans_sst.NW] = k_omega[1]
+            else:
+                w[:, rans.NT] = 3.0 * nu if nu_tilde is None else nu_tilde
         return w
 
     def solve(
@@ -459,6 +614,10 @@ class IncompressibleProblem:
         freeze_limiter_after_residual_drop=None,
         vortex=None,
         release_limiter=False,
+        gamma_relaxation=None,
+        gamma_diagnostics=False,
+        nu_tilde_step_limit=None,
+        resume=None,
     ):
         """Implicit pseudo-time solution (D25, D35).
 
@@ -472,22 +631,84 @@ class IncompressibleProblem:
         (unlimited second order after a limited start-up): for smooth
         high-Reynolds-number flows the limiter only costs accuracy in the
         boundary layer once the transient has passed.
+
+        With ``gamma_relaxation`` = omega < 1 (transition model) the
+        intermittency in the residual is a lagged field, advanced after every
+        accepted iteration by gamma += omega (gamma_model(w) - gamma): a cell
+        crossing the onset threshold ramps its production on over about
+        1 / omega iterations instead of in one step. The converged state is
+        that of the unrelaxed model. ``gamma_diagnostics`` stores per-iteration
+        intermittency statistics (:data:`GAMMA_DIAGNOSTICS`) in the callback's
+        ``info["transition_diagnostics"]``.
+
+        With ``nu_tilde_step_limit`` = f every update of nu_tilde is capped
+        to f max(|nu_tilde|, nu) per cell before the line search (the
+        mean-flow update is untouched), as SU2 limits its turbulence
+        variable: a Newton step that multiplies nu_tilde in one boundary-layer
+        cell cannot pass as a small change of the overall residual norm.
+
+        ``resume`` is the state of an earlier run (the ``state`` of its result
+        or of a restart file, see :func:`pyaeroflow.run.load_restart_state`):
+        the solver state of :func:`solve_steady` plus the frozen or released
+        limiter ``psi``, the lagged intermittency ``gamma`` and the farfield
+        circulation ``vortex_gamma``. The result's ``state`` is the same
+        dictionary at the end of the run.
         """
         w0 = self.initial_state() if w0 is None else w0
-        state = {"beta2": self.beta2(w0), "psi": None}
+        resume = resume or {}
+        state = {"beta2": self.beta2(w0), "psi": None, "gamma": None, "model": None}
+        if resume.get("psi") is not None:
+            state["psi"] = jnp.asarray(resume["psi"])
+        if vortex is not None and resume.get("vortex_gamma") is not None:
+            self.restore_farfield_vortex(vortex, resume["vortex_gamma"])
+        relax = (
+            gamma_relaxation is not None
+            and gamma_relaxation < 1.0
+            and self.model.transition == "bcm"
+        )
+        track = relax or (gamma_diagnostics and self.model.transition != "none")
+        if track:
+            state["model"] = self.physics.intermittency_field(
+                self.model, self.geom, self.bc, jnp.asarray(w0)
+            )
+            if relax:
+                state["gamma"] = state["model"]
+                if resume.get("gamma") is not None:
+                    state["gamma"] = jnp.asarray(resume["gamma"])
         uses_limiter = self.model.limiter != "none" and self.model.spatial_order == 2
 
         def residual(w):
             state["beta2"] = self.beta2(w)
-            return self.residual(w, state["beta2"], psi=state["psi"])
+            return self.residual(
+                w, state["beta2"], psi=state["psi"], gamma=state["gamma"]
+            )
 
         def residual_startup(w):
             state["beta2"] = self.beta2(w)
-            return self.residual(w, state["beta2"], order=1)
+            return self.residual(w, state["beta2"], order=1, gamma=state["gamma"])
+
+        def transition_step(it, w):
+            """Advance the lagged intermittency, record the diagnostics."""
+            g_model = self.physics.intermittency_field(
+                self.model, self.geom, self.bc, jnp.asarray(w)
+            )
+            change = np.abs(np.asarray(g_model - state["model"]))
+            state["model"] = g_model
+            if relax and it > 0:
+                state["gamma"] = state["gamma"] + gamma_relaxation * (
+                    g_model - state["gamma"]
+                )
+                on_iteration.info["residual_changed"] = True
+            if gamma_diagnostics:
+                on_iteration.info["transition_diagnostics"] = self._gamma_diagnostics(
+                    w, g_model, change, state
+                )
 
         def on_iteration(it, w, residuals, cfl, accepted):
             if vortex is not None and accepted:
                 self.apply_farfield_vortex(vortex, w)
+            if track and accepted:
+                transition_step(it, w)
             if uses_limiter and state["psi"] is None and accepted:
                 # Orders of the per-equation convergence measure (D54), the
                 # same quantity that decides the Newton-Krylov switch.
@@ -519,7 +740,20 @@ class IncompressibleProblem:
         if callback is not None and not hasattr(callback, "info"):
             callback.info = on_iteration.info
 
-        return solve_steady(
+        def driver_state():
+            """Limiter, lagged intermittency and vortex of the live run."""
+            out = {}
+            if state["psi"] is not None:
+                out["psi"] = np.asarray(state["psi"])
+            if state["gamma"] is not None:
+                out["gamma"] = np.asarray(state["gamma"])
+            if vortex is not None:
+                out["vortex_gamma"] = vortex.gamma
+            return out
+
+        on_iteration.info["driver_state"] = driver_state
+
+        result = solve_steady(
             residual,
             lambda w: self.jacobian(w, state["beta2"]),
             lambda w, cfl: self.time_term(w, state["beta2"], cfl),
@@ -527,23 +761,138 @@ class IncompressibleProblem:
             settings or PseudoTimeSettings(),
             residual_startup=residual_startup,
             callback=on_iteration,
-            jvp=lambda w, dw: self.jvp(w, dw, state["beta2"], state["psi"]),
+            jvp=lambda w, dw: self.jvp(
+                w, dw, state["beta2"], state["psi"], state["gamma"]
+            ),
+            limit_step=self._step_limiter(nu_tilde_step_limit),
+            resume=resume,
+        )
+        return result._replace(state={**result.state, **driver_state()})
+
+    def _step_limiter(self, factor):
+        """Step limiter of the turbulence variables, or None.
+
+        SST always gets SU2's under-relaxation (:meth:`_sst_limiter`); SA the
+        nu_tilde cap of ``factor`` (None = no cap).
+        """
+        if self.model.turbulence == "sst":
+            return self._sst_limiter()
+        return self._nu_tilde_limiter(factor)
+
+    def _sst_limiter(self, max_update=SST_MAX_UPDATE):
+        """SU2's SST under-relaxation: k and omega stay positive.
+
+        Per cell the (k, omega) update is scaled by min(1, max_update /
+        ratio) with ratio the larger of |dk| / k and |domega| / omega, only
+        where the update lowers a variable (SU2 scales on any change; growth
+        is left to the line search here, so that the turbulence can develop
+        from a low freestream).
+        """
+        cols = [rans_sst.NK, rans_sst.NW]
+
+        def limit_step(u, du):
+            val = np.maximum(u[:, cols], 1e-300)
+            drop = np.maximum(-du[:, cols], 0.0) / val
+            ratio = drop.max(axis=1)
+            scale = np.minimum(1.0, max_update / np.maximum(ratio, 1e-300))
+            du = du.copy()
+            du[:, cols] *= scale[:, None]
+            return du
+
+        return limit_step
+
+    def _nu_tilde_limiter(self, factor):
+        """Step limiter capping the nu_tilde update to factor max(|nu_tilde|, nu).
+
+        Returns ``limit_step(u, du)``, or None without a cap or turbulence.
+        """
+        if factor is None or not self.turbulent:
+            return None
+        nu_floor = self.model.viscosity / self.model.density
+
+        def limit_step(u, du):
+            cap = factor * np.maximum(np.abs(u[:, rans.NT]), nu_floor)
+            du = du.copy()
+            du[:, rans.NT] = np.clip(du[:, rans.NT], -cap, cap)
+            return du
+
+        return limit_step
+
+    def _gamma_statistics(self, g_model, change):
+        """Return the first six :data:`GAMMA_DIAGNOSTICS` (near-wall cells only)."""
+        c, area = self.mesh.cell_centroid, self.mesh.cell_area
+        near = np.asarray(self.geom.wall_distance) < GAMMA_DIAGNOSTICS_DISTANCE
+        g = np.where(near, np.asarray(g_model), 0.0)
+        change = np.where(near, change, 0.0)
+        i = int(np.argmax(change))
+        return (
+            int(np.count_nonzero(g > 0.01)),
+            float(np.sum(g * area)),
+            int(np.count_nonzero(change > 0.05)),
+            float(change[i]),
+            float(c[i, 0]),
+            float(c[i, 1]),
+        )
+
+    def gamma_step_diagnostics(self, w, previous=None):
+        """Per-time-step intermittency statistics of an unsteady run.
+
+        Returns (values of :data:`GAMMA_STEP_DIAGNOSTICS`, model gamma of
+        ``w``); ``previous`` is the model gamma of the previous step (``None``:
+        no change is counted).
+        """
+        g = self.physics.intermittency_field(
+            self.model, self.geom, self.bc, jnp.asarray(w)
+        )
+        change = (
+            np.zeros(len(g)) if previous is None else np.abs(np.asarray(g - previous))
+        )
+        return self._gamma_statistics(g, change), g
+
+    def _gamma_diagnostics(self, w, g_model, change, state):
+        """Values of :data:`GAMMA_DIAGNOSTICS` for the accepted state ``w``."""
+        c = self.mesh.cell_centroid
+        near = np.asarray(self.geom.wall_distance) < GAMMA_DIAGNOSTICS_DISTANCE
+        r_nu = np.where(
+            near,
+            np.abs(
+                self.residual(
+                    w, state["beta2"], psi=state["psi"], gamma=state["gamma"]
+                )[:, rans.NT]
+            ),
+            0.0,
+        )
+        j = int(np.argmax(r_nu))
+        return self._gamma_statistics(g_model, change) + (
+            float(r_nu[j]),
+            float(c[j, 0]),
+            float(c[j, 1]),
         )
 
     def mass(self):
-        """Diagonal of the mass matrix: rho * area on u, v; area on nu_tilde."""
+        """Diagonal of the mass matrix: rho * area on u, v; area on turbulence."""
         area = np.asarray(self.geom.area)
         rho = self.model.density
-        diag = [0.0, rho, rho] + ([1.0] if self.turbulent else [])
+        diag = [0.0, rho, rho] + [1.0] * (self.model.n_var - 3)
         return area[:, None] * np.array(diag)
 
-    def solve_unsteady(self, w0, settings, callback=None, inner_callback=None):
+    def solve_unsteady(
+        self,
+        w0,
+        settings,
+        callback=None,
+        inner_callback=None,
+        nu_tilde_step_limit=None,
+        resume=None,
+    ):
         """Dual time stepping from ``w0`` to ``settings.end_time`` (D9, D37).
 
         Every time step solves the steady residual plus the BDF time term
         with the inner pseudo-time/Newton-Krylov iterations of
         ``settings.inner``; beta^2 follows the current state, the limiter is
-        not frozen.
+        not frozen. ``nu_tilde_step_limit`` caps every inner update of
+        nu_tilde as in :meth:`solve`. ``resume`` continues an earlier run
+        (``step`` and ``u_previous``, see :func:`solve_unsteady`).
         """
         state = {"beta2": self.beta2(w0)}
 
@@ -561,6 +910,8 @@ class IncompressibleProblem:
             callback=callback,
             inner_callback=inner_callback,
             jvp=lambda w, dw: self.jvp(w, dw, state["beta2"]),
+            limit_step=self._step_limiter(nu_tilde_step_limit),
+            resume=resume,
         )
 
     def solve_explicit(

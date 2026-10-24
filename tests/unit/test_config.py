@@ -59,7 +59,7 @@ def test_unknown_section_and_boundary_type():
 def test_planned_keys_are_named():
     msg = problems({**MINIMAL, "time": {"mode": "unsteady", "time_step": 0.1}})
     assert "time.end_time is required" in msg
-    raw = {**MINIMAL, "physics": {"model": "laminar", "turbulence": "sst"}}
+    raw = {**MINIMAL, "physics": {"model": "laminar", "turbulence": "kepsilon"}}
     assert "is not one of" in problems(raw)
 
 
@@ -72,6 +72,10 @@ def test_required_and_types():
     assert "numerics.spatial_order: 3 is not one of [1, 2]" in problems(raw)
     raw = {**MINIMAL, "initial": {"velocity": [1.0]}}
     assert "initial.velocity: expected array of two numbers" in problems(raw)
+    raw = {**MINIMAL, "output": {"restart_backup_at": [10, 2.5]}}
+    assert "output.restart_backup_at: expected array of integers" in problems(raw)
+    raw = {**MINIMAL, "output": {"restart_backup_at": [10, 0]}}
+    assert "output.restart_backup_at: must be >= 1" in problems(raw)
 
 
 def test_viscosity_xor_reynolds():

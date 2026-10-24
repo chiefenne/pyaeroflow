@@ -15,6 +15,7 @@ from pyaeroflow.config.schema import (
     TURBULENCE_FORMS,
     Opt,
 )
+from pyaeroflow.io.fields import Capabilities, resolve_fields
 
 PRESSURE_FIXING = {"pressure-outlet", "farfield", "total-pressure-inlet"}
 
@@ -261,8 +262,11 @@ def _transition_by_alpha(tr, boundaries, farfields, ref, problems):
     tr["laminar_region"] = regions
 
 
-def _turbulence_table(holder, dotted, problems):
-    """Check a turbulence table (D33): exactly one of the three forms."""
+def _turbulence_table(holder, dotted, problems, model="sa-neg"):
+    """Check a turbulence table (D33): exactly one of the three forms.
+
+    SST needs k: form b then needs ``intensity``, form c (nu_tilde) is SA only.
+    """
     table = holder.get("turbulence")
     if table is None:
         return
@@ -285,9 +289,21 @@ def _turbulence_table(holder, dotted, problems):
         "b": ("turbulent_viscosity_ratio",),
         "c": ("nu_tilde_ratio",),
     }[form]
+    if model == "sst":
+        if form == "c":
+            problems.append(
+                f"{dotted}: nu_tilde_ratio is for SA only; SST takes "
+                "{turbulent_viscosity_ratio, intensity} or {kinetic_energy, "
+                "length_scale}"
+            )
+        elif form == "b":
+            required = required + ("intensity",)
     for key in required:
         if key not in table:
-            problems.append(f"{dotted}: {key} is required")
+            problems.append(
+                f"{dotted}: {key} is required"
+                + (" with turbulence = sst" if key == "intensity" else "")
+            )
     for key, value in table.items():
         if not isinstance(value, int | float) or isinstance(value, bool) or value < 0:
             problems.append(f"{dotted}.{key}: expected a number >= 0, got {value!r}")
@@ -315,6 +331,10 @@ def _check_value(dotted, opt, value, problems):
         value = [float(v) for v in value] if ok else value
     elif opt.type == "string_list":
         ok = isinstance(value, list) and all(isinstance(v, str) for v in value)
+    elif opt.type == "int_list":
+        ok = isinstance(value, list) and all(
+            isinstance(v, int) and not isinstance(v, bool) for v in value
+        )
     elif opt.type == "table":
         ok = isinstance(value, dict)
     elif opt.type == "table_list":
@@ -323,6 +343,7 @@ def _check_value(dotted, opt, value, problems):
         kind = {
             "float2": "array of two numbers",
             "string_list": "array of strings",
+            "int_list": "array of integers",
             "table": "table",
             "table_list": "array of tables",
         }
@@ -333,7 +354,9 @@ def _check_value(dotted, opt, value, problems):
     if opt.choices and value not in opt.choices:
         problems.append(f"{dotted}: {value!r} is not one of {list(opt.choices)}")
     if opt.minimum is not None and (
-        value < opt.minimum if opt.type != "float2" else min(value) < opt.minimum
+        min(value, default=opt.minimum) < opt.minimum
+        if opt.type in ("float2", "int_list")
+        else value < opt.minimum
     ):
         problems.append(f"{dotted}: must be >= {opt.minimum}, got {value!r}")
     return value
@@ -400,10 +423,24 @@ def _consistency(data, explicit, problems, notices, path):
                 problems.append(f"{dotted}.side: must be 'upper' or 'lower'")
     elif tr["laminar_region"]:
         notices.append("physics.transition.laminar_region ignored: mode = none")
+    if data["output"]["transition_diagnostics"] and tr["model"] == "none":
+        problems.append("output.transition_diagnostics needs a transition model")
+    if not 0.0 < tr["relaxation"] <= 1.0:
+        problems.append("physics.transition.relaxation must be in (0, 1]")
+    elif tr["relaxation"] < 1.0:
+        if tr["model"] != "bcm":
+            problems.append("physics.transition.relaxation needs model = bcm")
+        if data["time"]["mode"] == "unsteady":
+            problems.append("physics.transition.relaxation is for steady runs only")
     if tr["model"] != "none":
         if not rans:
             problems.append("physics.transition.model needs physics.model = rans")
-        if tr["turbulence_intensity"] is None:
+        if tr["critical_amplification"] is not None and tr["model"] != "aft":
+            notices.append(
+                "physics.transition.critical_amplification ignored: model != aft"
+            )
+        given_n_crit = tr["model"] == "aft" and tr["critical_amplification"] is not None
+        if tr["turbulence_intensity"] is None and not given_n_crit:
             tu = [
                 b["turbulence"]["intensity"]
                 for b in boundaries.values()
@@ -417,14 +454,35 @@ def _consistency(data, explicit, problems, notices, path):
                     "physics.transition.turbulence_intensity is required for "
                     f"model = {tr['model']} (fraction, e.g. 0.001 = 0.1 %) unless an "
                     "inflow turbulence table gives intensity"
+                    + (
+                        " or critical_amplification is set"
+                        if tr["model"] == "aft"
+                        else ""
+                    )
                 )
     elif tr["turbulence_intensity"] is not None:
         notices.append("physics.transition.turbulence_intensity ignored: model = none")
+    if tr["model"] == "none" and tr["critical_amplification"] is not None:
+        notices.append(
+            "physics.transition.critical_amplification ignored: model = none"
+        )
+    if rans and physics["turbulence"] == "sst":
+        if tr["model"] != "none":
+            problems.append(
+                f"physics.transition.model = {tr['model']} needs turbulence = sa-neg "
+                "(the transition models are built on SA)"
+            )
+        if data["solver"]["nu_tilde_step_limit"] is not None:
+            notices.append(
+                "solver.nu_tilde_step_limit ignored with turbulence = sst (k and "
+                "omega updates are under-relaxed as in SU2)"
+            )
     if rans:
-        _turbulence_table(data["initial"], "initial", problems)
+        model = physics["turbulence"]
+        _turbulence_table(data["initial"], "initial", problems, model)
         for name, b in boundaries.items():
             if "turbulence" in b:
-                _turbulence_table(b, f"boundary.{name}", problems)
+                _turbulence_table(b, f"boundary.{name}", problems, model)
     else:
         for holder, dotted in [(data["initial"], "initial")] + [
             (b, f"boundary.{n}") for n, b in boundaries.items()
@@ -559,6 +617,20 @@ def _consistency(data, explicit, problems, notices, path):
 
     if data["output"]["formats"] and set(data["output"]["formats"]) - {"vtu"}:
         problems.append("output.formats: only 'vtu' is available")
+
+    # Field output (D59): `interval` is the older name of fields_interval.
+    out = data["output"]
+    if out["interval"]:
+        if out["fields_interval"] and out["fields_interval"] != out["interval"]:
+            problems.append(
+                "output.interval is the same as output.fields_interval: set only one"
+            )
+        out["fields_interval"] = out["interval"]
+    out["interval"] = out["fields_interval"]
+    out["fields"], field_problems = resolve_fields(
+        out["fields"], Capabilities.from_config(data)
+    )
+    problems += field_problems
 
 
 def _unknown(what, name, candidates):

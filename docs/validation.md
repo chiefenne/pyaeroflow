@@ -26,6 +26,7 @@ Click a case to jump to its section; each section ends with a link back here.
 | 6 | [NACA 0012, Re 6·10⁶](#sec-6) | validation | Ladson 1988, Gregory & O'Reilly 1970, NASA TMR | `examples/stage6_pyaero_validation.py` |
 | 7 (0.8) | [BCM transition, flat plate](#sec-7-plate) | verification/validation | Blasius, ERCOFTAC T3A | `tests/verification/test_rans_plate.py`, `pyaeroflow run examples/cases/flat_plate_transition.toml` |
 | 7 (0.8) | [BCM transition, Eppler 387](#sec-7-e387) | validation | McGhee, Walker & Millard 1988 (NASA TM 4062) | `pyaeroflow polar examples/cases/e387_transition.toml --alpha 4 6 8 2 0 -2` |
+| L2 (0.9) | [k-ω SST: flat plate, SD7003](#sec-9) | verification/validation | NASA TMR SST, LES/DNS, XFOIL, SA-AFT | `tests/verification/test_rans_plate.py::test_sst_turbulent_plate`, `pyaeroflow run examples/cases/sst_sd7003.toml` |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
 the scripts write) is not tracked.
@@ -250,6 +251,101 @@ keeps moving and the forces drift slowly (8°: C_D 0.019–0.035; −2°: a
 lower-surface transition appears at x = 0.15). Whether the discrete problem
 has no stable steady state there, or the linearisation with frozen
 intermittency (CHANGELOG 0.8) cannot reach it, is open.
+
+With SA-AFT2019b (`physics.transition.model = "aft"`, §8 and the E387 case
+`examples/cases/e387_aft.toml`) the converged α = 4° solution (632 iterations
+after a restart) has LS 0.430 and TR 0.622, against 0.428 and 0.619 from
+XFOIL at N_crit 8.15 and 0.40 / 0.62 from the oil flow. C_L = 0.809 lies
+0.023 above the Langley measurement and 0.026 below XFOIL. C_D = 0.0114 lies
+14 % below the Langley value, the same drag gap as the polar at α = 0–6°.
+The Penn State measurements of Somers & Maughmer (2007) at Tu ≈ 0.045 %
+give C_L = 0.762 and C_D = 0.0131 at 4° and agree with the oil flow to 0.03 c.
+Known discrepancy, not yet explained: the drag is 9–14 % below both
+experiments at α = −2 to 6°. Candidates, not tested: the thickened trailing
+edge of the model (0.5 % c, sharp in the mesh) and the 5-chord farfield with
+the point-vortex correction.
+
+[↑ back to table](#stage-table)
+
+## 8. SA-AFT2019b transition: flat plate
+
+`tests/verification/test_rans_plate.py::test_aft_transition_on_the_plate`.
+TMR plate domain, 48 × 12 × 48 cells, Re = 10⁶ per unit length, freestream
+ν̃/ν = 0.1, N_crit given directly. Reference: the e^N estimate for a Blasius
+layer (H12 = 2.59: Re_θ0 = 237 and dñ/dRe_θ = 0.0103 from the model's own
+correlations, Re_θ = 0.664 √Re_x), which is what the ñ equation integrates.
+
+| N_crit | e^N estimate Re_x | Onset Re_x (C_f leaves Blasius) | Iterations to machine zero |
+| --- | --- | --- | --- |
+| 3 | 6.3·10⁵ | about 6·10⁵ | 827 (4 min) |
+| 5 | 1.2·10⁶ | about 1.3·10⁶ | 1279 (3 min) |
+
+The laminar C_f is 5–20 % below Blasius on this coarse mesh (most near the
+leading edge), the turbulent C_f 0–12 % above the 0.0576 Re_x^−0.2
+correlation. γ
+is 1/c_3 = 0.02 in the laminar layer, as the γ̃ equation predicts. Unlike
+BCM, the Newton–Krylov iteration converges to machine zero with the exact
+JVP (nothing frozen); the F_crit step and the min/max of F_onset did not
+stall it here. The upstream-moving transition that Coder reports (thousands
+of iterations) was not seen: the pseudo-time CFL ramp reaches the Newton
+phase in a few hundred iterations. T3A-series and airfoil cases (E387,
+XFOIL comparison) are next.
+
+<a id="sec-9"></a>
+
+## 9. k-ω SST (SST-2003m)
+
+### Flat plate
+
+TMR 2DZP domain, Re_L = 5·10⁶, TMR SST freestream (k = 9·10⁻⁹ a² at
+M = 0.2, i.e. k = 2.25·10⁻⁷ U², ω = 125 U/L, μ_t/μ = 0.009), against the
+TMR SST values (`flatplate_sst.html`, SST-Vm, finest grid 545 × 385, mean of
+CFL3D and FUN3D: C_f(0.97) = 0.0026907, C_D = 0.0028488; on this plate
+SST-Vm and SST-2003m coincide, vorticity = strain rate):
+
+| mesh | cells | C_f(0.97) | C_D | y⁺ max | iterations |
+|---|---|---|---|---|---|
+| 48 × 48 | 2 880 | 0.002684 (−0.2 %) | 0.002869 (+0.7 %) | 0.64 | 153 |
+| 96 × 64 | 7 680 | 0.002684 (−0.2 %) | 0.002866 (+0.6 %) | 0.68 | 158 |
+| 192 × 96 | 23 040 | 0.002689 (−0.1 %) | 0.002864 (+0.5 %) | 0.74 | 181 |
+
+The solution is grid-converged. It depends on the wall value of ω, which a
+cell-centred scheme does not resolve (ω ~ 1/y²): with d₁ = the wall-cell
+height (the default, SU2's first mesh spacing on the same points) C_f(0.97)
+is 0.002689 (TMR 0.0026907), with d₁ = the centroid distance (ω_wall four
+times larger) 0.002630 at 192 × 96, about 2 % lower at every grid level: the
+TMR value confirms the wall-cell height.
+
+![SST flat plate](figures/sst_plate_cf.png)
+
+### SD7003, Re 6·10⁴, α = 4°
+
+O-grid (38 880 cells, 324 surface nodes, first spacing 1.2·10⁻⁴ c, farfield
+100 c with the point-vortex correction) around the SD7003 contour of the
+PyAero mesh of the AFT runs; SST freestream Tu = 0.1 %, ν_t/ν = 1; SA-neg
+with ν̃/ν = 3. SA-AFT values from the run on the PyAero C-mesh
+(`examples/cases/aft_sd7003.toml`), XFOIL 6.99 with N_crit 8.15.
+
+| | C_L | C_D | upper surface |
+|---|---|---|---|
+| SST | 0.575 | 0.0190 | laminar-like to x ≈ 0.3 (C_f minimum 0.0011), no separation, turbulent behind |
+| SA-neg (fully turbulent) | 0.583 | 0.0200 | turbulent from the leading edge |
+| SA-AFT, N_crit 8.15 | 0.592 | 0.0184 | bubble 0.231–0.644 |
+| XFOIL, N_crit 8.15 | 0.620 | 0.0188 | bubble 0.224–0.582, transition 0.550 |
+| LES/DNS/FR | 0.59–0.60 | 0.0196–0.0221 | bubble 0.20–0.24 to 0.60–0.665 |
+
+SST converges in 127 iterations (90 Newton–Krylov, 7 orders). With the low
+freestream k its production stays small in the laminar leading-edge flow
+and the boundary layer becomes turbulent around x = 0.3 without
+separating, so there is no laminar bubble and no pressure plateau; the
+lower side is turbulent throughout (C_f 0.004 at x = 0.5, XFOIL's laminar
+side 0.003). C_L is 3 % below SA-AFT and 7 % below XFOIL. The drag is
+close to XFOIL and AFT only because the turbulent lower side compensates
+the missing bubble: SST without a transition model is a fully turbulent
+baseline at this Reynolds number, not a predictor of the laminar bubble
+(that needs γ-Re_θ on SST, L3 step 4).
+
+![SST SD7003](figures/sst_sd7003_a4.png)
 
 [↑ back to table](#stage-table)
 

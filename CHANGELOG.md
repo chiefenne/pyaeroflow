@@ -1,7 +1,87 @@
 # Changelog
 
+## Unreleased (0.9) – Transition, step 2: SA-AFT2019b
+
+- k-ω SST turbulence model (D12, L2): `physics.turbulence = "sst"`, Menter's
+  SST-2003m with SU2's formulation and constants (strain-rate ν_t limiter,
+  production limiter, F1/F2 blending, cross diffusion, wall ω = 60ν/(β₁d₁²)).
+  Two transport equations for k and ω (5 unknowns per cell), exact
+  Newton–Krylov JVP, SU2's update under-relaxation. Turbulence tables give
+  k and ω (form b needs `intensity`; default Tu 0.1 %, ν_t/ν = 1). New VTU
+  fields `k`, `omega`, `blending_f1`, `residual_k`, `residual_omega`, and
+  `mu_t` for every RANS model; `nu_tilde` and `residual_nu_tilde` are SA
+  only. Flat plate: C_f(0.97) and C_D grid-converged, 0.1 % and 0.5 % from the
+  TMR SST values;
+  SD7003 comparison in `docs/validation.md` §9.
+
+- Saved-state files renamed (D56, D60). Backups are `<name>.backup_000100.npz`
+  and so on; the final state of every run is the backup with the last
+  iteration or step (`<name>.backup_000645.npz`), and `<name>.restart.npz` is
+  no longer written. Rolling files stay `<name>.restart_a/b.npz`. Old names
+  are still read. New commands: `pyaeroflow restart-info FILE [--json]` and
+  `pyaeroflow clean CASE` (inventory by default; `--restarts`, `--backups`,
+  `--fields`, `--history`, `--wall`, `--log`, `--all`; `--yes` deletes).
+
+- A restart also takes over the Newton–Krylov forcing term (the relative GMRES
+  tolerance that the solver adapts to the residual reduction). Before, the
+  first step after a restart used the tight default and solved the linear
+  system far more accurately than the run before, so the residual dropped by
+  more than the iterations just before the restart (α 10 fine mesh: log R_p
+  −11.4 to −13.8 in one iteration). The initial turbulence values in the log
+  are marked as defaults when a restart file supplies the state. Restart files
+  of earlier versions start with the default forcing term.
+- Configurable field output (D59). `output.fields` selects the VTU cell
+  fields by name (`"all"` for everything the case provides): vorticity,
+  kinematic, eddy and effective viscosity, wall distance, the cell residuals
+  per variable divided by the cell volume (steady, implicit), and the wall
+  fields `cf` (attached flow positive on every side), `cp_wall`,
+  `tau_wall_x`, `tau_wall_y` and `y_plus` in the wall cells (0 elsewhere), in
+  addition to the earlier fields. The schedule is `fields_interval` (the old
+  `interval` stays as an alias), `fields_at` (extra iterations or steps) and
+  `fields_final`; steady runs write a PVD series. The log header lists the
+  fields, the size of one file and the largest total size. The field table is
+  generated from `pyaeroflow.io.fields` and checked against
+  docs/configuration.md.
+- A restart now continues the run (D58). The restart files (rolling, backup
+  and final) store the iteration or time step, the time and the solver state:
+  CFL, per-variable residual peaks (the reference of `residual_drop`), the
+  Newton–Krylov switch, the frozen or released limiter, the lagged
+  intermittency, the farfield circulation and the wall time; unsteady runs
+  store the previous time level, so BDF2 continues at once. With
+  `initial.restart` the counting goes on (`max_iterations` and `end_time` are
+  totals, no repeated start-up phase), and a run with the same name and output
+  directory appends to its log (with a `RESTART` marker) and history CSV.
+  `pyaeroflow polar` keeps the solver state from angle to angle but starts the
+  counter and the residual reference again. Files from older versions start a
+  new run from their fields.
+- SA-AFT2019b transition model (Coder; NASA TMR `aft_transition_3eqn`):
+  `physics.transition.model = "aft"` adds transport equations for the
+  log-intermittency γ̃ and the amplification factor ñ (6 unknowns per cell).
+  N_crit from `turbulence_intensity` (Mack/Drela, 8.15 at 0.1 %) or directly
+  from the new `physics.transition.critical_amplification`. SA keeps its
+  production; f_t2 = 1.2 (1 − e^γ̃) is the only coupling. Exact JVP (nothing
+  frozen). Output: `intermittency` and `amplification_factor` in the VTU,
+  residual columns `gam` and `n`. A restart from a 4-column run starts the
+  new columns at 0. Needs ν̃/ν ≈ 0.1 in the freestream (notice otherwise).
+- Flat plate: transition at the e^N location (N_crit 3 and 5), converged to
+  machine zero (`docs/validation.md` §8).
+- `physics.transition.relaxation` is now BCM only.
+
 ## Unreleased (0.8) – Transition, step 1: SA-BCM
 
+- Restart files during a run: `output.restart_interval` writes two files
+  alternately (`<name>.restart_a.npz`, `<name>.restart_b.npz`), and
+  `output.restart_backup_interval` writes permanent numbered copies
+  (`<name>.restart_<number>.npz`), counted in iterations (steady) or time steps
+  (unsteady). All restart files are written through a temporary file and
+  carry the iteration or step (and the time of an unsteady run). The file at
+  the end of the run is unchanged. `output.restart_backup_at = [120, 147, 211]`
+  adds backups at the listed iterations or steps, on top of
+  `restart_backup_interval` or alone.
+- `solver.nu_tilde_step_limit` now also caps the inner Newton updates of an
+  unsteady (dual-time) run. `output.transition_diagnostics` also works in
+  unsteady runs: per time step, the near-wall γ statistics (columns
+  `gamma_cells` to `gamma_dmax_y`) in the history CSV.
 - Renamed from `aerojax` to `pyaeroflow`: repository
   github.com/chiefenne/pyaeroflow (the old URL redirects), package, import,
   command and conda environment, all lower case. PyAeroFlow is the written
@@ -26,6 +106,14 @@
   formula have unbounded slope (at onset and as ν_t → 0, dγ/d(ν_t/ν) ≈ 6500
   at ν_t/ν = 3·10⁻⁷), which made the E387 linear systems stiff (GMRES
   counts near 200) and the Newton steps erratic.
+- `physics.transition.relaxation` (ω in (0, 1], steady runs): the residual uses
+  a lagged BCM intermittency advanced by ω (γ_model − γ) per accepted
+  iteration, which turns the one-step R_ν jumps at the onset threshold (E387
+  α = 8 with SER: 2-order jumps every ~125 iterations) into a ramp. Same
+  converged state. `output.transition_diagnostics` adds γ statistics and the
+  location of the largest γ change and |R_ν| to the history CSV (near-wall
+  cells only). `solver.nu_tilde_step_limit` caps each Newton update of ν̃ per
+  cell relative to max(|ν̃|, ν) (off by default).
 - Verified on the TMR plate at Re_L = 5·10⁵: laminar at Tu 0.1 %, transition
   at Re_x = 1.2·10⁵ at Tu 3.3 % (T3A); `docs/validation.md` section 7,
   example `examples/cases/flat_plate_transition.toml`. The discrete problem

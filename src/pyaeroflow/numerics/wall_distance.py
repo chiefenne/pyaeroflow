@@ -13,15 +13,17 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 
-def segment_distance(points, a, b):
-    """Distance from ``points`` (n, 2) to the segments a-b, arrays (n, 2)."""
+def _foot(points, a, b):
     ab = b - a
     t = np.einsum("ij,ij->i", points - a, ab) / np.maximum(
         np.einsum("ij,ij->i", ab, ab), 1e-300
     )
-    t = np.clip(t, 0.0, 1.0)
-    foot = a + t[:, None] * ab
-    return np.linalg.norm(points - foot, axis=1)
+    return a + np.clip(t, 0.0, 1.0)[:, None] * ab
+
+
+def segment_distance(points, a, b):
+    """Distance from ``points`` (n, 2) to the segments a-b, arrays (n, 2)."""
+    return np.linalg.norm(points - _foot(points, a, b), axis=1)
 
 
 def wall_distance(points, segments, k=16):
@@ -58,3 +60,19 @@ def mesh_wall_distance(mesh, wall_faces, k=16):
     segments = mesh.nodes[mesh.face_nodes[faces]]  # (m, 2, 2)
     d, nearest = wall_distance(mesh.cell_centroid, segments, k)
     return d, np.where(nearest >= 0, faces[np.maximum(nearest, 0)], -1)
+
+
+def mesh_wall_normal(mesh, nearest):
+    """Return the unit gradient of the wall distance at the cell centroids.
+
+    ``nearest`` is the nearest wall face per cell (from
+    :func:`mesh_wall_distance`); the direction runs from the nearest wall
+    point to the centroid. Cells without a wall get zeros.
+    """
+    nearest = np.asarray(nearest)
+    seg = mesh.nodes[mesh.face_nodes[np.maximum(nearest, 0)]]
+    pts = mesh.cell_centroid
+    r = pts - _foot(pts, seg[:, 0], seg[:, 1])
+    length = np.linalg.norm(r, axis=1)
+    out = r / np.maximum(length, 1e-300)[:, None]
+    return np.where((nearest >= 0)[:, None] & (length > 0.0)[:, None], out, 0.0)

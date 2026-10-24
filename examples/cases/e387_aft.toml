@@ -1,0 +1,87 @@
+# Eppler 387 at Re = 2e5 with the SA-AFT2019b transition model (L3, step 2)
+# on the PyAero mesh examples/meshes/e387_pyaero_y1.su2 (C-type, 209k quads).
+# Same case as e387_transition.toml (BCM), see there for the mesh and the
+# NASA TM 4062 reference. N_crit = 8.15 from Tu = 0.1 % (Mack/Drela), the
+# value to use in XFOIL for the comparison; set
+# physics.transition.critical_amplification to fix N_crit directly (e.g. 9).
+# Six unknowns per cell: about 2x the BCM cost per iteration. Transition
+# can move upstream over many iterations (Coder 2019), hence the higher
+# iteration limit and the restart files.
+# Polar: pyaeroflow polar examples/cases/e387_aft.toml --alpha -2 0 2 4 6 8
+
+[case]
+name = "e387_aft"
+
+[mesh]
+file = "../meshes/e387_pyaero_y1.su2"   # boundary faces: airfoil, inlet, outlet, top, bottom
+
+[physics]
+model = "rans"
+turbulence = "sa-neg"
+
+[physics.transition]
+model = "aft"
+turbulence_intensity = 0.001      # fraction: 0.1 % (LTPT) -> N_crit = 8.15
+
+[fluid]
+density = 1.0                     # kg/m^3
+viscosity = 5.0e-6                # Pa s: Re = 2e5 with U = 1 m/s, c = 1 m
+
+[reference]
+velocity = 1.0                    # m/s
+length = 1.0                      # m, chord
+moment_center = [0.25, 0.0]       # m, quarter chord: also the vortex location
+vortex_correction = true
+
+[initial]
+from_boundary = "inlet"
+
+[boundary.airfoil]
+type = "wall"
+
+[boundary.inlet]
+type = "farfield"
+velocity = 1.0                    # m/s
+angle_of_attack = 4.0             # deg
+pressure = 0.0                    # Pa
+turbulence = { nu_tilde_ratio = 0.1 }   # laminar freestream (Coder: 0.1)
+
+[boundary.outlet]
+type = "farfield"
+velocity = 1.0
+angle_of_attack = 4.0
+pressure = 0.0
+turbulence = { nu_tilde_ratio = 0.1 }
+
+[boundary.top]
+type = "farfield"
+velocity = 1.0
+angle_of_attack = 4.0
+pressure = 0.0
+turbulence = { nu_tilde_ratio = 0.1 }
+
+[boundary.bottom]
+type = "farfield"
+velocity = 1.0
+angle_of_attack = 4.0
+pressure = 0.0
+turbulence = { nu_tilde_ratio = 0.1 }
+
+[numerics]
+limiter = "venkatakrishnan"       # local threshold for the start-up transient
+limiter_freeze = { after_residual_drop = 1.5, after_iterations = 40, release = true }
+
+[solver]
+residual_drop = 7.0
+max_iterations = 2000
+cfl = { control = "ser" }         # proportional SER, GMRES-modulated (D55)
+newton_krylov = { switch_at_residual_drop = 1.5, switch_at_iteration = 40 }
+# Intel MKL PARDISO: 3.5x faster factorization than the default SuperLU
+# ("direct"), needs the pypardiso package (conda install -c conda-forge
+# pypardiso); remove the line or set type = "direct" without it.
+linear_solver = { type = "pardiso" }
+
+[output]
+directory = "output/e387_aft"
+restart_interval = 50             # rolling restart_a / restart_b
+force_boundaries = ["airfoil"]

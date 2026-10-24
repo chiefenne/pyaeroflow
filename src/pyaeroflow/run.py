@@ -10,7 +10,9 @@ import copy
 import dataclasses
 import hashlib
 import math
+import os
 import tomllib
+from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
@@ -18,11 +20,28 @@ import numpy as np
 
 from pyaeroflow import __version__
 from pyaeroflow.config import Resolved, load_case, resolve
-from pyaeroflow.driver import INFLOW_TYPES, IncompressibleProblem
-from pyaeroflow.io import HistoryWriter, RunLog, StepHistoryWriter, write_pvd, write_vtu
+from pyaeroflow.driver import (
+    GAMMA_DIAGNOSTICS,
+    GAMMA_STEP_DIAGNOSTICS,
+    INFLOW_TYPES,
+    SST_DEFAULT_INTENSITY,
+    SST_DEFAULT_VISCOSITY_RATIO,
+    IncompressibleProblem,
+)
+from pyaeroflow.housekeeping import backup_name, latest_backup
+from pyaeroflow.io import (
+    HistoryWriter,
+    RunLog,
+    StepHistoryWriter,
+    estimate_vtu_bytes,
+    write_pvd,
+    write_vtu,
+)
+from pyaeroflow.io.fields import FieldContext, compute_fields, n_columns
 from pyaeroflow.mesh import Mesh, read_su2
 from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
+from pyaeroflow.physics import rans
 from pyaeroflow.physics import spalart_allmaras as sa
 from pyaeroflow.solver import DualTimeSettings, LinearSettings, PseudoTimeSettings
 
@@ -54,13 +73,15 @@ class RunResult(NamedTuple):
     mesh : Mesh
         The mesh in physical units.
     w : ndarray, shape (n_cells, 3)
-        (p, u, v) in physical units, plus nu_tilde (m^2/s) with a turbulence
-        model.
+        (p, u, v) in physical units, plus nu_tilde (m^2/s) with SA or k
+        (m^2/s^2) and omega (1/s) with SST.
     converged : bool
     history : dict
     output_dir : Path
     coefficients : Coefficients or None
         Final force coefficients over ``output.force_boundaries``.
+    restart_file : Path or None
+        The final backup ``<name>.backup_<iteration or step>.npz``.
     """
 
     config: Resolved
@@ -70,22 +91,28 @@ class RunResult(NamedTuple):
     history: dict
     output_dir: Path
     coefficients: object = None
+    restart_file: Path = None
 
 
 class TurbulenceValues(NamedTuple):
     """Equivalent turbulence values of one input table (D33), SI units."""
 
-    chi: float  # nu_tilde / nu
+    chi: float  # nu_tilde / nu (None for SST)
     viscosity_ratio: float  # nu_t / nu
     kinetic_energy: float = None  # m^2/s^2
     length_scale: float = None  # m
     intensity: float = None  # Tu as a fraction
+    omega: float = None  # 1/s (SST)
 
     def report(self):
         """Log line: equivalent values."""
-        text = f"nu_t/nu = {self.viscosity_ratio:.4g}, nu_tilde/nu = {self.chi:.4g}"
+        text = f"nu_t/nu = {self.viscosity_ratio:.4g}"
+        if self.chi is not None:
+            text += f", nu_tilde/nu = {self.chi:.4g}"
         if self.kinetic_energy is not None:
             text += f", k = {self.kinetic_energy:.4g} m^2/s^2"
+        if self.omega is not None:
+            text += f", omega = {self.omega:.4g} 1/s"
         if self.length_scale is not None:
             text += f", l = {self.length_scale:.4g} m"
         if self.intensity is not None:
@@ -93,7 +120,29 @@ class TurbulenceValues(NamedTuple):
         return text
 
 
-def turbulence_values(table, nu, velocity):
+def sst_turbulence_values(table, nu, velocity):
+    """Convert a turbulence table to SST's k and omega = k / nu_t (D33).
+
+    None gives the default Tu = 0.1 %, nu_t / nu = 1; form b needs the
+    intensity (checked with the configuration).
+    """
+    if table is None:
+        table = {
+            "turbulent_viscosity_ratio": SST_DEFAULT_VISCOSITY_RATIO,
+            "intensity": SST_DEFAULT_INTENSITY,
+        }
+    if "kinetic_energy" in table:
+        k, ell = table["kinetic_energy"], table["length_scale"]
+        ratio = table.get("c_mu", 0.09) ** 0.25 * math.sqrt(k) * ell / nu
+        tu = math.sqrt(2.0 * k / 3.0) / velocity if velocity > 0.0 else None
+    else:
+        ratio, tu, ell = table["turbulent_viscosity_ratio"], table["intensity"], None
+        k = 1.5 * (tu * velocity) ** 2
+    omega = k / (ratio * nu) if ratio > 0.0 else 0.0
+    return TurbulenceValues(None, ratio, k, ell, tu, omega)
+
+
+def turbulence_values(table, nu, velocity, model="sa-neg"):
     """Convert a turbulence table to the SA working variable (D33).
 
     Parameters
@@ -104,7 +153,11 @@ def turbulence_values(table, nu, velocity):
         Kinematic viscosity in m^2/s.
     velocity : float
         Local velocity magnitude in m/s (for Tu <-> k).
+    model : str
+        ``"sst"`` gives k and omega instead (:func:`sst_turbulence_values`).
     """
+    if model == "sst":
+        return sst_turbulence_values(table, nu, velocity)
     if table is None:
         chi = 3.0
         return TurbulenceValues(chi, float(sa.eddy_viscosity_ratio(chi)))
@@ -158,6 +211,7 @@ def setup(config, mesh=None):
         mu_nd = 1.0 / fluid["reynolds_number"]
     rho_nd = fluid["density"] / scaling.density
     rans = physics["model"] == "rans"
+    turb_model = physics["turbulence"] if rans else "none"
     nu_si = mu_nd * scaling.viscosity / fluid["density"]  # m^2/s
     turbulence = {}  # reported values per inflow boundary and "initial"
 
@@ -191,9 +245,9 @@ def setup(config, mesh=None):
                 speed = math.hypot(*b["velocity"])
             else:
                 speed = scaling.velocity
-            tv = turbulence_values(b.get("turbulence"), nu_si, speed)
+            tv = turbulence_values(b.get("turbulence"), nu_si, speed, turb_model)
             turbulence[name] = tv
-            entry["nu_tilde"] = tv.chi * mu_nd / rho_nd
+            entry.update(_turbulence_entry(tv, mu_nd, rho_nd, scaling))
         conditions[name] = entry
 
     num = cfg["numerics"]
@@ -217,6 +271,9 @@ def setup(config, mesh=None):
         coupling=cfg["solver"]["turbulence_coupling"],
         transition=physics["transition"]["model"] if rans else "none",
         turbulence_intensity=100.0 * (tr_cfg["turbulence_intensity"] or 0.0),
+        critical_amplification=(
+            tr_cfg["critical_amplification"] if tr_cfg["model"] == "aft" else None
+        ),
     )
     regions = None
     if rans and physics["transition"]["mode"] == "prescribed":
@@ -246,11 +303,13 @@ def setup(config, mesh=None):
     )
 
     init = cfg["initial"]
-    nu_tilde = None
+    nu_tilde = k_omega = None
     if init["from_boundary"] is not None:
         src = conditions[init["from_boundary"]]
         velocity, pressure = src["velocity"], src.get("pressure", 0.0)
         nu_tilde = src.get("nu_tilde")
+        if "k" in src:
+            k_omega = (src["k"], src["omega"])
         if rans and init["turbulence"] is None and init["from_boundary"] in turbulence:
             turbulence["initial"] = turbulence[init["from_boundary"]]
     elif init["velocity"] is not None:
@@ -260,10 +319,12 @@ def setup(config, mesh=None):
         velocity, pressure = (1.0, 0.0), init["pressure"] / scaling.pressure
     if rans and "initial" not in turbulence:
         speed = math.hypot(*velocity) * scaling.velocity
-        tv = turbulence_values(init["turbulence"], nu_si, speed)
+        tv = turbulence_values(init["turbulence"], nu_si, speed, turb_model)
         turbulence["initial"] = tv
-        nu_tilde = tv.chi * mu_nd / rho_nd
-    w0 = problem.initial_state(velocity, pressure, nu_tilde)
+        entry = _turbulence_entry(tv, mu_nd, rho_nd, scaling)
+        nu_tilde = entry.get("nu_tilde")
+        k_omega = (entry["k"], entry["omega"]) if "k" in entry else None
+    w0 = problem.initial_state(velocity, pressure, nu_tilde, k_omega)
     if init["restart"] is not None:
         restart = config.resolve_path(init["restart"])
         w0, n_read = load_restart(restart, mesh, w0)
@@ -280,37 +341,245 @@ def setup(config, mesh=None):
     return problem, scaling, w0, mesh
 
 
+def _turbulence_entry(tv, mu_nd, rho_nd, scaling):
+    """Non-dimensional turbulence values of a boundary or the initial state."""
+    if tv.chi is not None:
+        return {"nu_tilde": tv.chi * mu_nd / rho_nd}
+    return {
+        "k": tv.kinetic_energy / scaling.velocity**2,
+        "omega": tv.omega * scaling.length / scaling.velocity,
+    }
+
+
 def mesh_fingerprint(mesh):
     """Hash of the cell centroids: identifies a mesh for restart files."""
     data = np.ascontiguousarray(np.round(mesh.cell_centroid, 9))
     return hashlib.sha1(data.tobytes()).hexdigest()[:16]
 
 
-def save_restart(path, mesh, w_nd):
-    """Write the non-dimensional state and the mesh fingerprint (D45)."""
-    np.savez(
-        path,
-        w=np.asarray(w_nd),
-        fingerprint=mesh_fingerprint(mesh),
-        n_cells=mesh.n_cells,
-        version=__version__,
+def save_restart(path, mesh, w_nd, step=None, time=None, state=None):
+    """Write the non-dimensional state and the mesh fingerprint (D45).
+
+    The file is written next to ``path`` and renamed, so an interrupted write
+    never damages an existing restart file. ``step`` (iteration or time step)
+    and ``time`` (physical seconds, unsteady runs) are stored with the
+    ``state``: the solver state that a continuation needs (``kind`` "steady":
+    CFL, residual peaks, Newton-Krylov switch, limiter, farfield vortex;
+    "unsteady": the solution one step earlier and the time step), see
+    :func:`load_restart_state`.
+    """
+    path = Path(path)
+    extra = {}
+    if step is not None:
+        extra["step"] = step
+    if time is not None:
+        extra["time"] = time
+    for key, value in (state or {}).items():
+        if value is not None:
+            extra[f"state_{key}"] = np.asarray(value)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "wb") as file:
+        np.savez(
+            file,
+            w=np.asarray(w_nd),
+            fingerprint=mesh_fingerprint(mesh),
+            n_cells=mesh.n_cells,
+            version=__version__,
+            **extra,
+        )
+    os.replace(tmp, path)
+
+
+class RestartWriter:
+    """Restart and backup files written during a run (D56).
+
+    ``restart_interval`` = n writes ``<name>.restart_a.npz`` and
+    ``<name>.restart_b.npz`` alternately every n iterations (steady) or time
+    steps (unsteady); each write replaces the older of the two, so the newer
+    one is always complete. ``restart_backup_interval`` = m writes a backup
+    ``<name>.backup_<number>.npz`` that is never replaced, and
+    ``restart_backup_at`` adds such files at the listed iterations or steps.
+    A write that falls on a rejected iteration or a time step that hit the
+    inner limit waits for the next good one.
+    """
+
+    def __init__(self, out_dir, name, mesh, output, after=0, loaded=None):
+        self.out_dir, self.name, self.mesh = out_dir, name, mesh
+        self.every = output["restart_interval"]
+        self.backup = output["restart_backup_interval"]
+        self.backup_at = [
+            n for n in sorted(set(output.get("restart_backup_at") or [])) if n > after
+        ]
+        self.written = 1 if str(loaded).endswith(".restart_a.npz") else 0
+        self.buckets = {
+            "rolling": after // self.every if self.every else 0,
+            "backup": after // self.backup if self.backup else 0,
+        }
+
+    def __call__(self, number, w, good=True, time=None, state=None):
+        """Write the files that are due at iteration or step ``number``.
+
+        ``state`` (callable returning the dict of :func:`save_restart`) is
+        only evaluated when a file is written.
+        """
+        if not good:
+            return
+        if self.every and number // self.every > self.buckets["rolling"]:
+            self.buckets["rolling"] = number // self.every
+            file = f"{self.name}.restart_{'ab'[self.written % 2]}.npz"
+            self.written += 1
+            save_restart(
+                self.out_dir / file, self.mesh, w, number, time, state and state()
+            )
+        due = False
+        if self.backup and number // self.backup > self.buckets["backup"]:
+            self.buckets["backup"] = number // self.backup
+            due = True
+        if self.backup_at and self.backup_at[0] <= number:
+            self.backup_at = [n for n in self.backup_at if n > number]
+            due = True
+        if due:
+            file = backup_name(self.name, number)
+            save_restart(
+                self.out_dir / file, self.mesh, w, number, time, state and state()
+            )
+
+
+class FieldWriter:
+    """VTU field files written during a run (``output.fields_*``, D59).
+
+    ``fields_interval`` = n writes ``<name>_<number>.vtu`` every n iterations
+    (steady) or time steps (unsteady), ``fields_at`` adds files at the listed
+    numbers, ``fields_final`` the final ``<name>.vtu``. The schedule follows
+    :class:`RestartWriter`: a write that falls on a rejected iteration or a
+    time step that hit the inner limit waits for the next good one.
+    """
+
+    def __init__(self, out_dir, name, mesh, scaling, problem, monitor, output, after=0):
+        self.out_dir, self.name, self.mesh = out_dir, name, mesh
+        self.scaling, self.problem, self.monitor = scaling, problem, monitor
+        self.names = list(output["fields"])
+        self.every = output["fields_interval"]
+        self.final = output["fields_final"]
+        self.at = [n for n in sorted(set(output["fields_at"])) if n > after]
+        self.bucket = after // self.every if self.every else 0
+        self.last = None  # number of the latest series file
+
+    def write(self, path, w, cell_residual=None):
+        """Write the selected fields of the non-dimensional state ``w``."""
+        ctx = FieldContext(self.problem, w, self.scaling, self.monitor, cell_residual)
+        write_vtu(path, self.mesh, cell_data=compute_fields(self.names, ctx))
+
+    def due(self, number, good=True):
+        """Return True if a series file is due at ``number`` (updates the schedule)."""
+        if not good:
+            return False
+        due = False
+        if self.every and number // self.every > self.bucket:
+            self.bucket = number // self.every
+            due = True
+        if self.at and self.at[0] <= number:
+            self.at = [n for n in self.at if n > number]
+            due = True
+        return due
+
+    def series_file(self, number):
+        """Name of the series file of ``number`` (recorded as the latest)."""
+        self.last = number
+        return f"{self.name}_{number:06d}.vtu"
+
+    def write_pvd(self):
+        """Steady runs: collect the files of the series (also earlier runs)."""
+        pattern = f"{self.name}_[0-9][0-9][0-9][0-9][0-9][0-9].vtu"
+        files = sorted(self.out_dir.glob(pattern))
+        write_pvd(
+            self.out_dir / f"{self.name}.pvd",
+            [(int(f.stem.rsplit("_", 1)[1]), f.name) for f in files],
+        )
+
+
+def _field_rows(cfg, mesh):
+    """Build the configuration rows of the field output (fields, schedule, sizes)."""
+    out = cfg["output"]
+    names = out["fields"]
+    n_scalar, n_vector = n_columns(names)
+    size = estimate_vtu_bytes(mesh, n_scalar, n_vector)
+    unsteady = cfg["time"]["mode"] == "unsteady"
+    total = (
+        int(round(cfg["time"]["end_time"] / cfg["time"]["time_step"]))
+        if unsteady
+        else cfg["solver"]["max_iterations"]
     )
+    unit = "time steps" if unsteady else "iterations"
+    every, at = out["fields_interval"], sorted(set(out["fields_at"]))
+    parts, files = [], 0
+    if every:
+        parts.append(f"every {every} {unit}")
+        files += total // every
+    if at:
+        parts.append(f"at {', '.join(str(n) for n in at)}")
+        files += len([n for n in at if n <= total and (not every or n % every)])
+    if out["fields_final"]:
+        parts.append("final")
+        files += 1
+    schedule = ", ".join(parts) if parts else "none"
+    rows = [("field output", f"{len(names)} fields: {', '.join(names)}")]
+    rows.append(
+        (
+            "field files",
+            f"{size / 1e6:.1f} MB each; {schedule}; at most {files} files, "
+            f"{size * files / 1e6:.0f} MB",
+        )
+    )
+    return rows
 
 
 def load_restart(path, mesh, w_default):
     """Read a restart file for ``mesh``; missing variables keep ``w_default``.
 
     A laminar restart used for a RANS case keeps the default nu_tilde, a RANS
-    restart used for a laminar case drops it.
+    restart used for a laminar case drops it. The column count tells the
+    turbulence model (4 SA, 5 SST, 6 SA-AFT): between SST and SA only p, u, v
+    are taken over.
     """
     with np.load(path) as data:
         if str(data["fingerprint"]) != mesh_fingerprint(mesh):
             raise ValueError(f"restart file {path} belongs to a different mesh")
         w = np.array(data["w"], dtype=float)
     n = min(w.shape[1], w_default.shape[1])
+    if (w.shape[1] == 5) != (w_default.shape[1] == 5):
+        n = min(n, 3)
     w0 = np.array(w_default, dtype=float)
     w0[:, :n] = w[:, :n]
     return w0, n
+
+
+def load_restart_state(path):
+    """Solver state stored in a restart file, or None for an older file.
+
+    Returns the ``state`` of :func:`save_restart` with the iteration or time
+    step as ``iteration`` (steady) or ``step`` (unsteady) and the physical
+    ``time``: the ``resume`` argument of ``IncompressibleProblem.solve`` and
+    ``solve_unsteady``. A file written before the state was stored (no
+    ``state_*`` entries) gives None: the run then starts as a new run.
+    """
+    with np.load(path) as data:
+        keys = [k for k in data.files if k.startswith("state_")]
+        if not keys or "step" not in data.files:
+            return None
+        state = {k[6:]: np.array(data[k]) for k in keys}
+        step = int(data["step"])
+        if "time" in data.files:
+            state["time"] = float(data["time"])
+    for key in ("cfl", "cfl_cap", "eta", "elapsed", "vortex_gamma", "time_step"):
+        if key in state:
+            state[key] = float(state[key])
+    if "nk_on" in state:
+        state["nk_on"] = bool(state["nk_on"])
+    kind = str(state.pop("kind", "steady"))
+    state["kind"] = kind
+    state["step" if kind == "unsteady" else "iteration"] = step
+    return state
 
 
 def _display_path(path):
@@ -322,7 +591,55 @@ def _display_path(path):
         return str(path)
 
 
-def run_case(path, console=True, mesh=None):
+def _resume_state(config, scaling, restart_mode):
+    """Solver state to continue from ``initial.restart``, or None; notices appended.
+
+    ``restart_mode`` "continue" (the default of every run) continues the
+    run that wrote the file: iteration or time step, CFL, residual peaks,
+    Newton-Krylov switch, limiter and vortex, or the previous time level.
+    "state" (the next angle of a polar) takes over only the solver state of a
+    steady run (CFL, Newton-Krylov switch, limiter, vortex): the counter and
+    the residual reference start again. A file without stored state (older
+    version) or of the other kind (steady/unsteady) starts a new run.
+    """
+    cfg = config.data
+    if cfg["initial"]["restart"] is None:
+        return None
+    path = config.resolve_path(cfg["initial"]["restart"])
+    state = load_restart_state(path)
+    unsteady = cfg["time"]["mode"] == "unsteady"
+    if state is None:
+        config.notices.append(
+            "restart file has no solver state: new run from its fields"
+        )
+        return None
+    if (state["kind"] == "unsteady") != unsteady:
+        config.notices.append(
+            f"restart file is a {state['kind']} state: new run from its fields"
+        )
+        return None
+    if restart_mode == "state":
+        if unsteady:
+            return None
+        keys = ("cfl", "cfl_cap", "nk_on", "psi", "gamma", "vortex_gamma")
+        return {k: state[k] for k in keys if k in state}
+    if unsteady:
+        dt = cfg["time"]["time_step"] / (scaling.length / scaling.velocity)
+        if abs(state.get("time_step", dt) - dt) > 1e-9 * dt:
+            state.pop("u_previous", None)
+            config.notices.append(
+                "time step differs from the restart file: first step BDF1"
+            )
+        config.notices.append(
+            f"continuing after time step {state['step']} (t = {state['step'] * dt * scaling.length / scaling.velocity:.6g} s)"
+        )
+    else:
+        config.notices.append(f"continuing after iteration {state['iteration']}")
+    state["file"] = str(path)
+    return state
+
+
+def run_case(path, console=True, mesh=None, restart_mode="continue"):
     """Run a case file end to end and write the results.
 
     Parameters
@@ -333,6 +650,9 @@ def run_case(path, console=True, mesh=None):
         Echo the log to stdout.
     mesh : Mesh, optional
         Use this mesh instead of reading ``mesh.file`` (tests).
+    restart_mode : {"continue", "state"}
+        What a restart file (``initial.restart``) carries over, see
+        :func:`_resume_state`; ``run_polar`` uses "state".
 
     Returns
     -------
@@ -345,26 +665,76 @@ def run_case(path, console=True, mesh=None):
     name = config.name
     (out_dir / f"{name}.resolved.toml").write_text(config.to_toml())
 
-    with RunLog(out_dir / f"{name}.log", console) as log:
+    # The log and history of a continued run are appended to (D58): a restart
+    # that continues the counter writes one log from start to end.
+    log_path = out_dir / f"{name}.log"
+    problem, scaling, w0, mesh = setup(config, mesh)
+    resume = _resume_state(config, scaling, restart_mode)
+    continued = bool(resume) and ("iteration" in resume or "step" in resume)
+    with RunLog(
+        log_path,
+        console,
+        append=continued and log_path.exists(),
+        elapsed_offset=resume.get("elapsed", 0.0) if continued else 0.0,
+    ) as log:
+        if continued and log_path.exists() and log_path.stat().st_size:
+            number = resume.get("iteration", resume.get("step"))
+            log.write("")
+            log.write("=" * 100)
+            log.write(
+                f"RESTART {datetime.now():%Y-%m-%d %H:%M:%S}: continuing after "
+                f"{'iteration' if 'iteration' in resume else 'step'} {number} "
+                f"from {_display_path(resume['file'])}"
+            )
+            log.write("=" * 100)
         log.write(f"PyAeroFlow {__version__}: case '{name}' ({config.path})")
-        problem, scaling, w0, mesh = setup(config, mesh)
         _log_setup(log, config, problem, scaling, mesh)
 
         if cfg["time"]["mode"] == "unsteady":
             result, coefficients = _run_unsteady(
-                log, config, problem, scaling, w0, mesh, out_dir
+                log, config, problem, scaling, w0, mesh, out_dir, resume
             )
+            state = {
+                "kind": "unsteady",
+                "u_previous": result.u_previous,
+                "time_step": cfg["time"]["time_step"]
+                / (scaling.length / scaling.velocity),
+            }
+            n_steps = (
+                int(result.history["step"][-1])
+                if result.history["step"].size
+                else (resume or {}).get("step", 0)
+            )
+            t_phys = result.time * scaling.length / scaling.velocity
         else:
             result, coefficients = _run_steady(
-                log, config, problem, scaling, w0, mesh, out_dir
+                log, config, problem, scaling, w0, mesh, out_dir, resume
             )
-    save_restart(out_dir / f"{name}.restart.npz", mesh, result.u)
+            state = (
+                {"kind": "steady", **result.state, "elapsed": log.elapsed}
+                if result.state
+                else None
+            )
+            n_steps = int(result.history["iteration"][-1])
+            t_phys = None
+    restart_file = out_dir / backup_name(name, n_steps)  # the final backup (D56)
+    save_restart(restart_file, mesh, result.u, n_steps, t_phys, state)
     scale = [scaling.pressure, scaling.velocity, scaling.velocity]
-    if problem.turbulent:
+    if problem.model.turbulence == "sst":
+        scale += [scaling.velocity**2, scaling.velocity / scaling.length]
+    elif problem.turbulent:
         scale.append(scaling.viscosity / scaling.density)
+    scale += [1.0] * (problem.model.n_var - len(scale))  # AFT: dimensionless
     w = result.u * np.array(scale)
     return RunResult(
-        config, mesh, w, result.converged, result.history, out_dir, coefficients
+        config,
+        mesh,
+        w,
+        result.converged,
+        result.history,
+        out_dir,
+        coefficients,
+        restart_file,
     )
 
 
@@ -398,27 +768,68 @@ def _pseudo_time_settings(cfg):
     )
 
 
-def _run_steady(log, config, problem, scaling, w0, mesh, out_dir):
+def _residual_names(problem):
+    """Names of the residual columns in the log and history."""
+    names = ("p", "u", "v")
+    if problem.model.turbulence == "sst":
+        names += ("k", "om")
+    elif problem.turbulent:
+        names += ("nu",)
+    if problem.model.n_var == 6:
+        names += ("gam", "n")
+    return names
+
+
+def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     """Steady solve with one log line per pseudo-time iteration."""
     cfg = config.data
     name = config.name
-    names = ("p", "u", "v", "nu") if problem.turbulent else ("p", "u", "v")
+    names = _residual_names(problem)
     implicit = cfg["solver"]["method"] == "implicit"
     force_boundaries = cfg["output"]["force_boundaries"]
     monitor = Monitor(config, problem, scaling) if force_boundaries else None
     coeff_names = ("CL", "CD", "CM") if monitor else ()
-    history = HistoryWriter(out_dir / f"{name}.history.csv", names, coeff_names)
+    tr_cfg = cfg["physics"]["transition"]
+    diagnose = cfg["output"]["transition_diagnostics"]
+    after = (resume or {}).get("iteration")
+    history = HistoryWriter(
+        out_dir / f"{name}.history.csv",
+        names,
+        coeff_names,
+        GAMMA_DIAGNOSTICS if diagnose else (),
+        resume_after=after,
+    )
     extra_names = (("NK", "GMRES") if implicit else ()) + tuple(
         (c, 11) for c in coeff_names
     )
     log.iteration_header(names, extra_names)
-    interval = cfg["output"]["interval"]
+    fields = FieldWriter(
+        out_dir, name, mesh, scaling, problem, monitor, cfg["output"], after=after or 0
+    )
+    restarts = RestartWriter(
+        out_dir,
+        name,
+        mesh,
+        cfg["output"],
+        after=after or 0,
+        loaded=(resume or {}).get("file"),
+    )
 
     timing = {"setup": None}
+    offset = (resume or {}).get("elapsed", 0.0)  # wall time of the earlier runs
+
+    def restart_state():
+        info = callback.info
+        return {
+            "kind": "steady",
+            **info["solver_state"](),
+            **info["driver_state"](),
+            "elapsed": log.elapsed,
+        }
 
     def callback(it, w, residuals, cfl, accepted):
-        if it == 0:
-            timing["setup"] = log.elapsed
+        if timing["setup"] is None:
+            timing["setup"] = log.elapsed - offset
         info = callback.info
         nk, lin = info.get("newton_krylov", False), info.get("linear_iterations", 0)
         extra = ("NK" if nk else "", lin if lin else "") if implicit else ()
@@ -426,9 +837,23 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir):
         extra += tuple(f"{c:.5f}" for c in coeffs)
         drop = max(0.0, -np.log10(max(info.get("measure", 1.0), np.finfo(float).tiny)))
         log.iteration(it, residuals, cfl, accepted, extra, info.pop("note", ""), drop)
-        history.row(it, residuals, cfl, accepted, log.elapsed, nk, lin, coeffs)
-        if interval and it and it % interval == 0:
-            _write_fields(out_dir / f"{name}_{it:06d}.vtu", mesh, w, scaling, problem)
+        history.row(
+            it,
+            residuals,
+            cfl,
+            accepted,
+            log.elapsed,
+            nk,
+            lin,
+            coeffs,
+            info.pop("transition_diagnostics", ("",) * len(GAMMA_DIAGNOSTICS))
+            if diagnose
+            else (),
+        )
+        if fields.due(it, accepted):
+            fields.write(out_dir / fields.series_file(it), w, info.get("cell_residual"))
+            fields.write_pvd()
+        restarts(it, w, good=bool(accepted), state=restart_state)
 
     callback.info = {}
 
@@ -450,6 +875,10 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir):
             freeze_limiter_after_residual_drop=freeze["after_residual_drop"],
             vortex=vortex,
             release_limiter=freeze["release"],
+            gamma_relaxation=tr_cfg["relaxation"],
+            gamma_diagnostics=diagnose,
+            nu_tilde_step_limit=solver["nu_tilde_step_limit"],
+            resume=resume,
         )
     else:
         result = problem.solve_explicit(
@@ -460,8 +889,13 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir):
             callback=callback,
         )
     history.close()
+    if timing["setup"] is None:  # a restart that is converged already
+        timing["setup"] = log.elapsed - offset
 
-    _write_fields(out_dir / f"{name}.vtu", mesh, result.u, scaling, problem)
+    if fields.final:
+        fields.write(
+            out_dir / f"{name}.vtu", result.u, callback.info.get("cell_residual")
+        )
     h = result.history
     log.section("Summary")
     nk_steps = int(np.count_nonzero(h["newton_krylov"]))
@@ -476,7 +910,8 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir):
         ),
         ("setup and compilation", f"{timing['setup']:.1f} s"),
         ("wall time", f"{log.elapsed:.1f} s"),
-        ("fields", str(out_dir / f"{name}.vtu")),
+        *([("fields", str(out_dir / f"{name}.vtu"))] if fields.final else []),
+        *([("field series", str(out_dir / f"{name}.pvd"))] if fields.last else []),
         ("history", str(history.path)),
     ]
     coefficients = None
@@ -521,37 +956,72 @@ def _vortex_rows(vortex, scaling):
     return [("farfield vortex", f"circulation {gamma:.6g} m^2/s")]
 
 
-def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir):
+def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     """Dual time stepping with one log line per physical time step (D45)."""
     cfg = config.data
     name = config.name
     tm = cfg["time"]
     t_scale = scaling.length / scaling.velocity  # physical seconds per unit time
-    names = ("p", "u", "v", "nu") if problem.turbulent else ("p", "u", "v")
+    names = _residual_names(problem)
     force_boundaries = cfg["output"]["force_boundaries"]
     monitor = Monitor(config, problem, scaling) if force_boundaries else None
     coeff_names = ("CL", "CD", "CM") if monitor else ()
-    history = StepHistoryWriter(out_dir / f"{name}.history.csv", names, coeff_names)
+    diagnose = cfg["output"]["transition_diagnostics"]
+    after = (resume or {}).get("step")
+    history = StepHistoryWriter(
+        out_dir / f"{name}.history.csv",
+        names,
+        coeff_names,
+        GAMMA_STEP_DIAGNOSTICS if diagnose else (),
+        resume_after=after,
+    )
+    gamma = {"previous": None}
+    if diagnose:  # the first step is compared with the restart state
+        _, gamma["previous"] = problem.gamma_step_diagnostics(w0)
     detailed = cfg["output"]["verbosity"] == "detailed"
     log.step_header(names, ("GMRES",) + tuple((c, 11) for c in coeff_names))
-    interval = cfg["output"]["interval"]
     series = []
+    fields = FieldWriter(
+        out_dir, name, mesh, scaling, problem, monitor, cfg["output"], after=after or 0
+    )
+    restarts = RestartWriter(
+        out_dir,
+        name,
+        mesh,
+        cfg["output"],
+        after=after or 0,
+        loaded=(resume or {}).get("file"),
+    )
     timing = {"setup": None}
+    offset = (resume or {}).get("elapsed", 0.0)  # wall time of the earlier runs
+
+    def restart_state():
+        return {
+            "kind": "unsteady",
+            "u_previous": callback.info.get("u_previous"),
+            "time_step": callback.info["time_step"],
+            "elapsed": log.elapsed,
+        }
 
     def write_series(step, t, w):
-        file = f"{name}_{step:06d}.vtu"
-        _write_fields(out_dir / file, mesh, w, scaling, problem)
+        file = fields.series_file(step)
+        fields.write(out_dir / file, w)
         series.append((t * t_scale, file))
         write_pvd(out_dir / f"{name}.pvd", series)
 
     def callback(step, t, w, residuals, inner, drop, converged):
         if timing["setup"] is None:
-            timing["setup"] = log.elapsed
+            timing["setup"] = log.elapsed - offset
         lin = callback.info.get("linear_iterations", 0)
         coeffs = monitor.coefficients(w) if monitor else ()
         extra = (lin if lin else "",) + tuple(f"{c:.5f}" for c in coeffs)
         note = "" if converged else "inner limit"
         log.step(step, t * t_scale, inner, drop, residuals, extra, note)
+        stats = ()
+        if diagnose:
+            stats, gamma["previous"] = problem.gamma_step_diagnostics(
+                w, gamma["previous"]
+            )
         history.row(
             step,
             t * t_scale,
@@ -562,9 +1032,11 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir):
             lin,
             coeffs,
             log.elapsed,
+            stats,
         )
-        if interval and step % interval == 0:
+        if fields.due(step, converged):
             write_series(step, t, w)
+        restarts(step, w, good=bool(converged), time=t * t_scale, state=restart_state)
         if detailed:
             log.iteration_header(names, ("NK", "GMRES"))
             log.step_header(names, ("GMRES",) + tuple((c, 11) for c in coeff_names))
@@ -597,13 +1069,22 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir):
         settings,
         callback=callback,
         inner_callback=inner_callback if detailed else None,
+        nu_tilde_step_limit=cfg["solver"]["nu_tilde_step_limit"],
+        resume=resume,
     )
     history.close()
+    if timing["setup"] is None:  # a restart at the end time already
+        timing["setup"] = log.elapsed - offset
 
-    n_steps = int(result.history["step"][-1]) if result.history["step"].size else 0
-    if not interval or n_steps % interval:
-        write_series(n_steps, result.time, result.u)
-    _write_fields(out_dir / f"{name}.vtu", mesh, result.u, scaling, problem)
+    n_steps = (
+        int(result.history["step"][-1])
+        if result.history["step"].size
+        else (resume or {}).get("step", 0)
+    )
+    if fields.final:
+        if fields.last != n_steps:
+            write_series(n_steps, result.time, result.u)
+        fields.write(out_dir / f"{name}.vtu", result.u)
     h = result.history
     log.section("Summary")
     rows = [
@@ -613,8 +1094,8 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir):
         ("steps at inner limit", str(int(np.count_nonzero(~h["converged"])))),
         ("setup and compilation", f"{timing['setup']:.1f} s"),
         ("wall time", f"{log.elapsed:.1f} s"),
-        ("fields", str(out_dir / f"{name}.vtu")),
-        ("field series", str(out_dir / f"{name}.pvd")),
+        *([("fields", str(out_dir / f"{name}.vtu"))] if fields.final else []),
+        *([("field series", str(out_dir / f"{name}.pvd"))] if series else []),
         ("history", str(history.path)),
     ]
     coefficients = None
@@ -736,25 +1217,6 @@ def _scaled_mesh(mesh, factor):
     return Mesh.from_cells(mesh.nodes * factor, cells, boundary)
 
 
-def _write_fields(path, mesh, w_nd, scaling, problem=None):
-    p = w_nd[:, 0] * scaling.pressure
-    vel = w_nd[:, 1:3] * scaling.velocity
-    data = {
-        "pressure": p,
-        "velocity": vel,
-        "velocity_magnitude": np.hypot(vel[:, 0], vel[:, 1]),
-    }
-    if problem is not None and problem.turbulent:
-        nu_scale = scaling.viscosity / scaling.density  # m^2/s
-        data["nu_tilde"] = w_nd[:, 3] * nu_scale
-        data["eddy_viscosity_ratio"] = problem.eddy_viscosity(w_nd) / (
-            problem.model.viscosity / problem.model.density
-        )
-        if problem.model.transition != "none":
-            data["intermittency"] = problem.intermittency(w_nd)
-    write_vtu(path, mesh, cell_data=data)
-
-
 def _mode_rows(cfg):
     """Build the configuration rows for the time mode and iteration control."""
     solver, tm, num = cfg["solver"], cfg["time"], cfg["numerics"]
@@ -803,6 +1265,19 @@ def _mode_rows(cfg):
             rows.append(("Newton-Krylov", when))
         else:
             rows.append(("Newton-Krylov", "off"))
+    if (
+        solver["nu_tilde_step_limit"] is not None
+        and cfg["physics"]["turbulence"] != "sst"
+        and (unsteady or solver["method"] == "implicit")
+    ):
+        rows.append(
+            (
+                "nu_tilde step",
+                f"capped at {solver['nu_tilde_step_limit']:g} x "
+                "max(|nu_tilde|, nu) per cell"
+                + (" (inner iterations)" if unsteady else ""),
+            )
+        )
     if num["first_order_iterations"]:
         n_first = num["first_order_iterations"]
         rows.append(("first-order start-up", f"{n_first} iterations"))
@@ -847,6 +1322,7 @@ def _log_setup(log, config, problem, scaling, mesh):
         ("solver", cfg["solver"]["method"]),
     ]
     rows += _mode_rows(cfg)
+    rows += _field_rows(cfg, mesh)
     rows.append(("resolved configuration", f"{config.name}.resolved.toml"))
     log.table(rows)
     log.section("Mesh")
@@ -858,13 +1334,35 @@ def _log_setup(log, config, problem, scaling, mesh):
         log.section("Turbulence")
         tv = problem.turbulence_values
         rows = [("model", cfg["physics"]["turbulence"])]
-        rows += [(name, tv[name].report()) for name in tv]
+        restarted = cfg["initial"]["restart"] is not None
+        for name in tv:
+            if name == "initial" and restarted:
+                # The restart file overrides these; they only fill variables
+                # that the file lacks (see the notice on the initial state).
+                rows.append(
+                    (name, f"from the restart file (default {tv[name].report()})")
+                )
+            else:
+                rows.append((name, tv[name].report()))
         if cfg["physics"]["transition"]["mode"] == "prescribed":
             n_off = int(
                 np.count_nonzero(np.asarray(problem.geom.production_switch) == 0)
             )
-            rows.append(("laminar regions", f"{n_off} cells without SA production"))
-        if problem.model.transition != "none":
+            rows.append(
+                ("laminar regions", f"{n_off} cells without turbulence production")
+            )
+        if problem.model.transition == "aft":
+            tu = problem.model.turbulence_intensity
+            n_crit = rans.critical_amplification(problem.model)
+            given = problem.model.critical_amplification is not None
+            rows.append(
+                (
+                    "transition",
+                    f"aft (SA-AFT2019b), N_crit = {n_crit:.3g}"
+                    + (" (given)" if given else f" from Tu = {tu:.3g} %"),
+                )
+            )
+        elif problem.model.transition != "none":
             tu = problem.model.turbulence_intensity
             re_theta_t = 803.73 * (tu + 0.6067) ** (-1.027)
             rows.append(
@@ -874,10 +1372,27 @@ def _log_setup(log, config, problem, scaling, mesh):
                     f"Re_theta_t = {re_theta_t:.0f}",
                 )
             )
+            omega = config["physics"]["transition"]["relaxation"]
+            if omega < 1.0:
+                rows.append(
+                    (
+                        "intermittency",
+                        f"under-relaxed, omega = {omega:g} (steady runs)",
+                    )
+                )
         log.table(rows)
         bcm = problem.model.transition == "bcm"
+        aft_model = problem.model.transition == "aft"
         for name, v in tv.items():
-            if bcm and v.chi > 0.5:
+            if (name == "initial" and restarted) or v.chi is None:
+                continue
+            if aft_model:
+                if not 0.05 <= v.chi <= 0.5:
+                    config.notices.append(
+                        f"{name}: nu_tilde/nu = {v.chi:.3g}; SA-AFT recommends about "
+                        "0.1 in the freestream (Coder 2019)"
+                    )
+            elif bcm and v.chi > 0.5:
                 config.notices.append(
                     f"{name}: nu_tilde/nu = {v.chi:.3g} with the BCM transition model: "
                     "its second term reads eddy viscosity as turbulence (nu_tilde/nu "
@@ -942,8 +1457,8 @@ def run_polar(path, angles, console=True):
         if previous is not None:
             case.setdefault("initial", {})["restart"] = str(previous)
         config = resolve(case, path)
-        result = run_case(config, console=console)
-        previous = result.output_dir / f"{config.name}.restart.npz"
+        result = run_case(config, console=console, restart_mode="state")
+        previous = result.restart_file
         c = result.coefficients
         rows = [r for r in rows if abs(r[0] - alpha) > 1e-9]
         rows.append(
@@ -981,7 +1496,7 @@ def _read_polar(path):
 
 
 def _nearest_restart(out_dir, name, alpha):
-    """Restart file of the previously computed angle nearest to ``alpha``.
+    """Newest backup of the previously computed angle nearest to ``alpha``.
 
     On a tie the lower angle wins (continuation upwards, as the restart
     chain of a polar is built); the angle itself is never a candidate.
@@ -992,8 +1507,8 @@ def _nearest_restart(out_dir, name, alpha):
             a = float(d.name[6:])
         except ValueError:
             continue
-        file = d / f"{name}_alpha_{a:g}.restart.npz"
-        if not file.exists() or a == alpha:
+        file = latest_backup(d, f"{name}_alpha_{a:g}")
+        if file is None or a == alpha:
             continue
         rank = (abs(a - alpha), a > alpha)
         if best is None or rank < best[0]:

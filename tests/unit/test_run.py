@@ -147,14 +147,15 @@ def test_run_case_unsteady_couette(tmp_path):
 def test_restart_file_round_trip(case_dir):
     """A restart from the converged state converges at once (D45)."""
     first = run_case(case_dir / "couette.toml", console=False)
-    restart = first.output_dir / "couette_test.restart.npz"
-    assert restart.exists()
+    restart = first.restart_file
+    assert restart.exists() and restart.name.startswith("couette_test.backup_0")
     text = COUETTE.replace('name = "couette_test"', 'name = "couette_restart"').replace(
         "[initial]\nvelocity = [0.0, 0.0]", f'[initial]\nrestart = "{restart}"'
     )
     (case_dir / "restart.toml").write_text(text)
     second = run_case(case_dir / "restart.toml", console=False)
-    assert second.converged and second.history["iteration"][-1] <= 5
+    assert second.converged
+    assert second.history["iteration"][-1] == first.history["iteration"][-1]
     log = (second.output_dir / "couette_restart.log").read_text()
     assert "initial state from restart file" in log and restart.name in log
     np.testing.assert_allclose(second.w, first.w, atol=1e-9)
@@ -194,9 +195,190 @@ def test_polar_runs_a_restart_chain(tmp_path):
     (tmp_path / "cyl.toml").write_text(POLAR)
     results = run_polar(tmp_path / "cyl.toml", [0.0, 5.0], console=False)
     assert len(results) == 2 and all(r.converged for r in results)
-    assert (tmp_path / "out" / "alpha_5" / "cyl_alpha_5.restart.npz").exists()
+    assert results[1].restart_file.parent == tmp_path / "out" / "alpha_5"
+    assert results[1].restart_file.name.startswith("cyl_alpha_5.backup_0")
     polar = np.genfromtxt(tmp_path / "out" / "cyl.polar.csv", delimiter=",", names=True)
     assert list(polar["alpha"]) == [0.0, 5.0]
     # Lift of a cylinder vanishes at every angle; the second run restarted.
     assert abs(polar["CL"]).max() < 5e-3
     assert main(["polar", str(tmp_path / "cyl.toml"), "--alpha", "0", "--quiet"]) == 0
+
+
+def test_rolling_and_backup_restart_files(case_dir):
+    """Rolling files alternate, backups stay, a restart from either one works."""
+    text = COUETTE.replace(
+        'directory = "out"',
+        'directory = "out"\nrestart_interval = 3\nrestart_backup_interval = 5',
+    )
+    (case_dir / "rolling.toml").write_text(text)
+    first = run_case(case_dir / "rolling.toml", console=False)
+    out = first.output_dir
+    n = int(first.history["iteration"][-1])
+    assert n >= 10, "the case must run long enough for two writes of each file"
+    for name in ("a", "b"):
+        assert (out / f"couette_test.restart_{name}.npz").exists()
+    backups = sorted(out.glob("couette_test.backup_0*.npz"))
+    # every 5th iteration and the final state (the file the run stopped at)
+    assert [b.name for b in backups] == [
+        f"couette_test.backup_{k:06d}.npz"
+        for k in sorted({*range(5, n + 1, 5), n})
+    ]
+    assert not (out / "couette_test.restart.npz").exists()
+    assert not list(out.glob("*.tmp"))
+    steps = {
+        name: int(np.load(out / f"couette_test.restart_{name}.npz")["step"])
+        for name in ("a", "b")
+    }
+    assert max(steps.values()) % 3 == 0 and abs(steps["a"] - steps["b"]) == 3
+    newest = out / f"couette_test.restart_{'ab'[steps['b'] > steps['a']]}.npz"
+    text = COUETTE.replace('name = "couette_test"', 'name = "couette_again"').replace(
+        "[initial]\nvelocity = [0.0, 0.0]", f'[initial]\nrestart = "{newest}"'
+    )
+    (case_dir / "again.toml").write_text(text)
+    second = run_case(case_dir / "again.toml", console=False)
+    # The restart continues the counter of the run that wrote the file.
+    assert second.converged and second.history["iteration"][0] == max(steps.values())
+    assert second.history["iteration"][-1] == n
+
+
+def test_restart_files_unsteady(tmp_path):
+    mesh = rectangle(4, 32, x=(0.0, 1.0), y=(0.0, 0.5), cell_type="quad")
+    write_su2(tmp_path / "channel.su2", mesh)
+    (tmp_path / "couette.toml").write_text(
+        UNSTEADY.replace(
+            'directory = "out"',
+            'directory = "out"\nrestart_interval = 4\nrestart_backup_interval = 6',
+        )
+    )
+    out = run_case(tmp_path / "couette.toml", console=False).output_dir
+    a = np.load(out / "couette_unsteady.restart_a.npz")
+    b = np.load(out / "couette_unsteady.restart_b.npz")
+    assert (int(a["step"]), int(b["step"])) == (4, 8)
+    assert float(b["time"]) == pytest.approx(0.4)
+    assert (out / "couette_unsteady.backup_000006.npz").exists()
+    assert not (out / "couette_unsteady.backup_000012.npz").exists()
+    assert (out / "couette_unsteady.backup_000010.npz").exists()  # final state
+
+
+def test_restart_backup_at_listed_steps(tmp_path):
+    """restart_backup_at adds backups to the interval ones, or works alone."""
+    mesh = rectangle(4, 32, x=(0.0, 1.0), y=(0.0, 0.5), cell_type="quad")
+    write_su2(tmp_path / "channel.su2", mesh)
+    for name, keys, expected in (
+        (
+            "both",
+            "restart_backup_interval = 4\nrestart_backup_at = [3, 4, 9, 50]",
+            [3, 4, 8, 9],
+        ),
+        ("alone", "restart_backup_at = [7, 2]", [2, 7]),
+    ):
+        text = UNSTEADY.replace(
+            'name = "couette_unsteady"', f'name = "{name}"'
+        ).replace('directory = "out"', f'directory = "out"\n{keys}')
+        (tmp_path / f"{name}.toml").write_text(text)
+        out = run_case(tmp_path / f"{name}.toml", console=False).output_dir
+        files = sorted(p.name for p in out.glob(f"{name}.backup_0*.npz"))
+        # the listed ones, and the final state of the run (step 10)
+        assert files == [f"{name}.backup_{k:06d}.npz" for k in [*expected, 10]]
+        assert not (out / f"{name}.restart_a.npz").exists()
+
+
+def test_restart_backup_at_waits_for_a_good_step(tmp_path):
+    """A listed backup on a bad iteration is written at the next good one."""
+    from pyaeroflow.run import RestartWriter
+
+    mesh = rectangle(2, 2)
+    output = {
+        "restart_interval": 0,
+        "restart_backup_interval": 0,
+        "restart_backup_at": [3, 5],
+    }
+    writer = RestartWriter(tmp_path, "c", mesh, output)
+    w = np.zeros((mesh.n_cells, 3))
+    for n, good in ((1, True), (3, False), (4, False), (6, True), (7, True)):
+        writer(n, w, good=good)
+    # 3 and 5 are both overdue at 6: one file, nothing more afterwards
+    assert sorted(p.name for p in tmp_path.glob("*.npz")) == ["c.backup_000006.npz"]
+
+
+def _restart_toml(text, restart):
+    return text.replace(
+        "[initial]\nvelocity = [0.0, 0.0]", f'[initial]\nrestart = "{restart}"'
+    )
+
+
+def test_steady_restart_continues_the_run(case_dir):
+    """Counter, CFL and residual reference continue; log and history are appended."""
+    text = COUETTE.replace(
+        'directory = "out"', 'directory = "out"\nrestart_backup_at = [5]'
+    )
+    (case_dir / "couette.toml").write_text(text)
+    first = run_case(case_dir / "couette.toml", console=False)
+    out = first.output_dir
+    n = int(first.history["iteration"][-1])
+    assert n > 6
+    history = (out / "couette_test.history.csv").read_text()
+    log_first = (out / "couette_test.log").read_text()
+    backup = out / "couette_test.backup_000005.npz"
+    state = np.load(backup)
+    assert int(state["step"]) == 5 and "state_cfl" in state.files
+    assert "state_eta" in state.files  # Newton-Krylov forcing term
+    # Same case name and directory: the continuation appends.
+    (case_dir / "couette.toml").write_text(_restart_toml(text, backup))
+    second = run_case(case_dir / "couette.toml", console=False)
+    assert second.converged
+    assert second.history["iteration"][0] == 5 and second.history["iteration"][-1] == n
+    # The CFL is the one the first run used next (row 0 is the state after
+    # iteration 5, which ran with the CFL of row 6); nothing started over. Later
+    # iterations differ in the digits only: the first one factors the Jacobian
+    # again where the first run reused an older factorisation.
+    cfl, cfl_first = second.history["cfl"], first.history["cfl"]
+    assert cfl[0] == pytest.approx(cfl_first[6], rel=1e-9)
+    np.testing.assert_allclose(cfl[1:4], cfl_first[6:9], rtol=1e-6)
+    np.testing.assert_allclose(second.w, first.w, atol=1e-6)
+    rows = np.genfromtxt(out / "couette_test.history.csv", delimiter=",", names=True)
+    assert list(rows["iteration"]) == list(range(n + 1))
+    assert (out / "couette_test.history.cut_6.csv").exists()
+    log = (out / "couette_test.log").read_text()
+    assert log.startswith(log_first.rstrip()[:200])
+    assert "RESTART" in log and "continuing after iteration 5" in log
+    assert log.count("log(R_p)") == 2
+    assert "iteration" in history  # the first history existed before the restart
+
+
+def test_unsteady_restart_continues_with_bdf2(tmp_path):
+    """The previous time level is stored: the continuation equals the full run."""
+    mesh = rectangle(4, 32, x=(0.0, 1.0), y=(0.0, 0.5), cell_type="quad")
+    write_su2(tmp_path / "channel.su2", mesh)
+    text = UNSTEADY.replace(
+        'directory = "out"', 'directory = "out"\nrestart_backup_at = [4]'
+    )
+    (tmp_path / "couette.toml").write_text(text)
+    full = run_case(tmp_path / "couette.toml", console=False)
+    backup = tmp_path / "out" / "couette_unsteady.backup_000004.npz"
+    saved = np.load(backup)
+    assert int(saved["step"]) == 4 and float(saved["time"]) == pytest.approx(0.2)
+    assert saved["state_u_previous"].shape == saved["w"].shape
+    (tmp_path / "couette.toml").write_text(_restart_toml(text, backup))
+    again = run_case(tmp_path / "couette.toml", console=False)
+    assert again.history["step"][0] == 5 and again.history["step"][-1] == 10
+    np.testing.assert_allclose(again.w, full.w, atol=1e-9)
+    rows = np.genfromtxt(
+        tmp_path / "out" / "couette_unsteady.history.csv", delimiter=",", names=True
+    )
+    assert list(rows["step"]) == list(range(1, 11))
+    log = (tmp_path / "out" / "couette_unsteady.log").read_text()
+    assert "continuing after step 4" in log
+
+
+def test_restart_without_state_is_a_new_run(case_dir):
+    """A restart file of an older version (no state) keeps the old behaviour."""
+    first = run_case(case_dir / "couette.toml", console=False)
+    old = first.output_dir / "old.restart.npz"
+    data = np.load(first.restart_file)
+    np.savez(old, **{k: data[k] for k in data.files if not k.startswith("state_")})
+    text = COUETTE.replace('name = "couette_test"', 'name = "couette_old"')
+    (case_dir / "old.toml").write_text(_restart_toml(text, old))
+    second = run_case(case_dir / "old.toml", console=False)
+    assert second.converged and second.history["iteration"][0] == 0
+    assert "no solver state" in (second.output_dir / "couette_old.log").read_text()

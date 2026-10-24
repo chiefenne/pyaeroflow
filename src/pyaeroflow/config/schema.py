@@ -12,8 +12,8 @@ REQUIRED = object()
 
 TURBULENCE_DESCRIPTION = (
     "Turbulence values (D33), one form: {turbulent_viscosity_ratio, intensity}, "
-    "{kinetic_energy, length_scale, c_mu} or {nu_tilde_ratio}; "
-    "default nu_tilde/nu = 3"
+    "{kinetic_energy, length_scale, c_mu} or {nu_tilde_ratio} (SA only); "
+    "default nu_tilde/nu = 3 (SA), Tu = 0.1 % and nu_t/nu = 1 (SST)"
 )
 # Keys of the three input forms of a turbulence table.
 TURBULENCE_FORMS = {
@@ -26,7 +26,7 @@ TURBULENCE_FORMS = {
 class Opt(NamedTuple):
     """One configuration option."""
 
-    type: str  # "float", "int", "bool", "string", "float2", "string_list"
+    type: str  # "float", "int", "bool", "string", "float2", "string_list", "int_list"
     default: object
     description: str
     unit: str = ""
@@ -53,8 +53,9 @@ SCHEMA = {
         "turbulence": Opt(
             "string",
             None,
-            "Turbulence model (rans); default sa-neg",
-            choices=("sa-neg",),
+            "Turbulence model (rans): sa-neg (Spalart-Allmaras, negative "
+            "variant) or sst (Menter k-omega SST-2003m as in SU2); default sa-neg",
+            choices=("sa-neg", "sst"),
         ),
         "transition": {
             "mode": Opt(
@@ -67,9 +68,10 @@ SCHEMA = {
                 "string",
                 "none",
                 "Transition model: bcm = algebraic intermittency on the SA production "
-                "(Cakmakcioglu et al., 2020 revision, with SA-noft2); combines with "
-                "mode = prescribed",
-                choices=("none", "bcm"),
+                "(Cakmakcioglu et al., 2020 revision, with SA-noft2); aft = "
+                "SA-AFT2019b (Coder: transport equations for the amplification "
+                "factor and the log-intermittency); combines with mode = prescribed",
+                choices=("none", "bcm", "aft"),
             ),
             "turbulence_intensity": Opt(
                 "float",
@@ -77,6 +79,23 @@ SCHEMA = {
                 "Freestream turbulence intensity Tu for the transition model, as a "
                 "fraction (0.001 = 0.1 %); default: the intensity of the inflow "
                 "turbulence table",
+                minimum=0.0,
+            ),
+            "critical_amplification": Opt(
+                "float",
+                None,
+                "N_crit of model = aft (e^N method); default: from "
+                "turbulence_intensity by Mack's relation with Drela's limit "
+                "(8.15 at 0.1 %)",
+                minimum=0.0,
+            ),
+            "relaxation": Opt(
+                "float",
+                1.0,
+                "Under-relaxation omega in (0, 1] of the BCM intermittency "
+                "in steady runs: gamma += omega (gamma_model - gamma) per accepted "
+                "iteration, so onset ramps in over ~1/omega iterations; 1 = off. "
+                "The converged state is that of the unrelaxed model",
                 minimum=0.0,
             ),
             "laminar_region": Opt(
@@ -133,8 +152,9 @@ SCHEMA = {
         "restart": Opt(
             "string",
             None,
-            "Restart file (<name>.restart.npz of a previous run on the same "
-            "mesh), relative to the case file; overrides velocity/pressure",
+            "Restart or backup file (<name>.backup_<n>.npz or "
+            "<name>.restart_a.npz of a previous run on the same mesh), relative "
+            "to the case file; overrides velocity/pressure",
         ),
     },
     "reference": {
@@ -394,6 +414,16 @@ SCHEMA = {
                 choices=("mmd-at-plus-a", "colamd"),
             ),
         },
+        "nu_tilde_step_limit": Opt(
+            "float",
+            None,
+            "SA, implicit and unsteady (inner iterations): cap every update "
+            "of nu_tilde to this multiple of max(|nu_tilde|, nu) per cell "
+            "before the line search (e.g. 1 = at most double); off by default. "
+            "Stops a Newton step from multiplying nu_tilde in one "
+            "boundary-layer cell",
+            minimum=0.0,
+        ),
         "turbulence_coupling": Opt(
             "string",
             "segregated",
@@ -434,19 +464,77 @@ SCHEMA = {
             "string", "results", "Output directory, relative to the case file"
         ),
         "formats": Opt("string_list", ["vtu"], "Field output formats"),
+        "fields": Opt(
+            "string_list",
+            None,
+            "Cell fields written to the VTU files (D59, field table in "
+            'docs/configuration.md); "all" = every field the case provides; '
+            "default: pressure, velocity, velocity_magnitude and, with a "
+            "turbulence model, nu_tilde, eddy_viscosity_ratio and the "
+            "transition fields",
+        ),
+        "fields_interval": Opt(
+            "int",
+            0,
+            "Write the fields every n iterations (steady) or time steps "
+            "(unsteady), to <name>_<number>.vtu; 0 = only at the end",
+            minimum=0,
+        ),
+        "fields_at": Opt(
+            "int_list",
+            [],
+            "Also write the fields at these iterations (steady) or time steps "
+            "(unsteady), in addition to fields_interval",
+            minimum=1,
+        ),
+        "fields_final": Opt(
+            "bool", True, "Write the final fields to <name>.vtu at the end of the run"
+        ),
         "interval": Opt(
             "int",
             0,
-            "Write fields every n iterations (steady) or time steps (unsteady); "
-            "0 = only at the end",
+            "Same as fields_interval (kept for older case files); do not set both",
             minimum=0,
         ),
         "history": Opt("bool", True, "Write the convergence history (CSV and .log)"),
+        "restart_interval": Opt(
+            "int",
+            0,
+            "Write a restart file every n iterations (steady) or time steps "
+            "(unsteady), alternately to <name>.restart_a.npz and "
+            "<name>.restart_b.npz (each write replaces the older one); "
+            "0 = none (the final state is always written as a backup)",
+            minimum=0,
+        ),
+        "restart_backup_interval": Opt(
+            "int",
+            0,
+            "Write a backup <name>.backup_<number>.npz that is never "
+            "replaced every n iterations (steady) or time steps (unsteady); "
+            "0 = none (the final state is always written as a backup)",
+            minimum=0,
+        ),
+        "restart_backup_at": Opt(
+            "int_list",
+            [],
+            "Also write a backup <name>.backup_<number>.npz at "
+            "these iterations (steady) or time steps (unsteady), in addition "
+            "to restart_backup_interval",
+            minimum=1,
+        ),
         "force_boundaries": Opt(
             "string_list",
             None,
             "Boundaries over which forces and moments are integrated; "
             "default: all walls",
+        ),
+        "transition_diagnostics": Opt(
+            "bool",
+            False,
+            "Add intermittency statistics to the history CSV (cells with "
+            "gamma > 0.01, cells that switched, largest change with its cell "
+            "centre; steady runs also |R_nu|), counted within 0.05 chords of "
+            "a wall; needs physics.transition.model",
         ),
         "verbosity": Opt(
             "string", "normal", "Log detail", choices=("normal", "detailed")

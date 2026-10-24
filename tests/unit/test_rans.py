@@ -221,7 +221,7 @@ def test_run_case_rans(tmp_path):
     result = run_case(tmp_path / "plate.toml", console=False)
     assert result.converged and result.w.shape[1] == 4
     log = (tmp_path / "out" / "plate.log").read_text()
-    assert "nu_tilde/nu" in log and "cells without SA production" in log
+    assert "nu_tilde/nu" in log and "cells without turbulence production" in log
     assert "outside the NASA TMR range" in log  # k, l form gives nu_tilde/nu > 5
     assert "log(R_nu)   drop" in log  # four residual columns, then the measure
     history = (tmp_path / "out" / "plate.history.csv").read_text().splitlines()
@@ -235,10 +235,8 @@ def test_run_case_rans(tmp_path):
     )
 
 
-def test_run_case_bcm_transition(tmp_path):
-    """The BCM model through the case file: Tu from the inflow table, log
-    rows, intermittency in the VTU and the wall CSV, transition location in
-    the summary."""
+def _bcm_plate(tmp_path, transition="", output="", solver="", tail="", model="bcm"):
+    """Run the BCM flat-plate case; ``transition`` / ``output`` add case keys."""
     from pyaeroflow.cases.tmr_flat_plate import plate_mesh
     from pyaeroflow.mesh import write_su2
 
@@ -246,7 +244,7 @@ def test_run_case_bcm_transition(tmp_path):
         PLATE_TOML.replace(
             '[physics.transition]\nmode = "prescribed"\n'
             'laminar_region = [{ boundary = "plate", side = "upper", x_max = 0.05 }]\n',
-            '[physics.transition]\nmodel = "bcm"\n',
+            f'[physics.transition]\nmodel = "{model}"\n{transition}',
         )
         .replace(
             "turbulence = { kinetic_energy = 0.0015, length_scale = 0.01 }",
@@ -263,8 +261,19 @@ def test_run_case_bcm_transition(tmp_path):
     )
     assert toml.count("intensity = 0.033") == 2
     write_su2(tmp_path / "plate.su2", plate_mesh(48, 12, 48, reynolds=5.0e5))
-    (tmp_path / "plate.toml").write_text(toml)
-    result = run_case(tmp_path / "plate.toml", console=False)
+    if output:
+        toml = toml.replace("[output]\n", f"[output]\n{output}")
+    if solver:
+        toml = toml.replace("[solver]\n", f"[solver]\n{solver}")
+    (tmp_path / "plate.toml").write_text(toml + tail)
+    return run_case(tmp_path / "plate.toml", console=False)
+
+
+def test_run_case_bcm_transition(tmp_path):
+    """The BCM model through the case file: Tu from the inflow table, log
+    rows, intermittency in the VTU and the wall CSV, transition location in
+    the summary."""
+    result = _bcm_plate(tmp_path)
     assert result.converged
     log = (tmp_path / "out" / "plate.log").read_text()
     assert "bcm (SA-noft2), Tu = 3.3 %" in log and "Re_theta_t = 198" in log
@@ -280,6 +289,61 @@ def test_run_case_bcm_transition(tmp_path):
     )
 
 
+def test_bcm_relaxed_intermittency_and_diagnostics(tmp_path):
+    """Under-relaxed gamma converges to the unrelaxed transition location and
+    the diagnostics columns reach the history CSV."""
+    ref = tmp_path / "ref"
+    ref.mkdir()
+    _bcm_plate(ref)
+    run = tmp_path / "relaxed"
+    run.mkdir()
+    result = _bcm_plate(run, "relaxation = 0.3\n", "transition_diagnostics = true\n")
+    assert result.converged
+    log = (run / "out" / "plate.log").read_text()
+    assert "under-relaxed, omega = 0.3" in log
+    h = np.genfromtxt(run / "out" / "plate.history.csv", delimiter=",", names=True)
+    for col in ("gamma_cells", "gamma_jumped", "gamma_dmax_x", "rnu_max_y"):
+        assert col in h.dtype.names
+    assert h["gamma_cells"][-1] > 0 and h["gamma_dmax"][-1] < 1e-3
+    w_ref = np.genfromtxt(
+        ref / "out" / "plate.wall_plate.csv", delimiter=",", names=True
+    )
+    w_rel = np.genfromtxt(
+        run / "out" / "plate.wall_plate.csv", delimiter=",", names=True
+    )
+    np.testing.assert_allclose(
+        w_rel["nu_t_ratio_max"], w_ref["nu_t_ratio_max"], rtol=2e-2, atol=1e-3
+    )
+
+
+def test_bcm_nu_tilde_step_limit(tmp_path):
+    """A nu_tilde step cap of 1 still converges the BCM plate to the same state."""
+    ref = tmp_path / "ref"
+    ref.mkdir()
+    _bcm_plate(ref)
+    run = tmp_path / "limited"
+    run.mkdir()
+    result = _bcm_plate(run, solver="nu_tilde_step_limit = 1.0\n")
+    assert result.converged
+    assert "capped at 1 x" in (run / "out" / "plate.log").read_text()
+    kw = {"delimiter": ",", "names": True}
+    a = np.genfromtxt(ref / "out" / "plate.wall_plate.csv", **kw)
+    b = np.genfromtxt(run / "out" / "plate.wall_plate.csv", **kw)
+    np.testing.assert_allclose(
+        b["nu_t_ratio_max"], a["nu_t_ratio_max"], rtol=2e-2, atol=1e-3
+    )
+
+
+def test_bcm_relaxation_config_rules():
+    plate = {**RANS_MINIMAL, "physics": {"model": "rans", "transition": {}}}
+    plate["physics"]["transition"] = {"relaxation": 0.5}
+    with pytest.raises(Exception, match="needs model = bcm"):
+        resolve(plate)
+    plate["physics"]["transition"] = {"model": "bcm", "relaxation": 1.5}
+    with pytest.raises(Exception, match=r"must be in \(0, 1\]"):
+        resolve(plate)
+
+
 def test_bcm_config_rules():
     raw = {**RANS_MINIMAL, "physics": {"model": "rans", "transition": {"model": "bcm"}}}
     with pytest.raises(Exception, match="turbulence_intensity is required"):
@@ -292,3 +356,70 @@ def test_bcm_config_rules():
     }
     with pytest.raises(Exception, match="needs physics.model = rans"):
         resolve(raw)
+
+
+def test_unsteady_nu_tilde_step_limit(tmp_path, monkeypatch):
+    """solver.nu_tilde_step_limit reaches the inner iterations of a BDF2 run."""
+    import pyaeroflow.driver as driver
+    from pyaeroflow.cases.tmr_flat_plate import plate_mesh
+    from pyaeroflow.mesh import write_su2
+
+    seen = {}
+    original = driver.solve_unsteady
+
+    def spy(*args, **kwargs):
+        seen["limit_step"] = kwargs.get("limit_step")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(driver, "solve_unsteady", spy)
+    write_su2(tmp_path / "plate.su2", plate_mesh(24, 6, 24, reynolds=1.0e5))
+    toml = (
+        PLATE_TOML.replace("[solver]\n", "[solver]\nnu_tilde_step_limit = 1.0\n")
+        + '[time]\nmode = "unsteady"\ntime_step = 0.01\nend_time = 0.03\n'
+    )
+    (tmp_path / "plate.toml").write_text(toml)
+    result = run_case(tmp_path / "plate.toml", console=False)
+    assert np.isfinite(result.w).all()
+    log = (tmp_path / "out" / "plate.log").read_text()
+    assert "capped at 1 x max(|nu_tilde|, nu) per cell (inner iterations)" in log
+    limit = seen["limit_step"]
+    assert limit is not None
+    # cap f max(|nu_tilde|, nu) per cell, nu = 1 / Re non-dimensional
+    u = np.zeros((3, 4))
+    u[:, 3] = [0.0, 1.0, -4.0]
+    du = np.full((3, 4), 7.0)
+    du[:, 3] = [1e-9, 5.0, -10.0]
+    out = limit(u, du)
+    np.testing.assert_array_equal(out[:, :3], 7.0)
+    np.testing.assert_allclose(out[:, 3], [1e-9, 1.0, -4.0])
+
+
+def test_unsteady_gamma_diagnostics(tmp_path):
+    """transition_diagnostics adds the gamma statistics to the unsteady history."""
+    tail = '[time]\nmode = "unsteady"\ntime_step = 0.01\nend_time = 0.03\n'
+    _bcm_plate(tmp_path, output="transition_diagnostics = true\n", tail=tail)
+    h = np.genfromtxt(tmp_path / "out" / "plate.history.csv", delimiter=",", names=True)
+    assert len(h["step"]) == 3
+    for col in ("gamma_cells", "gamma_area", "gamma_jumped", "gamma_dmax_y"):
+        assert col in h.dtype.names
+    assert "rnu_max" not in h.dtype.names
+    assert (h["gamma_cells"] > 0).all() and (h["gamma_area"] > 0).all()
+    assert (h["gamma_dmax"] >= 0).all() and (h["gamma_dmax"] <= 1).all()
+
+
+def test_restart_log_marks_the_initial_turbulence_values(tmp_path):
+    """With a restart file the initial turbulence values are not the start
+    values: the log says so instead of listing (and warning about) the defaults."""
+    first = _bcm_plate(tmp_path)
+    case = tmp_path / "plate.toml"
+    case.write_text(
+        case.read_text().replace(
+            '[initial]\nfrom_boundary = "left"',
+            f'[initial]\nfrom_boundary = "left"\nrestart = "{first.restart_file}"',
+        )
+    )
+    run_case(case, console=False)
+    log = (tmp_path / "out" / "plate.log").read_text()
+    restarted = log[log.index("RESTART") :]
+    assert "initial     from the restart file (default " in restarted
+    assert "initial: nu_tilde/nu" not in restarted
