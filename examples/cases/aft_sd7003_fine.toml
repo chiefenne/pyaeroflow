@@ -1,0 +1,87 @@
+# SD7003 at Re = 6e4 with the SA-AFT2019b transition model (L3), for the
+# AFT validation against the references in /mnt/project-files/reference/sd7003/.
+# Geometry: CST resampling (1000 points) of the original SD7003 coordinates,
+# made in PyAero 3.0. The mesh is a C-type PyAero mesh, placed next to this
+# file as sd7003_pyaero.su2. Boundary names follow the E387 mesh: change them
+# if the PyAero export uses other names.
+# N_crit = 8.15 from Tu = 0.1 % (Mack/Drela), the same value as E387 and the
+# XFOIL comparison (Ncrit 8.15). Tu 0.08 % (TU-BS) would give 8.68.
+# Polar: pyaeroflow polar cases/aft_sd7003.toml --alpha 0 2 4 6 8
+
+[case]
+name = "aft_sd7003_fine"
+
+[mesh]
+file = "sd7003_pyaero_fine.su2"        # boundary faces: airfoil, inlet, outlet, top, bottom
+
+[physics]
+model = "rans"
+turbulence = "sa-neg"
+
+[physics.transition]
+model = "aft"
+turbulence_intensity = 0.001      # fraction: 0.1 % -> N_crit = 8.15
+
+[fluid]
+density = 1.0                     # kg/m^3
+viscosity = 1.6667e-5             # Pa s: Re = 6e4 with U = 1 m/s, c = 1 m
+
+[reference]
+velocity = 1.0                    # m/s
+length = 1.0                      # m, chord
+moment_center = [0.25, 0.0]       # m, quarter chord
+vortex_correction = true
+
+[initial]
+from_boundary = "inlet"
+
+[boundary.airfoil]
+type = "wall"
+
+[boundary.inlet]
+type = "farfield"
+velocity = 1.0
+angle_of_attack = 4.0             # deg, overridden by the polar
+pressure = 0.0
+turbulence = { nu_tilde_ratio = 0.1 }
+
+[boundary.outlet]
+type = "farfield"
+velocity = 1.0
+angle_of_attack = 4.0
+pressure = 0.0
+turbulence = { nu_tilde_ratio = 0.1 }
+
+[boundary.top]
+type = "farfield"
+velocity = 1.0
+angle_of_attack = 4.0
+pressure = 0.0
+turbulence = { nu_tilde_ratio = 0.1 }
+
+[boundary.bottom]
+type = "farfield"
+velocity = 1.0
+angle_of_attack = 4.0
+pressure = 0.0
+turbulence = { nu_tilde_ratio = 0.1 }
+
+[numerics]
+limiter = "venkatakrishnan"
+limiter_freeze = { after_residual_drop = 1.5, after_iterations = 40, release = true }
+
+[solver]
+residual_drop = 7.0
+max_iterations = 2000
+cfl = { control = "ser" }
+newton_krylov = { switch_at_residual_drop = 1.5, switch_at_iteration = 40 }
+linear_solver = { type = "pardiso" }   # remove or use "direct" without pypardiso
+
+[output]
+directory = "output/aft_sd7003_fine"
+restart_interval = 50
+force_boundaries = ["airfoil"]
+fields = ["pressure", "velocity", "cf", "residual_p", "residual_nu_tilde", "eddy_viscosity_ratio"]
+# fields_interval = 100
+fields_at = [300, 400]
+fields_final = true
