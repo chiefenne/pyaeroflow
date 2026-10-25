@@ -1326,6 +1326,8 @@ def _log_setup(log, config, problem, scaling, mesh):
     rows.append(("resolved configuration", f"{config.name}.resolved.toml"))
     log.table(rows)
     log.section("Mesh")
+    scale = cfg["mesh"]["scale"]
+    log.write(f"  file: {cfg['mesh']['file']}" + (f" (scale {scale})" if scale != 1 else ""))
     for line in mesh.summary().splitlines():
         log.write("  " + line)
     log.section("Boundary conditions")
