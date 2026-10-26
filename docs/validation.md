@@ -26,6 +26,7 @@ Click a case to jump to its section; each section ends with a link back here.
 | 6 | [NACA 0012, Re 6·10⁶](#sec-6) | validation | Ladson 1988, Gregory & O'Reilly 1970, NASA TMR | `examples/stage6_pyaero_validation.py` |
 | 7 (0.8) | [BCM transition, flat plate](#sec-7-plate) | verification/validation | Blasius, ERCOFTAC T3A | `tests/verification/test_rans_plate.py`, `pyaeroflow run examples/cases/flat_plate_transition.toml` |
 | 7 (0.8) | [BCM transition, Eppler 387](#sec-7-e387) | validation | McGhee, Walker & Millard 1988 (NASA TM 4062) | `pyaeroflow polar examples/cases/e387_transition.toml --alpha 4 6 8 2 0 -2` |
+| L3 (0.9) | [SA-AFT: flat plate, T3A, E387](#sec-8) | verification/validation | e^N estimate, ERCOFTAC T3A, NASA TM 4062, Penn State 2007, XFOIL | `tests/verification/test_rans_plate.py::test_aft_transition_on_the_plate`, `pyaeroflow polar examples/cases/e387_aft.toml --alpha -2 0 2 4 6 8` |
 | L2 (0.9) | [k-ω SST: flat plate, SD7003](#sec-9) | verification/validation | NASA TMR SST, LES/DNS, XFOIL, SA-AFT, Herbst et al. 2017, Selig et al. 1995 | `tests/verification/test_rans_plate.py::test_sst_turbulent_plate`, `pyaeroflow run examples/cases/sst_sd7003.toml` |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
@@ -267,7 +268,9 @@ the point-vortex correction.
 
 [↑ back to table](#stage-table)
 
-## 8. SA-AFT2019b transition: flat plate
+<a id="sec-8"></a>
+
+## 8. SA-AFT2019b transition: flat plate, T3A, Eppler 387
 
 `tests/verification/test_rans_plate.py::test_aft_transition_on_the_plate`.
 TMR plate domain, 48 × 12 × 48 cells, Re = 10⁶ per unit length, freestream
@@ -288,8 +291,79 @@ BCM, the Newton–Krylov iteration converges to machine zero with the exact
 JVP (nothing frozen); the F_crit step and the min/max of F_onset did not
 stall it here. The upstream-moving transition that Coder reports (thousands
 of iterations) was not seen: the pseudo-time CFL ramp reaches the Newton
-phase in a few hundred iterations. T3A-series and airfoil cases (E387,
-XFOIL comparison) are next.
+phase in a few hundred iterations.
+
+### ERCOFTAC T3A and T3A−
+
+The same plate mesh at Re = 10⁶ per metre, plate length 2 m (Re_x up to
+2·10⁶), 96 × 64 cells, ν̃/ν = 0.1 in the freestream, N_crit from the Mack/Drela
+relation for the case's Tu (T3A 0.033 → N_crit 0.76, T3A− 0.00874 → 3.0).
+Both runs converge to machine zero with the exact JVP in 687 and 769
+iterations.
+
+| case | Tu | N_crit | ν_t/ν > 1 at Re_x | C_f minimum / maximum at Re_x |
+|---|---|---|---|---|
+| T3A | 3.3 % | 0.76 | 1.3·10⁵ | 0.8·10⁵ / 2.4·10⁵ |
+| T3A− | 0.874 % | 3.0 | 6.4·10⁵ | 4.9·10⁵ / 8.2·10⁵ |
+
+![AFT plates](figures/aft_t3a_cf.png)
+
+T3A agrees with the measured onset (C_f leaves the laminar curve at
+Re_x ≈ 1.3·10⁵, §7), and the turbulent C_f is within 4 % of
+0.0576 Re_x^−0.2. T3A− transitions about 2.5 times too early: the onset
+here is at Re_x = 6.4·10⁵ against about 1.5·10⁶ in the experiment (quoted from
+memory, not compared with the ERCOFTAC data files). This is the e^N relation
+of the model, not the solver: Re_θ0 = 237 plus N_crit/0.0103 gives the same
+6.4·10⁵ as the estimate in the table above. The Mack/Drela relation is fitted
+for Tu below about 1 % and the decay of Tu along the plate is not modelled.
+T3B (Tu 6.5 %, bypass) is out of reach for AFT by construction: the layer
+cannot amplify before Re_θ0 = 237, i.e. Re_x = 1.3·10⁵, so the case was not
+run. The mesh has cells at Re_x = 2.7·10⁴, 8·10⁴ and 1.3·10⁵, so the onset
+locations are good to about ±0.05 m.
+
+### Eppler 387, Re 2·10⁵, N_crit 8.15
+
+`examples/cases/e387_aft.toml` on the mesh of §7 (209k quads), polar by
+`pyaeroflow polar`. N_crit 8.15 is Tu 0.1 % (Mack/Drela), the level of the
+BCM case. References: NASA TM 4062 (§7), Somers & Maughmer (2007), Penn State
+tunnel, Tu ≈ 0.045 %, and XFOIL 6.99 on the mesh contour (repanelled to 260
+panels) at N_crit 8.15 and 10.07 (the Mack/Drela value for 0.045 %).
+
+| α | C_L | C_D | ΔC_L Penn State / TM 4062 / XFOIL 8.15 | ΔC_D Penn State / TM 4062 / XFOIL 8.15 |
+|---|---|---|---|---|
+| −2 \* | 0.163 | 0.0106 | +0.011 / – / −0.016 | −22 % / – / −8 % |
+| 0 | 0.376 | 0.0092 | +0.021 / +0.025 / −0.025 | −12 % / −12 % / −4 % |
+| 2 | 0.594 | 0.0101 | +0.035 / +0.024 / −0.025 | −14 % / −14 % / −6 % |
+| 4 | 0.809 | 0.0114 | +0.047 / +0.023 / −0.027 | −13 % / −14 % / −4 % |
+| 6 | 1.018 | 0.0130 | +0.050 / +0.024 / −0.025 | −9 % / −9 % / +3 % |
+| 8 \* | 1.208 | 0.0185 | +0.052 / +0.029 / +0.039 | +24 % / +7 % / −10 % |
+
+\* not converged in 2000 iterations. The α = 4° run is converged (632
+iterations from a restart at iteration 400, residuals 10⁻⁹ to 10⁻¹², C_L
+constant to five digits); the polar CSV flags it 0 because the iteration
+counter and residual reference restarted with the file.
+
+![AFT E387 polar](figures/aft_e387_polar.png)
+
+Lift is 0.01–0.05 above Penn State and 0.02–0.03 above TM 4062, and 0.025
+below XFOIL, so AFT is the closest to the measurements (XFOIL is 0.07 above
+Penn State at 4°). Drag is 9–14 % below both experiments from 0° to 6° and
+4–6 % below XFOIL from 0° to 4°. At α = 4° the bubble is where XFOIL
+and the oil flow put it: separation at x = 0.430, reattachment at 0.622
+(XFOIL 0.428 / 0.619, oil flow 0.40 / 0.62, Penn State within 0.03 c), while
+ν_t/ν first exceeds 1 at 0.537, 0.06 upstream of XFOIL's transition at 0.600.
+
+![E387 α 4](figures/aft_e387_a4_cp_cf.png)
+
+Two features are not yet explained. The C_f minimum in the bubble is deeper
+(−0.0027 at x = 0.57 against about 0 for XFOIL) and the turbulent C_f
+after reattachment is 40 % lower (0.0030 against 0.0050 at x = 0.77); the same
+pattern appears on the SD7003 at α = 4° (50 % lower than XFOIL). The drag gap to the experiments, which
+may come from the thickened trailing edge of the model (0.5 % c, sharp in
+the mesh) or the 5-chord farfield with the vortex correction; neither was
+varied. α = −2° and 8° do not converge: the transition location keeps
+moving, as with BCM in §7, so the lift and drag there are not reference
+values.
 
 <a id="sec-9"></a>
 
@@ -436,3 +510,6 @@ a reference here.
   (2005): Comparison of laminar separation bubble measurements on a low
   Reynolds number airfoil in three facilities. 35th AIAA Fluid Dynamics
   Conference.
+- Somers, D. M., Maughmer, M. D. (2007): Theoretical and experimental
+  results for the Eppler 387 airfoil at low Reynolds numbers in the Penn
+  State low-speed, low-turbulence wind tunnel. RDECOM TR 07-D-32.
