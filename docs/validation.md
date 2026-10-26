@@ -306,20 +306,41 @@ iterations.
 | T3A | 3.3 % | 0.76 | 1.3·10⁵ | 0.8·10⁵ / 2.4·10⁵ |
 | T3A− | 0.874 % | 3.0 | 6.4·10⁵ | 4.9·10⁵ / 8.2·10⁵ |
 
-![AFT plates](figures/aft_t3a_cf.png)
+Reference: the ERCOFTAC T3 data (Roach & Brierley 1992, Rolls-Royce
+tables of C_f against Re_x, case 020 of the ERCOFTAC Classic Collection).
+The experiment's C_f minimum, its measure of the onset, lies at
+Re_x = 1.35·10⁵ for T3A and at 1.44·10⁶ for T3A− (Re_θ = 819); on T3A− the
+layer is still transitional at the last station (Re_x = 2.0·10⁶, C_f 0.0015,
+H = 1.9).
 
-T3A agrees with the measured onset (C_f leaves the laminar curve at
-Re_x ≈ 1.3·10⁵, §7), and the turbulent C_f is within 4 % of
-0.0576 Re_x^−0.2. T3A− transitions about 2.5 times too early: the onset
-here is at Re_x = 6.4·10⁵ against about 1.5·10⁶ in the experiment (quoted from
-memory, not compared with the ERCOFTAC data files). This is the e^N relation
-of the model, not the solver: Re_θ0 = 237 plus N_crit/0.0103 gives the same
-6.4·10⁵ as the estimate in the table above. The Mack/Drela relation is fitted
-for Tu below about 1 % and the decay of Tu along the plate is not modelled.
-T3B (Tu 6.5 %, bypass) is out of reach for AFT by construction: the layer
+**T3A.** The computed ν_t/ν exceeds 1 at Re_x = 1.3·10⁵, where the
+experiment has its C_f minimum, but the C_f curve leaves the laminar line
+earlier than the measurement: it starts to rise at the sample at 8·10⁴ and
+is at the turbulent level at 1.8·10⁵, against 1.35·10⁵ and 2.7·10⁵ in the
+experiment. The mesh has only three cells in this range (Re_x 2.7·10⁴,
+8·10⁴, 1.3·10⁵; the laminar C_f is also 27–80 % above the experiment at
+Re_x < 1.4·10⁵), so the onset is good to one cell and the T3A result is
+neither confirmation nor refutation. After transition the C_f is 5–14 %
+below the measurement (0.0042 against 0.0049 at 2.7·10⁵, 0.0039 against
+0.0041 at 5.3·10⁵) and within 4 % of 0.0576 Re_x^−0.2.
+
+**T3A−.** The laminar C_f agrees with the measurement to 1–11 % for
+Re_x ≤ 5·10⁵. The model then transitions at Re_x = 5–6·10⁵ (C_f minimum
+4.9·10⁵, ν_t/ν > 1 at 6.4·10⁵) against 1.44·10⁶ in the experiment, about
+three times too early, and the C_f in the transition and turbulent region
+is 3–6 times the measured value because the experiment is still laminar
+(0.00053 at 1.44·10⁶). The e^N relation is the cause, not the solver:
+Re_θ0 = 237 plus N_crit/0.0103 gives the same 6.4·10⁵ as the estimate in
+the table above. The decay of Tu along the plate (0.874 % at the first
+station, 0.5 % from 1.4·10⁶ on) is not modelled and raises N_crit when
+included, but with the local value (N_crit 3.9–4.4) the same estimate gives
+8.5·10⁵–1.0·10⁶, still short of the measured onset. The Mack/Drela relation
+is fitted for Tu below about 1 %, which T3A− is not far from.
+T3B (Tu 6 %, bypass) is out of reach for AFT by construction: the layer
 cannot amplify before Re_θ0 = 237, i.e. Re_x = 1.3·10⁵, so the case was not
-run. The mesh has cells at Re_x = 2.7·10⁴, 8·10⁴ and 1.3·10⁵, so the onset
-locations are good to about ±0.05 m.
+run.
+
+![AFT plates](figures/aft_t3a_cf.png)
 
 ### Eppler 387, Re 2·10⁵, N_crit 8.15
 
@@ -513,3 +534,8 @@ a reference here.
 - Somers, D. M., Maughmer, M. D. (2007): Theoretical and experimental
   results for the Eppler 387 airfoil at low Reynolds numbers in the Penn
   State low-speed, low-turbulence wind tunnel. RDECOM TR 07-D-32.
+- Roach, P. E., Brierley, D. H. (1992): The influence of a turbulent
+  free-stream on zero pressure gradient transitional boundary layer
+  development, Part I: test cases T3A and T3B. In: Numerical Simulation of
+  Unsteady Flows and Transition to Turbulence, Cambridge University Press.
+  Data: ERCOFTAC Classic Collection, case 020.
