@@ -295,15 +295,18 @@ phase in a few hundred iterations.
 
 ### ERCOFTAC T3A and T3A−
 
-The same plate mesh at Re = 10⁶ per metre, plate length 2 m (Re_x up to
-2·10⁶), 96 × 64 cells, ν̃/ν = 0.1 in the freestream, N_crit from the Mack/Drela
-relation for the case's Tu (T3A 0.033 → N_crit 0.76, T3A− 0.00874 → 3.0).
-Both runs converge to machine zero with the exact JVP in 687 and 769
-iterations.
+TMR plate domain at Re = 10⁶ per metre, ν̃/ν = 0.1 in the freestream,
+N_crit from the Mack/Drela relation for the case's Tu (T3A 0.033 → N_crit
+0.76, T3A− 0.00874 → 3.0). First meshes: plate length 2 m (Re_x up to
+2·10⁶), 96 × 64 cells, cells 5 cm long at the leading edge; the T3A onset
+needs a finer streamwise mesh, so T3A was repeated on 0.6 m with 150 × 48
+cells (4 mm long, Re_x = 4·10³ per cell). All runs converge to machine zero
+with the exact JVP (T3A 687, T3A− 769, T3A fine 400 iterations).
 
 | case | Tu | N_crit | ν_t/ν > 1 at Re_x | C_f minimum / maximum at Re_x |
 |---|---|---|---|---|
-| T3A | 3.3 % | 0.76 | 1.3·10⁵ | 0.8·10⁵ / 2.4·10⁵ |
+| T3A, 96 cells | 3.3 % | 0.76 | 1.3·10⁵ | 0.8·10⁵ / 2.4·10⁵ |
+| T3A, 150 cells (4 mm) | 3.3 % | 0.76 | 1.4·10⁵ | 1.3·10⁵ / 2.3·10⁵ |
 | T3A− | 0.874 % | 3.0 | 6.4·10⁵ | 4.9·10⁵ / 8.2·10⁵ |
 
 Reference: the ERCOFTAC T3 data (Roach & Brierley 1992, Rolls-Royce
@@ -313,16 +316,20 @@ Re_x = 1.35·10⁵ for T3A and at 1.44·10⁶ for T3A− (Re_θ = 819); on T3A�
 layer is still transitional at the last station (Re_x = 2.0·10⁶, C_f 0.0015,
 H = 1.9).
 
-**T3A.** The computed ν_t/ν exceeds 1 at Re_x = 1.3·10⁵, where the
-experiment has its C_f minimum, but the C_f curve leaves the laminar line
-earlier than the measurement: it starts to rise at the sample at 8·10⁴ and
-is at the turbulent level at 1.8·10⁵, against 1.35·10⁵ and 2.7·10⁵ in the
-experiment. The mesh has only three cells in this range (Re_x 2.7·10⁴,
-8·10⁴, 1.3·10⁵; the laminar C_f is also 27–80 % above the experiment at
-Re_x < 1.4·10⁵), so the onset is good to one cell and the T3A result is
-neither confirmation nor refutation. After transition the C_f is 5–14 %
-below the measurement (0.0042 against 0.0049 at 2.7·10⁵, 0.0039 against
-0.0041 at 5.3·10⁵) and within 4 % of 0.0576 Re_x^−0.2.
+**T3A.** On the coarse mesh (three cells before Re_x = 1.3·10⁵) the C_f
+rise started one cell early and the laminar C_f was 27–80 % off, so that
+result was resolution-limited. On the fine mesh the laminar C_f follows the
+measurement to 3–8 % up to Re_x = 1.35·10⁵ (it sits on Blasius, as in the
+experiment), the C_f minimum is at 1.3·10⁵ (measured 1.35·10⁵) and ν_t/ν
+first exceeds 1 at 1.4·10⁵. Two differences remain. The transition is too
+abrupt: C_f rises from 0.0019 to 0.0038 between Re_x = 1.3·10⁵ and 1.7·10⁵
+and is 1.6–1.7 times the measurement at 1.7–2·10⁵ (the experiment rises
+gradually and reaches the turbulent level at 2.7·10⁵, a transition length
+of about 1.4·10⁵ against 4·10⁴). And the turbulent C_f is 4–13 % below the
+measurement (0.0043 at the maximum against 0.0049; 0.0039 against 0.0041 at
+5.3·10⁵). The agreement of the onset is not a strong test: with Re_θ0 = 237
+the model cannot amplify before Re_x = (237/0.664)² = 1.3·10⁵, and N_crit =
+0.76 only moves the onset a short way past it.
 
 **T3A−.** The laminar C_f agrees with the measurement to 1–11 % for
 Re_x ≤ 5·10⁵. The model then transitions at Re_x = 5–6·10⁵ (C_f minimum
@@ -337,8 +344,8 @@ included, but with the local value (N_crit 3.9–4.4) the same estimate gives
 8.5·10⁵–1.0·10⁶, still short of the measured onset. The Mack/Drela relation
 is fitted for Tu below about 1 %, which T3A− is not far from.
 T3B (Tu 6 %, bypass) is out of reach for AFT by construction: the layer
-cannot amplify before Re_θ0 = 237, i.e. Re_x = 1.3·10⁵, so the case was not
-run.
+cannot amplify before Re_θ0 = 237, i.e. Re_x = 1.3·10⁵, which is the T3A
+onset itself, so the case was not run.
 
 ![AFT plates](figures/aft_t3a_cf.png)
 
