@@ -573,7 +573,21 @@ station (0.0015 at 2.0·10⁶). The laminar C_f rises above Blasius from
 
 ### SD7003, Re 6·10⁴, α = 4°
 
-SD7003_PLACEHOLDER
+39k-cell O-grid (`analysis/sst/sd7003_ogrid.su2`), Tu 0.1 %, ν_t/ν 1 at
+the farfield, first-order turbulence convection. After 1400 iterations the
+residuals sit 2.6–3 orders down and C_L/C_D still drift slowly
+(C_L 0.601, C_D 0.0207).
+
+Result: the upper-side laminar boundary layer separates at x/c = 0.27, which
+is close to LES/DNS (0.21–0.23). It **does not reattach**: C_f stays negative
+up to the trailing edge, so there is an open laminar separation and no
+transition. The cause is that the separated shear layer never triggers. Re_V
+only just exceeds the γ_sep threshold 3.235 Re_θc (the ratio peaks at 1.09 at
+x/c ≈ 0.7), so γ_sep ≤ 0.18 and k stays at its freestream level of about
+1e-6. On this grid LM therefore predicts a laminar open separation, where
+LES/DNS reattach at x/c 0.60–0.67. The fine-mesh case
+`lm_sd7003.toml` (PyAero 320k mesh) is the actual test of whether this is
+a grid-resolution effect.
 
 [↑ back to table](#stage-table)
 
