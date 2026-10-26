@@ -26,7 +26,7 @@ Click a case to jump to its section; each section ends with a link back here.
 | 6 | [NACA 0012, Re 6·10⁶](#sec-6) | validation | Ladson 1988, Gregory & O'Reilly 1970, NASA TMR | `examples/stage6_pyaero_validation.py` |
 | 7 (0.8) | [BCM transition, flat plate](#sec-7-plate) | verification/validation | Blasius, ERCOFTAC T3A | `tests/verification/test_rans_plate.py`, `pyaeroflow run examples/cases/flat_plate_transition.toml` |
 | 7 (0.8) | [BCM transition, Eppler 387](#sec-7-e387) | validation | McGhee, Walker & Millard 1988 (NASA TM 4062) | `pyaeroflow polar examples/cases/e387_transition.toml --alpha 4 6 8 2 0 -2` |
-| L2 (0.9) | [k-ω SST: flat plate, SD7003](#sec-9) | verification/validation | NASA TMR SST, LES/DNS, XFOIL, SA-AFT | `tests/verification/test_rans_plate.py::test_sst_turbulent_plate`, `pyaeroflow run examples/cases/sst_sd7003.toml` |
+| L2 (0.9) | [k-ω SST: flat plate, SD7003](#sec-9) | verification/validation | NASA TMR SST, LES/DNS, XFOIL, SA-AFT, Herbst et al. 2017, Selig et al. 1995 | `tests/verification/test_rans_plate.py::test_sst_turbulent_plate`, `pyaeroflow run examples/cases/sst_sd7003.toml` |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
 the scripts write) is not tracked.
@@ -347,6 +347,62 @@ baseline at this Reynolds number, not a predictor of the laminar bubble
 
 ![SST SD7003](figures/sst_sd7003_a4.png)
 
+### SD7003, Re 6·10⁴: polar and bubble at Tu 0.5 % (Herbst et al. 2017)
+
+Herbst, Kähler & Hain (2017) measured the SD7003 at Re 6·10⁴ in the
+Atmospheric Wind Tunnel Munich at Tu = 0.5 %: surface pressure on taps up
+to x/c = 0.74 (suction side) and PIV of the separation bubble at α = 4° and
+8°. SA-AFT, Tu 0.5 % (N_crit 4.29, the Mack/Drela value), is the case
+`aft_sd7003.toml` with `turbulence_intensity = 0.005`, on a 320 000-cell
+C-mesh, run with a sharp trailing edge and with a blunt one (0.3 % chord).
+Polar: `pyaeroflow polar aft_sd7003.toml --alpha 4 6 8 9` with that setting.
+
+| α | C_L sharp TE | C_L blunt TE | C_D sharp TE | C_D blunt TE |
+|---|---|---|---|---|
+| 4 | 0.589 | 0.597 | 0.0176 | 0.0178 |
+| 6 | 0.783 | 0.795 | 0.0218 | 0.0220 |
+| 8 | 0.954 | 0.970 | 0.0303 | 0.0305 |
+| 9 | 1.013 | 1.033 (not converged) | 0.0390 | 0.0388 |
+
+The blunt trailing edge raises C_L by 1.4–1.7 % and C_D by about 0.0002; it
+does not change the bubble. Both meshes stall between 8° and 9°; the
+sharp-TE run at 10° is fully stalled (C_L 0.74, flat to 12°).
+
+| α | | x_s | x_tr | x_r |
+|---|---|---|---|---|
+| 4 | Herbst (PIV, Tu 0.5 %) | 0.25 | 0.58 | 0.73 |
+| 4 | TU-BS (PIV, Tu 0.1 %, Ol et al. 2005) | 0.30 | 0.53 | 0.62 |
+| 4 | SA-AFT, sharp / blunt TE | 0.251 / 0.251 | 0.46 / 0.46 | 0.593 / 0.590 |
+| 8 | Herbst (PIV) | 0.14 | 0.19 | 0.27 |
+| 8 | LES (as quoted by Ruiz & D'Ambrosio 2022) | 0.04 | 0.18 | 0.28 |
+| 8 | SA-AFT, sharp / blunt TE | 0.033 / 0.032 | 0.11 / 0.11 | 0.225 / 0.218 |
+
+Separation and reattachment are the C_f zero crossings on the upper
+surface; transition is the first point with ν_t/ν > 1, and Herbst's is a
+Reynolds-stress threshold, so only the order of magnitude is comparable. At
+α = 4° the separation point agrees with Herbst and reattachment lies
+between the LES/DNS band (0.60–0.665) and TU-BS. Herbst's bubble is the
+longest of all the references. At α = 8° the model reproduces the LES
+bubble, which starts 0.1 upstream of the one Herbst reads by eye from the
+raw images.
+
+![SD7003 polar](figures/sd7003_herbst_polar.png)
+
+How to read the polar. Selig's curve is balance C_L. Herbst's is the normal
+force c_n integrated from the taps (to x/c 0.74 and 0.68, drag neglected);
+integrating the computed SST pressure over the same tap range gives about
+8 % less lift, and Herbst's α values sit 0.2–0.5° below the nominal ones.
+The computed lift follows Selig to within about 3 % up to α = 9°, the
+fully turbulent SST polar included; that agreement is partly fortuitous,
+since SST has no bubble (see above). Against Herbst the difference in the
+linear range is about the size of the tap truncation and the angle shift.
+The stall angle differs more clearly: Herbst's baseline falls from
+c_n 0.91 at 10.1° to 0.75 at nominal 11°, Selig's peaks near 10.8°, and
+SA-AFT stalls between 8° and 10°. Herbst also measured Tu = 10 % behind
+turbulence grids (integral scale 0.5c, c and 2c): no bubble up to 18° and no
+stall, which a steady RANS model cannot represent and which is not used as
+a reference here.
+
 [↑ back to table](#stage-table)
 
 ## References
@@ -371,3 +427,12 @@ baseline at this Reynolds number, not a predictor of the laminar bubble
 - McGhee, R. J., Walker, B. S., Millard, B. F. (1988): Experimental results
   for the Eppler 387 airfoil at low Reynolds numbers in the Langley
   low-turbulence pressure tunnel. NASA TM 4062.
+- Herbst, S. L., Kähler, C. J., Hain, R. (2017): Influence of large-scale
+  free-stream turbulence on an SD7003 airfoil at low Reynolds numbers.
+  AIAA paper, Universität der Bundeswehr München.
+- Selig, M. S., Guglielmo, J. J., Broeren, A. P., Giguère, P. (1995):
+  Summary of Low-Speed Airfoil Data, Vol. 1. SoarTech Publications.
+- Ol, M. V., McAuliffe, B. R., Hanff, E. S., Scholz, U., Kähler, C. J.
+  (2005): Comparison of laminar separation bubble measurements on a low
+  Reynolds number airfoil in three facilities. 35th AIAA Fluid Dynamics
+  Conference.
