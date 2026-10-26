@@ -19,7 +19,7 @@ class Capabilities(NamedTuple):
     """What a case provides: decides which fields exist."""
 
     model: str  # "euler", "laminar" or "rans"
-    transition: str  # "none", "bcm" or "aft" (only meaningful with rans)
+    transition: str  # "none", "bcm", "aft" or "lm" (only meaningful with rans)
     steady: bool
     implicit: bool  # steady with the implicit solver
     walls: bool  # output.force_boundaries is not empty
@@ -188,6 +188,14 @@ def _amplification_factor(c):
     return c.w[:, 5]
 
 
+def _re_theta_t(c):
+    return c.w[:, 6]
+
+
+def _effective_intermittency(c):
+    return c.problem.effective_intermittency(c.w)
+
+
 def _residual(column, scale=None):
     def compute(c):
         # Residual per unit cell volume (area in 2D), non-dimensional; ``scale``
@@ -201,6 +209,11 @@ def _residual(column, scale=None):
 def _nu_nd(c):
     # The SST omega residual is solved multiplied by nu (rans_sst).
     return c.problem.model.viscosity / c.problem.model.density
+
+
+def _ret_scale(c):
+    # The Langtry-Menter Re_thetat residual is solved multiplied by RET_SCALE.
+    return 1.0e-3
 
 
 def _wall(key):
@@ -252,6 +265,14 @@ def _implicit(caps):
 
 def _implicit_aft(caps):
     return caps.implicit and _aft(caps)
+
+
+def _lm(caps):
+    return caps.model == "rans" and caps.transition == "lm"
+
+
+def _implicit_lm(caps):
+    return caps.implicit and _lm(caps)
 
 
 def _wall_any(caps):
@@ -375,6 +396,24 @@ FIELDS = (
         _amplification_factor,
     ),
     Field(
+        "re_theta_t",
+        "1",
+        "Transported transition-onset momentum-thickness Reynolds number "
+        "Re_thetat of Langtry-Menter",
+        "rans with transition.model = lm",
+        _lm,
+        _re_theta_t,
+    ),
+    Field(
+        "intermittency_effective",
+        "1",
+        "Effective intermittency max(gamma, gamma_sep) on the SST production "
+        "(gamma_sep > 1 marks separation-induced transition)",
+        "rans with transition.model = lm",
+        _lm,
+        _effective_intermittency,
+    ),
+    Field(
         "residual_p",
         "1",
         "Pressure (continuity) residual per cell volume",
@@ -439,6 +478,22 @@ FIELDS = (
         _residual(5),
     ),
     Field(
+        "residual_intermittency",
+        "1",
+        "Intermittency residual per cell volume",
+        "steady, implicit, transition.model = lm",
+        _implicit_lm,
+        _residual(5),
+    ),
+    Field(
+        "residual_re_theta_t",
+        "1",
+        "Re_thetat residual per cell volume",
+        "steady, implicit, transition.model = lm",
+        _implicit_lm,
+        _residual(6, _ret_scale),
+    ),
+    Field(
         "cf",
         "1",
         "Skin-friction coefficient with attached flow positive on every side "
@@ -494,6 +549,8 @@ DEFAULT_NAMES = (
     "eddy_viscosity_ratio",
     "intermittency",
     "amplification_factor",
+    "re_theta_t",
+    "intermittency_effective",
 )
 
 
@@ -565,6 +622,7 @@ def catalogue_table():
         ("SA + BCM", Capabilities("rans", "bcm", True, True, True)),
         ("SA + AFT", Capabilities("rans", "aft", True, True, True)),
         ("SST", Capabilities("rans", "none", True, True, True, "sst")),
+        ("SST + LM", Capabilities("rans", "lm", True, True, True, "sst")),
     )
     head = "| Field | Unit | Description | Needs | " + " | ".join(c[0] for c in cases)
     lines = [head + " |", "|" + "---|" * (4 + len(cases))]

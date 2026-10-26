@@ -1,0 +1,81 @@
+# SD7003 at Re = 6e4 with k-omega SST and the Langtry-Menter gamma-Re_theta
+# transition model (SST-2003m-LM2009, L3 step 4; docs/validation.md section 10).
+# Geometry: CST resampling (1000 points) of the original SD7003 coordinates,
+# made in PyAero 3.0. The mesh is a C-type PyAero mesh, placed next to this
+# file as sd7003_pyaero.su2. Boundary names follow the E387 mesh: change them
+# if the PyAero export uses other names.
+# Freestream Tu = 0.1 %, nu_t/nu = 1 (the SST default, given explicitly).
+# Polar: pyaeroflow polar cases/lm_sd7003.toml --alpha 0 2 4 6 8
+
+[case]
+name = "lm_sd7003"
+
+[mesh]
+file = "sd7003_pyaero.su2"        # boundary faces: airfoil, inlet, outlet, top, bottom
+
+[physics]
+model = "rans"
+turbulence = "sst"
+
+[physics.transition]
+model = "lm"
+
+[fluid]
+density = 1.0                     # kg/m^3
+viscosity = 1.6667e-5             # Pa s: Re = 6e4 with U = 1 m/s, c = 1 m
+
+[reference]
+velocity = 1.0                    # m/s
+length = 1.0                      # m, chord
+moment_center = [0.25, 0.0]       # m, quarter chord
+vortex_correction = true
+
+[initial]
+from_boundary = "inlet"
+
+[boundary.airfoil]
+type = "wall"
+
+[boundary.inlet]
+type = "farfield"
+velocity = 1.0
+angle_of_attack = 4.0             # deg, overridden by the polar
+pressure = 0.0
+turbulence = { turbulent_viscosity_ratio = 1.0, intensity = 0.001 }
+
+[boundary.outlet]
+type = "farfield"
+velocity = 1.0
+angle_of_attack = 4.0
+pressure = 0.0
+turbulence = { turbulent_viscosity_ratio = 1.0, intensity = 0.001 }
+
+[boundary.top]
+type = "farfield"
+velocity = 1.0
+angle_of_attack = 4.0
+pressure = 0.0
+turbulence = { turbulent_viscosity_ratio = 1.0, intensity = 0.001 }
+
+[boundary.bottom]
+type = "farfield"
+velocity = 1.0
+angle_of_attack = 4.0
+pressure = 0.0
+turbulence = { turbulent_viscosity_ratio = 1.0, intensity = 0.001 }
+
+[numerics]
+limiter = "venkatakrishnan"
+limiter_freeze = { after_residual_drop = 1.5, after_iterations = 40, release = true }
+
+[solver]
+residual_drop = 7.0
+max_iterations = 2000
+cfl = { control = "ser" }
+newton_krylov = { switch_at_residual_drop = 1.5, switch_at_iteration = 40 }
+linear_solver = { type = "pardiso" }   # remove or use "direct" without pypardiso
+
+[output]
+directory = "output/lm_sd7003"
+restart_interval = 50
+force_boundaries = ["airfoil"]

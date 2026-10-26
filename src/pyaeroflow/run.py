@@ -539,15 +539,17 @@ def load_restart(path, mesh, w_default):
 
     A laminar restart used for a RANS case keeps the default nu_tilde, a RANS
     restart used for a laminar case drops it. The column count tells the
-    turbulence model (4 SA, 5 SST, 6 SA-AFT): between SST and SA only p, u, v
-    are taken over.
+    turbulence model (4 SA, 5 SST, 6 SA-AFT, 7 SST-LM): between SST and SA
+    only p, u, v are taken over; SST <-> SST-LM keeps k and omega, SA <-> SA-AFT
+    keeps nu_tilde.
     """
     with np.load(path) as data:
         if str(data["fingerprint"]) != mesh_fingerprint(mesh):
             raise ValueError(f"restart file {path} belongs to a different mesh")
         w = np.array(data["w"], dtype=float)
     n = min(w.shape[1], w_default.shape[1])
-    if (w.shape[1] == 5) != (w_default.shape[1] == 5):
+    sst_family = (5, 7)
+    if (w.shape[1] in sst_family) != (w_default.shape[1] in sst_family):
         n = min(n, 3)
     w0 = np.array(w_default, dtype=float)
     w0[:, :n] = w[:, :n]
@@ -775,8 +777,10 @@ def _residual_names(problem):
         names += ("k", "om")
     elif problem.turbulent:
         names += ("nu",)
-    if problem.model.n_var == 6:
+    if problem.model.transition == "aft":
         names += ("gam", "n")
+    elif problem.model.transition == "lm":
+        names += ("gam", "ret")
     return names
 
 
@@ -1327,7 +1331,9 @@ def _log_setup(log, config, problem, scaling, mesh):
     log.table(rows)
     log.section("Mesh")
     scale = cfg["mesh"]["scale"]
-    log.write(f"  file: {cfg['mesh']['file']}" + (f" (scale {scale})" if scale != 1 else ""))
+    log.write(
+        f"  file: {cfg['mesh']['file']}" + (f" (scale {scale})" if scale != 1 else "")
+    )
     for line in mesh.summary().splitlines():
         log.write("  " + line)
     log.section("Boundary conditions")
@@ -1364,6 +1370,22 @@ def _log_setup(log, config, problem, scaling, mesh):
                     + (" (given)" if given else f" from Tu = {tu:.3g} %"),
                 )
             )
+        elif problem.model.transition == "lm":
+            turb = np.asarray(problem.bc.turbulence)
+            kind = np.asarray(problem.bc.kind)
+            inflow = np.isin(
+                kind, (inc.VELOCITY_INLET, inc.FARFIELD, inc.TOTAL_PRESSURE_INLET)
+            )
+            if inflow.any():
+                re_t = turb[inflow, 3]
+                text = (
+                    f"lm (SST-2003m-LM2009), inflow Re_thetat = {re_t.min():.0f}"
+                    + (f"-{re_t.max():.0f}" if re_t.max() > 1.001 * re_t.min() else "")
+                    + " from the inflow Tu (local Tu from k in the field)"
+                )
+            else:
+                text = "lm (SST-2003m-LM2009)"
+            rows.append(("transition", text))
         elif problem.model.transition != "none":
             tu = problem.model.turbulence_intensity
             re_theta_t = 803.73 * (tu + 0.6067) ** (-1.027)

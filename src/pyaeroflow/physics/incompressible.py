@@ -97,9 +97,11 @@ class IncompressibleModel(NamedTuple):
     coupling : {"segregated", "coupled"}
         Mean-flow/turbulence coupling of the first-order Jacobian (D34):
         "segregated" drops the cross-coupling blocks.
-    transition : {"none", "bcm", "aft"}
+    transition : {"none", "bcm", "aft", "lm"}
         Transition model (L3): algebraic BCM, or SA-AFT2019b, which adds the
-        log-intermittency and the amplification factor as columns 4 and 5.
+        log-intermittency and the amplification factor as columns 4 and 5,
+        both on SA; or Langtry-Menter gamma-Re_theta on SST, which adds the
+        intermittency and Re_thetat as columns 5 and 6.
     turbulence_intensity : float
         Freestream Tu in percent.
     critical_amplification : float or None
@@ -119,17 +121,17 @@ class IncompressibleModel(NamedTuple):
     turbulence: str = "none"
     turbulence_spatial_order: int = 1
     coupling: str = "segregated"
-    transition: str = "none"  # "none", "bcm" (algebraic) or "aft" (SA-AFT2019b)
+    transition: str = "none"  # "none", "bcm", "aft" (SA-AFT2019b) or "lm" (SST)
     turbulence_intensity: float = 0.0  # freestream Tu in percent (BCM, AFT)
     critical_amplification: float = None  # AFT N_crit; None: from Tu
 
     @property
     def n_var(self):
-        """Number of variables: 3, 4 with SA, 5 with SST, 6 with SA-AFT."""
+        """Number of variables: 3, 4 with SA, 5 with SST, 6 with SA-AFT, 7 SST-LM."""
         if self.turbulence == "none":
             return 3
         if self.turbulence == "sst":
-            return 5
+            return 7 if self.transition == "lm" else 5
         return 6 if self.transition == "aft" else 4
 
 

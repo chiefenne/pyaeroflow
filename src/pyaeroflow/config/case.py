@@ -440,7 +440,13 @@ def _consistency(data, explicit, problems, notices, path):
                 "physics.transition.critical_amplification ignored: model != aft"
             )
         given_n_crit = tr["model"] == "aft" and tr["critical_amplification"] is not None
-        if tr["turbulence_intensity"] is None and not given_n_crit:
+        if tr["model"] == "lm":
+            if tr["turbulence_intensity"] is not None:
+                notices.append(
+                    "physics.transition.turbulence_intensity ignored with model = lm "
+                    "(Tu follows from the local k)"
+                )
+        elif tr["turbulence_intensity"] is None and not given_n_crit:
             tu = [
                 b["turbulence"]["intensity"]
                 for b in boundaries.values()
@@ -466,11 +472,13 @@ def _consistency(data, explicit, problems, notices, path):
         notices.append(
             "physics.transition.critical_amplification ignored: model = none"
         )
+    if rans and physics["turbulence"] != "sst" and tr["model"] == "lm":
+        problems.append("physics.transition.model = lm needs turbulence = sst")
     if rans and physics["turbulence"] == "sst":
-        if tr["model"] != "none":
+        if tr["model"] not in ("none", "lm"):
             problems.append(
                 f"physics.transition.model = {tr['model']} needs turbulence = sa-neg "
-                "(the transition models are built on SA)"
+                "(bcm and aft are built on SA; SST takes model = lm)"
             )
         if data["solver"]["nu_tilde_step_limit"] is not None:
             notices.append(

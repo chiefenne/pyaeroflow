@@ -149,7 +149,7 @@ def test_transition_models_need_sa():
         "plate": {"type": "wall"},
     }
     model = inc.IncompressibleModel(viscosity=1e-5, turbulence="sst", transition="aft")
-    with pytest.raises(ValueError, match="SA only"):
+    with pytest.raises(ValueError, match="needs SA"):
         IncompressibleProblem(mesh, model, cond)
 
 

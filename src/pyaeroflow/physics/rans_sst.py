@@ -23,6 +23,14 @@ Boundary values: k = 0 and omega = 60 nu / (beta_1 d1^2) at walls (stored in
 ``BoundaryData.turbulence`` by the driver, d1 the wall cell's height), the
 prescribed (k, omega) at velocity inlets, total-pressure inlets and
 inflowing farfield faces, the interior values elsewhere.
+
+With the Langtry-Menter transition model (``model.transition == "lm"``,
+:mod:`pyaeroflow.physics.lm`) the state has two more columns, the
+intermittency gamma (NGL) and Re_thetat (NRT). They are prescribed (1 and
+the freestream correlation, also in ``BoundaryData.turbulence``) on inflow
+faces and have zero gradient elsewhere, walls included (TMR, SU2). They are
+convected and diffused like k and omega; the Re_thetat row is scaled by
+RET_SCALE for the same reason as the omega row.
 """
 
 from functools import partial
@@ -37,7 +45,7 @@ from pyaeroflow.numerics import (
     reconstruct,
 )
 from pyaeroflow.physics import incompressible as inc
-from pyaeroflow.physics import sst
+from pyaeroflow.physics import lm, sst
 from pyaeroflow.physics.incompressible import (
     FARFIELD,
     TOTAL_PRESSURE_INLET,
@@ -73,11 +81,15 @@ __all__ = [
     "segregated_mask",
     "cell_quantities",
     "eddy_viscosity",
+    "intermittency_field",
 ]
 
 NK = 3  # column of k
 NW = 4  # column of omega
 NT = NK  # first turbulence column (the interface of physics.rans)
+NGL = 5  # column of the intermittency gamma (Langtry-Menter)
+NRT = 6  # column of Re_thetat (Langtry-Menter)
+RET_SCALE = 1.0e-3  # row scaling of the Re_thetat residual (values 1e2-1e3)
 OMEGA_MIN = 1.0e-8  # floor of omega in denominators (non-dimensional)
 
 
@@ -85,13 +97,19 @@ def boundary_turbulence(bc, normal, w_b3, t_in):
     """(k, omega) on boundary faces from the mean boundary state and the interior."""
     vn = w_b3[:, U] * normal[:, 0] + w_b3[:, V] * normal[:, 1]
     kind = bc.kind
-    prescribed = (
-        (kind == WALL)
-        | (kind == VELOCITY_INLET)
+    inflow = (
+        (kind == VELOCITY_INLET)
         | (kind == TOTAL_PRESSURE_INLET)
         | ((kind == FARFIELD) & (vn < 0.0))
     )
-    return jnp.where(prescribed[:, None], bc.turbulence, t_in)
+    k_omega = jnp.where(
+        (inflow | (kind == WALL))[:, None], bc.turbulence[:, :2], t_in[:, :2]
+    )
+    if t_in.shape[1] == 2:
+        return k_omega
+    # Langtry-Menter: gamma and Re_thetat prescribed on inflow faces only.
+    trans = jnp.where(inflow[:, None], bc.turbulence[:, 2:], t_in[:, 2:])
+    return jnp.concatenate((k_omega, trans), axis=1)
 
 
 def boundary_state(bc, normal, w_in):
@@ -106,47 +124,95 @@ def _omega(w):
 
 
 def cell_quantities(model, geom, w, grad):
-    """Per-cell strain rate, F1, F2, nu_t and grad k . grad omega."""
+    """Per-cell strain rate, F1, F2, nu_t and grad k . grad omega.
+
+    With Langtry-Menter F1 is max(F1, F3).
+    """
     nu = kinematic_viscosity(model)
     k = jnp.maximum(w[:, NK], 0.0)
     omega = _omega(w)
     strain = strain_rate(grad[:, U : V + 1, :])
     kgw = jnp.sum(grad[:, NK, :] * grad[:, NW, :], axis=1)
     f1, f2 = sst.blending(k, omega, nu, geom.wall_distance, kgw)
+    if model.transition == "lm":
+        f1 = jnp.maximum(f1, lm.blending_f3(k, nu, geom.wall_distance))
     nu_t = sst.eddy_viscosity(k, omega, strain, f2)
     return strain, f1, f2, nu_t, kgw
+
+
+def _flow_inputs(w, grad):
+    """Vorticity, speed U and dU/ds = u_m u_n / U^2 du_m/dx_n per cell."""
+    vort = jnp.abs(grad[:, V, 0] - grad[:, U, 1])
+    u, v = w[:, U], w[:, V]
+    u2 = u * u + v * v
+    du_ds = (
+        u * u * grad[:, U, 0]
+        + u * v * (grad[:, U, 1] + grad[:, V, 0])
+        + v * v * grad[:, V, 1]
+    ) / jnp.maximum(u2, lm.TINY)
+    return vort, jnp.sqrt(u2 + lm.TINY), du_ds
+
+
+def _lm_arguments(model, geom, w, grad, strain):
+    """Arguments (gamma, re_t, k, omega, nu, S, Omega, d, U, dU/ds) of lm."""
+    vort, speed, du_ds = _flow_inputs(w, grad)
+    return (
+        w[:, NGL],
+        w[:, NRT],
+        jnp.maximum(w[:, NK], 0.0),
+        _omega(w),
+        kinematic_viscosity(model),
+        strain,
+        vort,
+        geom.wall_distance,
+        speed,
+        du_ds,
+    )
+
+
+def effective_intermittency(model, geom, w, grad, strain):
+    """gamma_eff = max(gamma, gamma_sep) per cell (Langtry-Menter)."""
+    return lm.effective_intermittency(*_lm_arguments(model, geom, w, grad, strain)[:9])
 
 
 def _face_coefficients(model, nu_t, f1, o, n):
     """mu_eff and the (k, omega) diffusion coefficients at faces, cell averages."""
     nu = kinematic_viscosity(model)
-    dk, dw = sst.diffusion_coefficients(nu, nu_t, f1)
+    coeffs = _cell_diffusion(model, nu, nu_t, f1)
     mu = model.viscosity + model.density * 0.5 * (nu_t[o] + nu_t[n])
-    dc = jnp.stack((0.5 * (dk[o] + dk[n]), 0.5 * (dw[o] + dw[n])), axis=1)
+    dc = jnp.stack([0.5 * (c[o] + c[n]) for c in coeffs], axis=1)
     return mu, dc
+
+
+def _cell_diffusion(model, nu, nu_t, f1):
+    """Diffusion coefficients of the turbulence columns (k, omega[, gamma, Re_t])."""
+    coeffs = sst.diffusion_coefficients(nu, nu_t, f1)
+    if model.transition == "lm":
+        coeffs = coeffs + lm.diffusion_coefficients(nu, nu_t)
+    return coeffs
 
 
 def _boundary_coefficients(model, bc, nu_t, f1, b):
     """Face coefficients at boundary faces: nu_t = 0 at walls, owner F1."""
     nu = kinematic_viscosity(model)
     nu_t_b = 0.5 * (nu_t[b] + jnp.where(bc.kind == WALL, 0.0, nu_t[b]))
-    dk, dw = sst.diffusion_coefficients(nu, nu_t_b, f1[b])
-    return model.viscosity + model.density * nu_t_b, jnp.stack((dk, dw), axis=1)
+    coeffs = _cell_diffusion(model, nu, nu_t_b, f1[b])
+    return model.viscosity + model.density * nu_t_b, jnp.stack(coeffs, axis=1)
 
 
 @partial(jax.jit, static_argnums=0)
 def limiter(model, geom, bc, w):
-    """Limiter values psi of the current state, shape (n_cells, 5)."""
+    """Limiter values psi of the current state, shape (n_cells, n_var)."""
     w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
     return inc._limiter(model, geom, w, w_b, lsq_gradient(geom, w, w_b))
 
 
 @partial(jax.jit, static_argnums=(0, 4))
 def residual(model, geom, bc, w, order, beta2, psi=None, gamma=None):
-    """Residual R(w), shape (n_cells, 5): net outflow minus sources.
+    """Residual R(w), shape (n_cells, n_var): net outflow minus sources.
 
     ``gamma`` is accepted for the interface of :mod:`pyaeroflow.physics.rans`
-    and ignored (no transition model with SST).
+    and ignored (Langtry-Menter transports its intermittency).
     """
     o, n, b = geom.f_owner, geom.f_neigh, geom.b_owner
     w_b = boundary_state(bc, geom.b_normal, w[b])
@@ -197,10 +263,17 @@ def residual(model, geom, bc, w, order, beta2, psi=None, gamma=None):
         jnp.concatenate((b_flux, t_b), axis=1),
     )
     switch = 1.0 if geom.production_switch is None else geom.production_switch
-    s_k, s_w = sst.sources(w[:, NK], _omega(w), strain, f1, f2, kgw, switch)
+    g_eff = None
+    if model.transition == "lm":
+        args = _lm_arguments(model, geom, w, grad, strain)
+        g_eff = lm.effective_intermittency(*args[:9])
+        s_g, s_t = lm.sources(*args)
+        r = r.at[:, NGL].add(-geom.area * s_g)
+        r = r.at[:, NRT].add(-geom.area * s_t)
+    s_k, s_w = sst.sources(w[:, NK], _omega(w), strain, f1, f2, kgw, switch, g_eff)
     r = r.at[:, NK].add(-geom.area * s_k)
     r = r.at[:, NW].add(-geom.area * s_w)
-    r = r.at[:, NW].multiply(kinematic_viscosity(model))  # row scaling
+    r = r.at[:, NK:].multiply(_row_scale(model)[None, :])  # row scaling
     force = jnp.asarray(model.body_force)
     r = r.at[:, 1:3].add(-geom.area[:, None] * force[None, :])
     if model.pin is not None:
@@ -220,8 +293,11 @@ def residual_jvp(model, geom, bc, w, dw, order, beta2, psi=None, gamma=None):
 
 
 def _row_scale(model):
-    """Row factors of the (k, omega) residuals: (1, nu)."""
-    return jnp.array([1.0, kinematic_viscosity(model)])
+    """Row factors of the turbulence residuals: (1, nu[, 1, RET_SCALE])."""
+    scale = [1.0, kinematic_viscosity(model)]
+    if model.transition == "lm":
+        scale += [1.0, RET_SCALE]
+    return jnp.array(scale)
 
 
 @partial(jax.jit, static_argnums=0)
@@ -280,36 +356,60 @@ def boundary_flux(model, beta2, w_o, bc_kind, bc_value, bc_turb, mu, dc, normal,
 
 @partial(jax.jit, static_argnums=0)
 def source_blocks(model, geom, bc, w):
-    """Cell-local source Jacobian blocks (n_cells, 5, 5), SU2's implicit part.
+    """Cell-local source Jacobian blocks (n_cells, n_var, n_var), SU2's implicit part.
 
-    Only the destruction terms: d(beta* k omega)/d(k, omega) and
-    d(beta omega^2)/d omega with the F1-blended beta, times the cell area
-    (the residual carries minus the source). Production and cross diffusion
-    are left to the exact Newton-Krylov JVP.
+    Only the destruction terms: d(beta* k omega)/d(k, omega) (times the
+    Langtry-Menter destruction factor) and d(beta omega^2)/d omega with the
+    F1-blended beta, times the cell area (the residual carries minus the
+    source). Production and cross diffusion are left to the exact
+    Newton-Krylov JVP. With Langtry-Menter the diagonal derivatives of the
+    gamma and Re_thetat sources are added, clipped to their negative part
+    (as in :func:`pyaeroflow.physics.rans.source_blocks`), with the stencil
+    quantities frozen.
     """
     w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
     grad = lsq_gradient(geom, w, w_b)
-    _, f1, _, _, _ = cell_quantities(model, geom, w, grad)
+    strain, f1, _, _, _ = cell_quantities(model, geom, w, grad)
     k = jnp.maximum(w[:, NK], 0.0)
     omega = _omega(w)
     beta = sst.blend(f1, sst.BETA_1, sst.BETA_2)
     a = geom.area
-    blocks = jnp.zeros((w.shape[0], 5, 5))
-    blocks = blocks.at[:, NK, NK].set(a * sst.BETA_STAR * omega)
-    blocks = blocks.at[:, NK, NW].set(a * sst.BETA_STAR * k)
+    n_var = w.shape[1]
+    d_fac = 1.0
+    blocks = jnp.zeros((w.shape[0], n_var, n_var))
+    if model.transition == "lm":
+        args = _lm_arguments(model, geom, w, grad, strain)
+        d_fac = lm.destruction_factor(lm.effective_intermittency(*args[:9]))
+
+        def cell(g, t, *rest):
+            return jnp.stack(lm.sources(g, t, *rest))
+
+        d_g = jax.vmap(
+            jax.grad(lambda *x: cell(*x)[0], argnums=0),
+            in_axes=(0, 0, 0, 0, None, 0, 0, 0, 0, 0),
+        )(*args)
+        d_t = jax.vmap(
+            jax.grad(lambda *x: cell(*x)[1], argnums=1),
+            in_axes=(0, 0, 0, 0, None, 0, 0, 0, 0, 0),
+        )(*args)
+        blocks = blocks.at[:, NGL, NGL].set(-a * jnp.minimum(d_g, 0.0))
+        blocks = blocks.at[:, NRT, NRT].set(-a * RET_SCALE * jnp.minimum(d_t, 0.0))
+    blocks = blocks.at[:, NK, NK].set(a * d_fac * sst.BETA_STAR * omega)
+    blocks = blocks.at[:, NK, NW].set(a * d_fac * sst.BETA_STAR * k)
     nu = kinematic_viscosity(model)
     return blocks.at[:, NW, NW].set(nu * a * 2.0 * beta * omega)
 
 
 @partial(jax.jit, static_argnums=0)
 def time_term_blocks(model, geom, w, beta2, cfl):
-    """Pseudo-time blocks with the omega row scaled by nu.
+    """Pseudo-time blocks with the turbulence rows scaled like the residual.
 
     Those of :func:`pyaeroflow.physics.rans.time_term_blocks`, row-scaled
-    like the omega residual.
+    like the omega (and Re_thetat) residual.
     """
     g = rans_time_term_blocks(model, geom, w, beta2, cfl)
-    return g.at[:, NW, NW].multiply(kinematic_viscosity(model))
+    k = jnp.arange(NK, w.shape[1])
+    return g.at[:, k, k].multiply(_row_scale(model)[None, :])
 
 
 @partial(jax.jit, static_argnums=0)
@@ -328,3 +428,20 @@ def eddy_viscosity(model, geom, bc, w):
 def blending_f1(model, geom, bc, w):
     """Menter's first blending function per cell."""
     return _fields(model, geom, bc, w)[1]
+
+
+@partial(jax.jit, static_argnums=0)
+def intermittency_field(model, geom, bc, w):
+    """Transported intermittency gamma per cell (ones without Langtry-Menter)."""
+    if model.transition != "lm":
+        return jnp.ones(w.shape[0])
+    return w[:, NGL]
+
+
+@partial(jax.jit, static_argnums=0)
+def effective_intermittency_field(model, geom, bc, w):
+    """gamma_eff = max(gamma, gamma_sep) per cell (Langtry-Menter)."""
+    w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
+    grad = lsq_gradient(geom, w, w_b)
+    strain = strain_rate(grad[:, U : V + 1, :])
+    return effective_intermittency(model, geom, w, grad, strain)

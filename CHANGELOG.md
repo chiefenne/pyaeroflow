@@ -2,6 +2,18 @@
 
 ## Unreleased (0.9) – Transition, step 2: SA-AFT2019b
 
+- Langtry–Menter γ-Re_θ transition on SST (L3 step 4):
+  `physics.transition.model = "lm"` with `turbulence = "sst"`, the TMR
+  SST-2003-LM2009 equations on the SST-2003m base with SU2's
+  `MENTER_LANGTRY` correlations (local Tu from k, local dU/ds,
+  separation-induced γ_sep, F₁ = max(F₁, F₃)). Two transport equations for
+  γ and Re_θt (7 unknowns per cell, log columns `gam`, `ret`), exact
+  Newton–Krylov JVP. New fields `re_theta_t`, `intermittency_effective`,
+  `residual_intermittency`, `residual_re_theta_t`. A restart between SST and
+  SST-LM keeps k and ω. ERCOFTAC T3A, T3B, T3A− in `docs/validation.md` §10
+  (T3A− onset at Re_x 1.35·10⁶ against 1.44·10⁶ measured); example cases
+  `examples/cases/lm_*.toml`.
+
 - k-ω SST turbulence model (D12, L2): `physics.turbulence = "sst"`, Menter's
   SST-2003m with SU2's formulation and constants (strain-rate ν_t limiter,
   production limiter, F1/F2 blending, cross diffusion, wall ω = 60ν/(β₁d₁²)).

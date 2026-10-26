@@ -70,8 +70,10 @@ SCHEMA = {
                 "Transition model: bcm = algebraic intermittency on the SA production "
                 "(Cakmakcioglu et al., 2020 revision, with SA-noft2); aft = "
                 "SA-AFT2019b (Coder: transport equations for the amplification "
-                "factor and the log-intermittency); combines with mode = prescribed",
-                choices=("none", "bcm", "aft"),
+                "factor and the log-intermittency); lm = Langtry-Menter gamma-Re_theta "
+                "on SST (SST-2003m-LM2009 as in SU2, Tu from the inflow k); "
+                "combines with mode = prescribed",
+                choices=("none", "bcm", "aft", "lm"),
             ),
             "turbulence_intensity": Opt(
                 "float",

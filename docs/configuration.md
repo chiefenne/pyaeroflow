@@ -188,7 +188,7 @@ case file (D42).
 | Key | Type | Default | Description | # |
 |-----|------|---------|-------------|---|
 | `model` | `"euler"` \| `"laminar"` \| `"rans"` | req. | Governing equations | D10 |
-| `turbulence` | `"sa-neg"` \| `"sst"` | `"sa-neg"` if `model = "rans"` | Turbulence model: `"sa-neg"` Spalart–Allmaras, negative variant (NASA TMR); `"sst"` Menter k-ω SST, version SST-2003m as in SU2 (see [k-ω SST](#k-ω-sst)). The transition models need `"sa-neg"` | D11, D12, L2 |
+| `turbulence` | `"sa-neg"` \| `"sst"` | `"sa-neg"` if `model = "rans"` | Turbulence model: `"sa-neg"` Spalart–Allmaras, negative variant (NASA TMR); `"sst"` Menter k-ω SST, version SST-2003m as in SU2 (see [k-ω SST](#k-ω-sst)). The transition models `"bcm"` and `"aft"` need `"sa-neg"`, `"lm"` needs `"sst"` | D11, D12, L2 |
 | `mean_pressure_gradient` | [float, float] | – | Driving force for periodic channels: constant mean pressure gradient (dp/dx, dp/dy) in Pa/m, applied as a momentum source | D39 |
 
 `[physics.transition]`, only for `model = "rans"`:
@@ -196,8 +196,8 @@ case file (D42).
 | Key | Type | Default | Description | # |
 |-----|------|---------|-------------|---|
 | `mode` | `"none"` \| `"prescribed"` | `"none"` | `"none"` = fully turbulent | D15 |
-| `model` | `"none"` \| `"bcm"` \| `"aft"` | `"none"` | Transition model (L3). `"aft"`: SA-AFT2019b (Coder; NASA TMR `aft_transition_3eqn`, equations in `docs/aft_design.md` §5): two more transport equations, for the log-intermittency γ̃ = ln γ and the amplification factor ñ (the transported e^N envelope), so 6 unknowns per cell. ñ grows once the vorticity Reynolds number exceeds its critical value from the local shape factor; onset where ñ passes N_crit; the only change to SA is f_t2 = 1.2 (1 − e^γ̃). Freestream and inflow ñ = 0, γ̃ = 0; zero gradient at walls. Needs a laminar freestream, ν̃/ν ≈ 0.1 (`turbulence = { nu_tilde_ratio = 0.1 }`; a notice outside 0.05–0.5). Output: `intermittency` (= e^γ̃) and `amplification_factor` in the VTU, residual columns `gam` and `n` in the log. `"bcm"`: the algebraic intermittency of Cakmakcioglu, Bas, Mura & Kaynak (2020 revision, as in SU2) multiplies the SA production: γ = 1 − exp(−√T₁ − √T₂) with T₁ from the vorticity Reynolds number d²Ω/ν against Menter's critical Re_θ(Tu) and T₂ = 50 ν_t/ν; SA runs without the f_t2 term (SA-noft2-BCM). Combines with `mode = "prescribed"` (both factors multiply). Needs a laminar freestream: inflow `turbulence = { nu_tilde_ratio = 0.1 }` or `{ turbulent_viscosity_ratio = 2.8e-7, intensity = … }` — with the fully turbulent value 3 the second term makes γ = 0.96 everywhere (a notice says so). Output: `intermittency` field in the VTU, `nu_t_ratio_max` in the wall CSV, transition locations in the summary | L3 |
-| `turbulence_intensity` | float | inflow table | Freestream turbulence intensity Tu as a fraction (0.001 = 0.1 %) for the transition model (for `"aft"` only used for N_crit); default: the `intensity` of an inflow turbulence table. Free flight 0.0005–0.001, wind tunnels 0.001–0.01, the T3A plate 0.033. The model's critical Re_θ = 803.73 (100 Tu + 0.6067)^−1.027 is printed in the log | L3 |
+| `model` | `"none"` \| `"bcm"` \| `"aft"` \| `"lm"` | `"none"` | Transition model (L3). `"lm"`: Langtry–Menter γ-Re_θ on SST (SST-2003m-LM2009 as in SU2), see [Langtry–Menter γ-Re_θ](#langtrymenter-γ-re_θ); needs `turbulence = "sst"`. `"aft"`: SA-AFT2019b (Coder; NASA TMR `aft_transition_3eqn`, equations in `docs/aft_design.md` §5): two more transport equations, for the log-intermittency γ̃ = ln γ and the amplification factor ñ (the transported e^N envelope), so 6 unknowns per cell. ñ grows once the vorticity Reynolds number exceeds its critical value from the local shape factor; onset where ñ passes N_crit; the only change to SA is f_t2 = 1.2 (1 − e^γ̃). Freestream and inflow ñ = 0, γ̃ = 0; zero gradient at walls. Needs a laminar freestream, ν̃/ν ≈ 0.1 (`turbulence = { nu_tilde_ratio = 0.1 }`; a notice outside 0.05–0.5). Output: `intermittency` (= e^γ̃) and `amplification_factor` in the VTU, residual columns `gam` and `n` in the log. `"bcm"`: the algebraic intermittency of Cakmakcioglu, Bas, Mura & Kaynak (2020 revision, as in SU2) multiplies the SA production: γ = 1 − exp(−√T₁ − √T₂) with T₁ from the vorticity Reynolds number d²Ω/ν against Menter's critical Re_θ(Tu) and T₂ = 50 ν_t/ν; SA runs without the f_t2 term (SA-noft2-BCM). Combines with `mode = "prescribed"` (both factors multiply). Needs a laminar freestream: inflow `turbulence = { nu_tilde_ratio = 0.1 }` or `{ turbulent_viscosity_ratio = 2.8e-7, intensity = … }` — with the fully turbulent value 3 the second term makes γ = 0.96 everywhere (a notice says so). Output: `intermittency` field in the VTU, `nu_t_ratio_max` in the wall CSV, transition locations in the summary | L3 |
+| `turbulence_intensity` | float | inflow table | Freestream turbulence intensity Tu as a fraction (0.001 = 0.1 %) for the transition model (for `"aft"` only used for N_crit; ignored by `"lm"`, which takes Tu from the local k); default: the `intensity` of an inflow turbulence table. Free flight 0.0005–0.001, wind tunnels 0.001–0.01, the T3A plate 0.033. The model's critical Re_θ = 803.73 (100 Tu + 0.6067)^−1.027 is printed in the log | L3 |
 | `critical_amplification` | float | from `turbulence_intensity` | N_crit of `model = "aft"`. Default: Mack's relation with Drela's limit, N_crit = −8.43 − 2.4 ln(τ/100), τ = 2.5 tanh(100 Tu / 2.5) (8.15 at Tu = 0.1 %). Set it directly to match an XFOIL run (Coder used 10.3 for the Schubauer–Klebanoff plate, 9 for the S809, 7.2 for the NLF(1)-0416); `turbulence_intensity` is then not needed | L3 |
 | `relaxation` | float | `1` | Under-relaxation ω in (0, 1] of the BCM intermittency in steady runs: the residual uses a lagged γ that moves by ω (γ_model − γ) per accepted iteration, so a cell crossing the onset threshold ramps its production on over about 1/ω iterations instead of in one step (the step in R_ν seen as a force cycle in E387 α = 8, SER). The converged state is that of the unrelaxed model. `1` = off, 0.2–0.3 typical; not for unsteady runs | L3 |
 | `boundary`, `ramp`, `by_alpha` | string, float (m), array of tables | – | Transition locations per angle of attack: `by_alpha = [{ alpha = 0, upper = 0.45, lower = 0.45 }, …]` (deg; metres from the leading edge, XFOIL's `xtr` times the chord), interpolated linearly to the case's angle (`reference.angle_of_attack`, by default the farfield value; end rows held beyond the table) and turned into two `laminar_region` entries on `boundary` with the given `ramp`. Used by `pyaeroflow polar` per angle | D15 |
@@ -287,6 +287,46 @@ without a table: Tu = 0.1 %, ν_t/ν = 1. Fields: `k`, `omega`, `blending_f1`,
 `mu_t`, `residual_k`, `residual_omega` in addition to the eddy-viscosity
 fields. A restart between SA and SST takes over p, u, v only.
 Validation: `docs/validation.md` §9.
+
+#### Langtry–Menter γ-Re_θ
+
+`turbulence = "sst"` with `[physics.transition] model = "lm"` adds the
+Langtry–Menter transport equations for the intermittency γ and the
+transition-onset momentum-thickness Reynolds number Re_θt (7 unknowns per
+cell; log residual columns `gam` and `ret`). Formulation, constants and
+limits are those of the NASA TMR page "langtrymenter_4eqn" (SST-2003-LM2009,
+Langtry & Menter 2009, F_turb of Menter, Langtry & Völker 2006) and of SU2
+(`CSourcePieceWise_TransLM` with the `MENTER_LANGTRY` correlations, SU2's
+default for SST); on the SST-2003m base the model is SST-2003m-LM2009:
+
+- P_γ = F_length c_a1 S (γ F_onset)^½ (1 − c_e1 γ), E_γ = c_a2 Ω γ F_turb
+  (c_e2 γ − 1), onset from Re_V = d² S/ν against Re_θc(Re_θt), F_length and
+  Re_θc the 2009 correlations, R_T = k/(νω);
+- P_θt = c_θt U²/(500ν) (Re_θt^eq − Re_θt)(1 − F_θt), Re_θt^eq the
+  Tu–λ_θ correlation with the local Tu = 100 √(2k/3)/U (≥ 0.027 %) and the
+  local dU/ds, iterated on θ_t (λ_θ in ±0.1, Re_θt^eq ≥ 20);
+- coupling to SST: P_k × γ_eff, D_k × min(max(γ_eff, 0.1), 1),
+  γ_eff = max(γ, γ_sep) with the separation-induced γ_sep ≤ 2, and
+  F₁ = max(F₁, F₃), F₃ = exp(−(R_y/120)⁸); the ω equation is unchanged;
+- boundaries: inflow γ = 1 and Re_θt from the inflow Tu of that boundary
+  (the log prints it), zero gradient at walls and outflow.
+
+Numerics: γ and Re_θt are convected and diffused like k and ω (two-point
+normal derivative); the Re_θt equation is solved multiplied by 10⁻³ (the
+log column `ret` and the `residual_re_theta_t` field are 10⁻³ times and
+1 times its residual); their updates are limited like k and ω (at most
+99 % decrease per update, as a separate group); the first-order Jacobian
+adds the negative part of the diagonal source derivatives, Newton–Krylov
+differentiates everything exactly (nothing frozen).
+
+The freestream turbulence decays between the inflow and the body (SST
+without sustaining terms): set the inflow `intensity` and
+`turbulent_viscosity_ratio` so that the Tu at the body is the intended one
+(for the T3 plates: fitted to the measured decay, `docs/validation.md`
+§10). Fields: `intermittency` (γ), `intermittency_effective` (γ_eff),
+`re_theta_t`, `residual_intermittency`, `residual_re_theta_t`. A restart
+between SST and SST-LM keeps p, u, v, k, ω (γ = 1 and the freestream Re_θt
+fill the rest).
 
 ### Turbulence values
 
@@ -410,37 +450,41 @@ All values are in SI units except the residuals and the wall coefficients (non-d
 
 The table is generated from the field registry (`pyaeroflow.io.fields`); a column marks the model combinations for which a field exists. A field also needs the conditions of the column "Needs".
 
-| Field | Unit | Description | Needs | euler | laminar | SA | SA + BCM | SA + AFT | SST |
-|---|---|---|---|---|---|---|---|---|---|
-| `pressure` | Pa | Static pressure | always | x | x | x | x | x | x |
-| `velocity` | m/s | Velocity vector | always | x | x | x | x | x | x |
-| `velocity_magnitude` | m/s | Speed | always | x | x | x | x | x | x |
-| `vorticity` | 1/s | dv/dx - du/dy from the least-squares gradient (signed) | always | x | x | x | x | x | x |
-| `kinematic_viscosity` | m^2/s | Laminar kinematic viscosity (constant) | laminar, rans |  | x | x | x | x | x |
-| `eddy_viscosity` | m^2/s | Kinematic eddy viscosity nu_t | rans |  |  | x | x | x | x |
-| `eddy_viscosity_ratio` | 1 | nu_t / nu | rans |  |  | x | x | x | x |
-| `effective_viscosity` | m^2/s | nu + nu_t (the laminar value without a turbulence model) | laminar, rans |  | x | x | x | x | x |
-| `mu_t` | Pa s | Dynamic eddy viscosity rho nu_t | rans |  |  | x | x | x | x |
-| `nu_tilde` | m^2/s | SA working variable | rans with turbulence = sa-neg |  |  | x | x | x |  |
-| `k` | m^2/s^2 | Turbulent kinetic energy (SST) | rans with turbulence = sst |  |  |  |  |  | x |
-| `omega` | 1/s | Specific dissipation rate (SST) | rans with turbulence = sst |  |  |  |  |  | x |
-| `blending_f1` | 1 | Menter's blending function F1 (1: k-omega near the wall, 0: k-epsilon) | rans with turbulence = sst |  |  |  |  |  | x |
-| `wall_distance` | m | Distance to the nearest wall used by the turbulence model | rans |  |  | x | x | x | x |
-| `intermittency` | 1 | Transition intermittency gamma | rans with a transition model |  |  |  | x | x |  |
-| `amplification_factor` | 1 | Amplification factor n of SA-AFT | rans with transition.model = aft |  |  |  |  | x |  |
-| `residual_p` | 1 | Pressure (continuity) residual per cell volume | steady, implicit | x | x | x | x | x | x |
-| `residual_u` | 1 | x-momentum residual per cell volume | steady, implicit | x | x | x | x | x | x |
-| `residual_v` | 1 | y-momentum residual per cell volume | steady, implicit | x | x | x | x | x | x |
-| `residual_nu_tilde` | 1 | nu_tilde residual per cell volume | steady, implicit, turbulence = sa-neg |  |  | x | x | x |  |
-| `residual_k` | 1 | k residual per cell volume | steady, implicit, turbulence = sst |  |  |  |  |  | x |
-| `residual_omega` | 1 | omega residual per cell volume | steady, implicit, turbulence = sst |  |  |  |  |  | x |
-| `residual_gamma` | 1 | log-intermittency residual per cell volume | steady, implicit, transition.model = aft |  |  |  |  | x |  |
-| `residual_n` | 1 | Amplification-factor residual per cell volume | steady, implicit, transition.model = aft |  |  |  |  | x |  |
-| `cf` | 1 | Skin-friction coefficient with attached flow positive on every side (the wall CSV keeps the sign of the wall traversal); wall cells only | wall in output.force_boundaries, laminar or rans |  | x | x | x | x | x |
-| `cp_wall` | 1 | Pressure coefficient at the wall; wall cells only | wall in output.force_boundaries | x | x | x | x | x | x |
-| `tau_wall_x` | 1 | Wall shear stress x component (non-dimensional, rho U^2); wall cells only | wall in output.force_boundaries, laminar or rans |  | x | x | x | x | x |
-| `tau_wall_y` | 1 | Wall shear stress y component (non-dimensional, rho U^2); wall cells only | wall in output.force_boundaries, laminar or rans |  | x | x | x | x | x |
-| `y_plus` | 1 | y+ of the first cell centre; wall cells only | wall in output.force_boundaries, rans |  |  | x | x | x | x |
+| Field | Unit | Description | Needs | euler | laminar | SA | SA + BCM | SA + AFT | SST | SST + LM |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `pressure` | Pa | Static pressure | always | x | x | x | x | x | x | x |
+| `velocity` | m/s | Velocity vector | always | x | x | x | x | x | x | x |
+| `velocity_magnitude` | m/s | Speed | always | x | x | x | x | x | x | x |
+| `vorticity` | 1/s | dv/dx - du/dy from the least-squares gradient (signed) | always | x | x | x | x | x | x | x |
+| `kinematic_viscosity` | m^2/s | Laminar kinematic viscosity (constant) | laminar, rans |  | x | x | x | x | x | x |
+| `eddy_viscosity` | m^2/s | Kinematic eddy viscosity nu_t | rans |  |  | x | x | x | x | x |
+| `eddy_viscosity_ratio` | 1 | nu_t / nu | rans |  |  | x | x | x | x | x |
+| `effective_viscosity` | m^2/s | nu + nu_t (the laminar value without a turbulence model) | laminar, rans |  | x | x | x | x | x | x |
+| `mu_t` | Pa s | Dynamic eddy viscosity rho nu_t | rans |  |  | x | x | x | x | x |
+| `nu_tilde` | m^2/s | SA working variable | rans with turbulence = sa-neg |  |  | x | x | x |  |  |
+| `k` | m^2/s^2 | Turbulent kinetic energy (SST) | rans with turbulence = sst |  |  |  |  |  | x | x |
+| `omega` | 1/s | Specific dissipation rate (SST) | rans with turbulence = sst |  |  |  |  |  | x | x |
+| `blending_f1` | 1 | Menter's blending function F1 (1: k-omega near the wall, 0: k-epsilon) | rans with turbulence = sst |  |  |  |  |  | x | x |
+| `wall_distance` | m | Distance to the nearest wall used by the turbulence model | rans |  |  | x | x | x | x | x |
+| `intermittency` | 1 | Transition intermittency gamma | rans with a transition model |  |  |  | x | x |  | x |
+| `amplification_factor` | 1 | Amplification factor n of SA-AFT | rans with transition.model = aft |  |  |  |  | x |  |  |
+| `re_theta_t` | 1 | Transported transition-onset momentum-thickness Reynolds number Re_thetat of Langtry-Menter | rans with transition.model = lm |  |  |  |  |  |  | x |
+| `intermittency_effective` | 1 | Effective intermittency max(gamma, gamma_sep) on the SST production (gamma_sep > 1 marks separation-induced transition) | rans with transition.model = lm |  |  |  |  |  |  | x |
+| `residual_p` | 1 | Pressure (continuity) residual per cell volume | steady, implicit | x | x | x | x | x | x | x |
+| `residual_u` | 1 | x-momentum residual per cell volume | steady, implicit | x | x | x | x | x | x | x |
+| `residual_v` | 1 | y-momentum residual per cell volume | steady, implicit | x | x | x | x | x | x | x |
+| `residual_nu_tilde` | 1 | nu_tilde residual per cell volume | steady, implicit, turbulence = sa-neg |  |  | x | x | x |  |  |
+| `residual_k` | 1 | k residual per cell volume | steady, implicit, turbulence = sst |  |  |  |  |  | x | x |
+| `residual_omega` | 1 | omega residual per cell volume | steady, implicit, turbulence = sst |  |  |  |  |  | x | x |
+| `residual_gamma` | 1 | log-intermittency residual per cell volume | steady, implicit, transition.model = aft |  |  |  |  | x |  |  |
+| `residual_n` | 1 | Amplification-factor residual per cell volume | steady, implicit, transition.model = aft |  |  |  |  | x |  |  |
+| `residual_intermittency` | 1 | Intermittency residual per cell volume | steady, implicit, transition.model = lm |  |  |  |  |  |  | x |
+| `residual_re_theta_t` | 1 | Re_thetat residual per cell volume | steady, implicit, transition.model = lm |  |  |  |  |  |  | x |
+| `cf` | 1 | Skin-friction coefficient with attached flow positive on every side (the wall CSV keeps the sign of the wall traversal); wall cells only | wall in output.force_boundaries, laminar or rans |  | x | x | x | x | x | x |
+| `cp_wall` | 1 | Pressure coefficient at the wall; wall cells only | wall in output.force_boundaries | x | x | x | x | x | x | x |
+| `tau_wall_x` | 1 | Wall shear stress x component (non-dimensional, rho U^2); wall cells only | wall in output.force_boundaries, laminar or rans |  | x | x | x | x | x | x |
+| `tau_wall_y` | 1 | Wall shear stress y component (non-dimensional, rho U^2); wall cells only | wall in output.force_boundaries, laminar or rans |  | x | x | x | x | x | x |
+| `y_plus` | 1 | y+ of the first cell centre; wall cells only | wall in output.force_boundaries, rans |  |  | x | x | x | x | x |
 
 ### Saved-state files and housekeeping
 
