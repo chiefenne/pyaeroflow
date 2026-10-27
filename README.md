@@ -36,6 +36,15 @@ pip install -e . --no-deps
 
 ## Running a case
 
+From a PyAero (or Gmsh) airfoil mesh to a case file:
+
+```
+pyaeroflow check-mesh naca.su2 --re 6e6        # y+, surface points, farfield distance
+pyaeroflow init-case naca.su2 --model sst --re 6e6 --alpha 4   # writes naca_sst.toml
+```
+
+Then:
+
 ```
 pyaeroflow check case.toml        # validate, print the resolved configuration
 pyaeroflow run case.toml          # solve; writes <name>.log, .history.csv, .vtu

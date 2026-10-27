@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased (0.10) – Gmsh meshes
+## Unreleased (0.10) – Gmsh meshes, airfoil workflow
+
+- `pyaeroflow init-case MESH --model sa|bcm|aft|sst|lm|laminar|euler --re R
+  --alpha A` writes a validated case file for a PyAero or Gmsh airfoil mesh
+  (L4); `pyaeroflow check-mesh MESH --re R` reports y⁺, the first layer,
+  faces per side, farfield distance and cell-size jumps with warnings
+  (`pyaeroflow.initcase`, `pyaeroflow.meshcheck`, `docs/pyaero.md` section 0).
+
+- The wall CSV files now run along the contour (trailing edge, upper side,
+  leading edge, lower side, as PyAero's airfoil) and have an arc-length column
+  `s` at the end; the face order of the mesh was the order before.
 
 - Gmsh reader (L6): `mesh.file` may be a Gmsh `.msh` file (`read_msh`, and
   `read_mesh`, which picks the reader from the extension). Formats 2.2 (also
