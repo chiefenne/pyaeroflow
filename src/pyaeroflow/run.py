@@ -39,7 +39,7 @@ from pyaeroflow.io import (
     write_vtu,
 )
 from pyaeroflow.io.fields import FieldContext, compute_fields, n_columns
-from pyaeroflow.mesh import Mesh, read_su2
+from pyaeroflow.mesh import Mesh, read_mesh
 from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
 from pyaeroflow.physics import rans
@@ -200,7 +200,7 @@ def setup(config, mesh=None):
     """
     cfg = config.data
     if mesh is None:
-        mesh = read_su2(config.resolve_path(cfg["mesh"]["file"]), cfg["mesh"]["scale"])
+        mesh = read_mesh(config.resolve_path(cfg["mesh"]["file"]), cfg["mesh"]["scale"])
     fluid, ref, physics = cfg["fluid"], cfg["reference"], cfg["physics"]
     scaling = Scaling(
         float(ref["density"]), float(ref["velocity"]), float(ref["length"])

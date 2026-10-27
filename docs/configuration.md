@@ -177,11 +177,34 @@ entry to a decision (D) or an open step (O) in `requirements.md`.
 
 | Key | Type | Default | Description | # |
 |-----|------|---------|-------------|---|
-| `file` | path | req. | Mesh file (`.su2`), path relative to the case file | D43 |
+| `file` | path | req. | Mesh file (`.su2` or Gmsh `.msh`, chosen by the extension), path relative to the case file | D43, L6 |
 | `scale` | float | `1.0` | Factor applied to all coordinates (e.g. `0.001` for mm → m) | |
 
 Test-case meshes generated in code are passed through the Python API, not the
 case file (D42).
+
+#### Gmsh meshes
+
+`file = "wing.msh"` reads a 2D Gmsh mesh. Supported are MSH formats 2.2 (also
+2.0 and 2.1), 4.0 (ASCII only; Gmsh cannot write it binary) and 4.1, which is
+the default of Gmsh 4.x up to the current release, each as ASCII or binary
+file (either byte order). Formats 1 and 3 are rejected; export the mesh as
+2.2 or 4.1 (`Mesh.MshFileVersion = 2.2`, or *File ▸ Export ▸ Version 2 ASCII*).
+
+- Cells are the triangles (type 2) and quadrangles (type 3); second-order
+  elements (types 9, 10, 16) are read with their corner nodes. Point elements
+  are ignored, 3D elements are an error, and the nodes must lie in z = 0.
+- **Boundary names** are the *physical groups of the curves*: a group
+  `Physical Curve("airfoil") = {5, 6};` becomes the boundary `airfoil`. A
+  curve in a group without a name is called `physical_<tag>`. A mesh without
+  any physical group (Gmsh then saves everything) gets `curve_<tag>`, one
+  boundary per geometry curve.
+- As soon as the geometry has *any* physical group, Gmsh writes only the
+  elements in groups: the domain needs a `Physical Surface` as well, and
+  every boundary curve a `Physical Curve`. The reader says so if the surface
+  is missing.
+- Names may contain spaces; the `[boundary.NAME]` table then needs them in
+  quotes. The `scale` key applies to the coordinates as for `.su2`.
 
 ### `[physics]`
 

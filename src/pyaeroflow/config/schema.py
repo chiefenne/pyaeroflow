@@ -40,7 +40,7 @@ SCHEMA = {
         "description": Opt("string", "", "Free text"),
     },
     "mesh": {
-        "file": Opt("string", REQUIRED, "Mesh file (.su2), relative to the case file"),
+        "file": Opt("string", REQUIRED, "Mesh file (.su2 or .msh), relative to the case file"),
         "scale": Opt("float", 1.0, "Factor applied to all coordinates", minimum=0.0),
     },
     "physics": {
