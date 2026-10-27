@@ -367,6 +367,14 @@ SCHEMA = {
                 "norm, bounded per step, GMRES-modulated)",
                 choices=("growth", "ser"),
             ),
+            "polar_reset": Opt(
+                "bool",
+                False,
+                "pyaeroflow polar: every angle after the first restarts the CFL "
+                "ramp at start (the Newton-Krylov switch and limiter are kept) "
+                "instead of continuing at the previous angle's CFL; for cases "
+                "where the new angle moves a laminar bubble",
+            ),
             "ser_exponent": Opt(
                 "float", 1.0, "Exponent of the SER ratio (control = ser)", minimum=0.0
             ),

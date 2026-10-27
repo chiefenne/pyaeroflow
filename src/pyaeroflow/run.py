@@ -626,7 +626,9 @@ def _resume_state(config, scaling, restart_mode):
     if restart_mode == "state":
         if unsteady:
             return None
-        keys = ("cfl", "cfl_cap", "nk_on", "psi", "gamma", "vortex_gamma")
+        keys = ["cfl", "cfl_cap", "nk_on", "psi", "gamma", "vortex_gamma"]
+        if cfg["solver"]["cfl"]["polar_reset"]:
+            keys = keys[2:]  # the CFL ramp starts again, Newton-Krylov stays on
         return {k: state[k] for k in keys if k in state}
     if unsteady:
         dt = cfg["time"]["time_step"] / (scaling.length / scaling.velocity)

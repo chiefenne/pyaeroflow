@@ -2,6 +2,10 @@
 
 ## Unreleased (0.10) – Gmsh meshes, airfoil workflow
 
+- `solver.cfl.polar_reset = true`: `pyaeroflow polar` restarts the CFL ramp at each
+  new angle (Newton–Krylov switch and limiter kept) instead of carrying the CFL
+  of the previous angle. Default off.
+
 - `pyaeroflow init-case MESH --model sa|bcm|aft|sst|lm|laminar|euler --re R
   --alpha A` writes a validated case file for a PyAero or Gmsh airfoil mesh
   (L4); `pyaeroflow check-mesh MESH --re R` reports y⁺, the first layer,

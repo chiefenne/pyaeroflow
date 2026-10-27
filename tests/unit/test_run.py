@@ -204,6 +204,20 @@ def test_polar_runs_a_restart_chain(tmp_path):
     assert main(["polar", str(tmp_path / "cyl.toml"), "--alpha", "0", "--quiet"]) == 0
 
 
+def test_polar_reset_restarts_the_cfl_ramp(tmp_path):
+    from pyaeroflow.mesh import annulus
+    from pyaeroflow.run import run_polar
+
+    write_su2(tmp_path / "annulus.su2", annulus(32, 8, outer_radius=10.0, growth=1.3))
+    (tmp_path / "cyl.toml").write_text(
+        POLAR.replace("[solver]\n", "[solver]\ncfl = { polar_reset = true }\n")
+    )
+    first, second = run_polar(tmp_path / "cyl.toml", [0.0, 5.0], console=False)
+    assert first.history["cfl"][0] == 10.0
+    assert second.history["cfl"][0] == 10.0  # not the final CFL of the first angle
+    assert second.converged
+
+
 def test_rolling_and_backup_restart_files(case_dir):
     """Rolling files alternate, backups stay, a restart from either one works."""
     text = COUETTE.replace(
