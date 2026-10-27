@@ -168,6 +168,23 @@ def test_step_limiter_groups():
     np.testing.assert_allclose(out[:, rans_sst.NK], du[:, rans_sst.NK])  # apart
 
 
+def test_step_limiter_clips_gamma_and_re_theta_like_su2():
+    p, k_omega = _lm_plate()
+    w = p.initial_state((1.0, 0.0), k_omega=k_omega)
+    n = len(w)
+    w[: n // 3, rans_sst.NGL] = 1e-142  # a cell that lost 99 % per iteration
+    w[n // 3 :, rans_sst.NGL] = 4.9
+    du = np.zeros_like(w)
+    du[: n // 3, rans_sst.NGL] = -1e-60  # asks for a negative gamma
+    du[n // 3 :, rans_sst.NGL] = 3.0  # asks for gamma = 7.9
+    du[:, rans_sst.NRT] = -2.0 * w[:, rans_sst.NRT]
+    out = w + p._step_limiter(None)(w, du)
+    assert out[:, rans_sst.NGL].min() == pytest.approx(lm.GAMMA_LIMITS[0])
+    assert out[:, rans_sst.NGL].max() == pytest.approx(lm.GAMMA_LIMITS[1])
+    assert np.all(out[:, rans_sst.NRT] > 0.0)  # 99 % limit, then the floor
+    np.testing.assert_allclose(out[:, rans_sst.NK], w[:, rans_sst.NK])
+
+
 def test_lm_needs_sst_and_config_rules():
     mesh = tp.plate_mesh(6, 2, 6, reynolds=1e5)
     cond = {

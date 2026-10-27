@@ -830,13 +830,22 @@ class IncompressibleProblem:
         where the update lowers a variable (SU2 scales on any change; growth
         is left to the line search here, so that the turbulence can develop
         from a low freestream). With Langtry-Menter gamma and Re_thetat are
-        included (SU2 clips them to >= 1e-4).
+        included, and after the update they are clipped as in SU2
+        (``CTransLMSolver``): gamma to [1e-4, 5], Re_thetat to [1e-4, 1e15].
+        Without the floor a cell whose update keeps asking for a negative gamma
+        loses 99 % per iteration (gamma = 1e-142 after 70 iterations) and the
+        square root of the onset term has an enormous derivative there.
         """
         groups = [[rans_sst.NK, rans_sst.NW]]
+        clips = []
         if self.model.transition == "lm":
             groups.append(
                 [rans_sst.NGL, rans_sst.NRT]
             )  # scaled apart (own solver in SU2)
+            clips = [
+                (rans_sst.NGL, lm.GAMMA_LIMITS),
+                (rans_sst.NRT, lm.RE_THETA_LIMITS),
+            ]
 
         def limit_step(u, du):
             du = du.copy()
@@ -846,6 +855,8 @@ class IncompressibleProblem:
                 ratio = drop.max(axis=1)
                 scale = np.minimum(1.0, max_update / np.maximum(ratio, 1e-300))
                 du[:, cols] *= scale[:, None]
+            for col, (low, high) in clips:
+                du[:, col] = np.clip(u[:, col] + du[:, col], low, high) - u[:, col]
             return du
 
         return limit_step

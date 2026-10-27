@@ -2,6 +2,11 @@
 
 ## Unreleased (0.9) – Transition, step 2: SA-AFT2019b
 
+- Langtry–Menter: after every update γ is clipped to [1e-4, 5] and Re_θt to
+  [1e-4, 1e15], as in SU2 (`CTransLMSolver`). Without the floor one cell of
+  the 320k SD7003 run fell to γ = 1e-142 (99 % per iteration for 70
+  iterations), kept the γ residual at 10⁻⁵·⁴ and the run "not converged".
+
 - Control files of a running case (L7): `touch .stop` in the output directory
   ends the run after the current iteration or step with a final backup,
   `<name>.vtu` and the wall files; `touch .result_629` writes the VTU file of
