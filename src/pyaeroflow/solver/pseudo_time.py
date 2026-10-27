@@ -214,13 +214,15 @@ class SteadyResult(NamedTuple):
 
 
 def rms(r):
-    """Root-mean-square norm of a residual array."""
-    return float(np.sqrt(np.mean(np.square(r))))
+    """Root-mean-square norm of a residual array (inf for a diverged trial step)."""
+    with np.errstate(over="ignore"):
+        return float(np.sqrt(np.mean(np.square(r))))
 
 
 def rms_per_variable(r):
     """RMS norm of each column of a residual array."""
-    return np.sqrt(np.mean(np.square(r), axis=0))
+    with np.errstate(over="ignore"):
+        return np.sqrt(np.mean(np.square(r), axis=0))
 
 
 def solve_steady(
