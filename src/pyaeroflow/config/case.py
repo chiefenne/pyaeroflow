@@ -440,7 +440,13 @@ def _consistency(data, explicit, problems, notices, path):
                 "physics.transition.critical_amplification ignored: model != aft"
             )
         given_n_crit = tr["model"] == "aft" and tr["critical_amplification"] is not None
-        if tr["turbulence_intensity"] is None and not given_n_crit:
+        if tr["model"] == "lm":
+            if tr["turbulence_intensity"] is not None:
+                notices.append(
+                    "physics.transition.turbulence_intensity ignored with model = lm "
+                    "(Tu follows from the local k)"
+                )
+        elif tr["turbulence_intensity"] is None and not given_n_crit:
             tu = [
                 b["turbulence"]["intensity"]
                 for b in boundaries.values()
@@ -466,11 +472,13 @@ def _consistency(data, explicit, problems, notices, path):
         notices.append(
             "physics.transition.critical_amplification ignored: model = none"
         )
+    if rans and physics["turbulence"] != "sst" and tr["model"] == "lm":
+        problems.append("physics.transition.model = lm needs turbulence = sst")
     if rans and physics["turbulence"] == "sst":
-        if tr["model"] != "none":
+        if tr["model"] not in ("none", "lm"):
             problems.append(
                 f"physics.transition.model = {tr['model']} needs turbulence = sa-neg "
-                "(the transition models are built on SA)"
+                "(bcm and aft are built on SA; SST takes model = lm)"
             )
         if data["solver"]["nu_tilde_step_limit"] is not None:
             notices.append(
@@ -560,6 +568,21 @@ def _consistency(data, explicit, problems, notices, path):
             problems.append(
                 f"output.force_boundaries: '{n}' is not a wall (type {types[n]!r})"
             )
+
+    conv = data["solver"]["convergence"]
+    for field in conv["fields"]:
+        if field not in ("cl", "cd", "cm"):
+            problems.append(
+                _unknown("solver.convergence.fields entry", field, ("cl", "cd", "cm"))
+            )
+    if conv["fields"] and not out["force_boundaries"]:
+        problems.append("solver.convergence.fields needs a wall to integrate forces")
+    if conv["fields"] and data["solver"]["method"] != "implicit":
+        notices.append("solver.convergence.fields ignored: method != implicit")
+    if data["physics"]["transition"]["model"] != "lm" and (
+        "physics.transition.clip" in explicit
+    ):
+        notices.append("physics.transition.clip ignored: model != lm")
 
     # Initial state: explicit values or from_boundary (default: the farfield).
     init = data["initial"]

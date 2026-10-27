@@ -220,8 +220,7 @@ def test_rolling_and_backup_restart_files(case_dir):
     backups = sorted(out.glob("couette_test.backup_0*.npz"))
     # every 5th iteration and the final state (the file the run stopped at)
     assert [b.name for b in backups] == [
-        f"couette_test.backup_{k:06d}.npz"
-        for k in sorted({*range(5, n + 1, 5), n})
+        f"couette_test.backup_{k:06d}.npz" for k in sorted({*range(5, n + 1, 5), n})
     ]
     assert not (out / "couette_test.restart.npz").exists()
     assert not list(out.glob("*.tmp"))

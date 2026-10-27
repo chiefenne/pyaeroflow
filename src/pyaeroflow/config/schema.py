@@ -58,6 +58,14 @@ SCHEMA = {
             choices=("sa-neg", "sst"),
         ),
         "transition": {
+            "clip": Opt(
+                "bool",
+                True,
+                "model = lm: clip gamma to [1e-4, 5] and Re_thetat to [1e-4, "
+                "1e15] after every update, as SU2 does; false leaves them "
+                "unclipped (a cell can then run to gamma = 1e-142 and stall "
+                "the gamma residual)",
+            ),
             "mode": Opt(
                 "string",
                 "none",
@@ -70,8 +78,10 @@ SCHEMA = {
                 "Transition model: bcm = algebraic intermittency on the SA production "
                 "(Cakmakcioglu et al., 2020 revision, with SA-noft2); aft = "
                 "SA-AFT2019b (Coder: transport equations for the amplification "
-                "factor and the log-intermittency); combines with mode = prescribed",
-                choices=("none", "bcm", "aft"),
+                "factor and the log-intermittency); lm = Langtry-Menter gamma-Re_theta "
+                "on SST (SST-2003m-LM2009 as in SU2, Tu from the inflow k); "
+                "combines with mode = prescribed",
+                choices=("none", "bcm", "aft", "lm"),
             ),
             "turbulence_intensity": Opt(
                 "float",
@@ -293,6 +303,36 @@ SCHEMA = {
             "Convergence: orders of magnitude of residual reduction",
             minimum=0.0,
         ),
+        "convergence": {
+            "fields": Opt(
+                "string_list",
+                [],
+                "Cauchy convergence on force coefficients, as SU2's CONV_FIELD: "
+                "the run also stops (converged) when every listed coefficient "
+                "(cl, cd, cm) has changed by less than cauchy_eps on average "
+                "over the last cauchy_elements iterations; empty = residual "
+                "drop only",
+            ),
+            "cauchy_elements": Opt(
+                "int",
+                100,
+                "Iterations in the Cauchy window (SU2 CONV_CAUCHY_ELEMS)",
+                minimum=2,
+            ),
+            "cauchy_eps": Opt(
+                "float",
+                1.0e-10,
+                "Cauchy tolerance on the mean absolute change of a coefficient "
+                "per iteration (SU2 CONV_CAUCHY_EPS)",
+                minimum=0.0,
+            ),
+            "start_iteration": Opt(
+                "int",
+                0,
+                "Cauchy values count only from this iteration (SU2 CONV_STARTITER)",
+                minimum=0,
+            ),
+        },
         "cfl": {
             "start": Opt("float", 10.0, "Initial CFL number", minimum=0.0),
             "max": Opt("float", 1.0e10, "Maximum CFL number", minimum=0.0),

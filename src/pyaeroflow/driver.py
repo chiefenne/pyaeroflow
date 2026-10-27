@@ -14,7 +14,7 @@ from pyaeroflow.numerics import build_geometry, lsq_gradient
 from pyaeroflow.numerics.wall_distance import mesh_wall_distance, mesh_wall_normal
 from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
-from pyaeroflow.physics import rans, rans_sst, sst
+from pyaeroflow.physics import lm, rans, rans_sst, sst
 from pyaeroflow.solver import (
     JacobianPattern,
     PseudoTimeSettings,
@@ -173,8 +173,10 @@ class IncompressibleProblem:
                 raise ValueError(f"unknown turbulence model '{model.turbulence}'")
             if model.viscosity <= 0.0:
                 raise ValueError("a turbulence model needs a positive viscosity")
-            if model.turbulence == "sst" and model.transition != "none":
-                raise ValueError("transition models are available with SA only")
+            if model.turbulence == "sst" and model.transition not in ("none", "lm"):
+                raise ValueError(f"transition model '{model.transition}' needs SA")
+            if model.turbulence != "sst" and model.transition == "lm":
+                raise ValueError("the Langtry-Menter transition model needs SST")
             nu = model.viscosity / model.density
             # Default inflow values: nu_tilde = 3 nu (NASA TMR, D33); SST
             # k and omega from Tu = 0.1 %, nu_t / nu = 1.
@@ -216,6 +218,8 @@ class IncompressibleProblem:
         self.bc = inc.boundary_data(self.disc, regular, model.density)
         if model.turbulence == "sst":
             self._set_wall_omega(model)
+            if model.transition == "lm":
+                self._set_transition_inflow(regular)
         self.conditions = regular
         self.periodic = periodic
         self.check_mass_balance()
@@ -255,6 +259,28 @@ class IncompressibleProblem:
         turb[wall, 0] = 0.0
         turb[wall, 1] = sst.wall_omega(nu, d1[wall])
         self.bc = self.bc._replace(turbulence=jnp.asarray(turb))
+
+    def _set_transition_inflow(self, conditions):
+        """Langtry-Menter inflow values: gamma = 1, Re_thetat from the face's Tu.
+
+        Tu = 100 sqrt(2k/3) / U with the boundary's k and inflow speed (the
+        TMR freestream value of Re_thetat, no pressure-gradient factor).
+        """
+        turb = np.asarray(self.bc.turbulence)
+        extra = np.zeros((turb.shape[0], 2))
+        extra[:, 0] = 1.0
+        for name, bc in conditions.items():
+            sl = self.disc.boundary_slices[name]
+            tu = lm.turbulence_intensity(turb[sl, 0], _inflow_speed(bc))
+            extra[sl, 1] = np.asarray(lm.freestream_re_theta(tu))
+        self.bc = self.bc._replace(
+            turbulence=jnp.asarray(np.concatenate((turb, extra), axis=1))
+        )
+
+    def freestream_transition(self, k, speed):
+        """(Tu in percent, Re_thetat) of the Langtry-Menter model for k and U."""
+        tu = float(lm.turbulence_intensity(k, speed))
+        return tu, float(lm.freestream_re_theta(tu))
 
     def _production_switch(self, mesh, conditions, regions):
         """1 where SA production is active, 0 in the laminar regions (D15).
@@ -452,7 +478,17 @@ class IncompressibleProblem:
         if not self.turbulent or self.model.transition == "none":
             return np.ones(self.mesh.n_cells)
         return np.asarray(
-            rans.intermittency_field(self.model, self.geom, self.bc, jnp.asarray(w))
+            self.physics.intermittency_field(
+                self.model, self.geom, self.bc, jnp.asarray(w)
+            )
+        )
+
+    def effective_intermittency(self, w):
+        """Langtry-Menter gamma_eff = max(gamma, gamma_sep) per cell."""
+        return np.asarray(
+            rans_sst.effective_intermittency_field(
+                self.model, self.geom, self.bc, jnp.asarray(w)
+            )
         )
 
     def wall_eddy_viscosity_ratio(self, w, faces):
@@ -587,7 +623,8 @@ class IncompressibleProblem:
 
         The SA-AFT columns start at gamma_tilde = 0 and n = 0 (freestream).
         SST takes ``k_omega`` = (k, omega); default Tu = 0.1 % of the given
-        velocity (or 1) and nu_t / nu = 1.
+        velocity (or 1) and nu_t / nu = 1. Langtry-Menter starts at gamma = 1
+        and the freestream Re_thetat of that k and velocity.
         """
         w = np.zeros((self.mesh.n_cells, self.model.n_var))
         w[:, inc.P] = pressure
@@ -601,6 +638,12 @@ class IncompressibleProblem:
                     k_omega = sst_default_values(nu, speed)
                 w[:, rans_sst.NK] = k_omega[0]
                 w[:, rans_sst.NW] = k_omega[1]
+                if self.model.transition == "lm":
+                    speed = float(np.hypot(*velocity)) or 1.0
+                    w[:, rans_sst.NGL] = 1.0
+                    w[:, rans_sst.NRT] = self.freestream_transition(k_omega[0], speed)[
+                        1
+                    ]
             else:
                 w[:, rans.NT] = 3.0 * nu if nu_tilde is None else nu_tilde
         return w
@@ -617,6 +660,7 @@ class IncompressibleProblem:
         gamma_relaxation=None,
         gamma_diagnostics=False,
         nu_tilde_step_limit=None,
+        transition_clip=True,
         resume=None,
     ):
         """Implicit pseudo-time solution (D25, D35).
@@ -646,6 +690,10 @@ class IncompressibleProblem:
         mean-flow update is untouched), as SU2 limits its turbulence
         variable: a Newton step that multiplies nu_tilde in one boundary-layer
         cell cannot pass as a small change of the overall residual norm.
+
+        With the Langtry-Menter model the update clips gamma and Re_thetat to
+        SU2's limits (:meth:`_sst_limiter`); ``transition_clip=False`` leaves
+        them unclipped.
 
         ``resume`` is the state of an earlier run (the ``state`` of its result
         or of a restart file, see :func:`pyaeroflow.run.load_restart_state`):
@@ -764,39 +812,59 @@ class IncompressibleProblem:
             jvp=lambda w, dw: self.jvp(
                 w, dw, state["beta2"], state["psi"], state["gamma"]
             ),
-            limit_step=self._step_limiter(nu_tilde_step_limit),
+            limit_step=self._step_limiter(nu_tilde_step_limit, transition_clip),
             resume=resume,
         )
         return result._replace(state={**result.state, **driver_state()})
 
-    def _step_limiter(self, factor):
+    def _step_limiter(self, factor, clip=True):
         """Step limiter of the turbulence variables, or None.
 
-        SST always gets SU2's under-relaxation (:meth:`_sst_limiter`); SA the
+        SST always gets SU2's under-relaxation (:meth:`_sst_limiter`, with the
+        clip of the transition variables unless ``clip`` is False); SA the
         nu_tilde cap of ``factor`` (None = no cap).
         """
         if self.model.turbulence == "sst":
-            return self._sst_limiter()
+            return self._sst_limiter(clip=clip)
         return self._nu_tilde_limiter(factor)
 
-    def _sst_limiter(self, max_update=SST_MAX_UPDATE):
+    def _sst_limiter(self, max_update=SST_MAX_UPDATE, clip=True):
         """SU2's SST under-relaxation: k and omega stay positive.
 
         Per cell the (k, omega) update is scaled by min(1, max_update /
         ratio) with ratio the larger of |dk| / k and |domega| / omega, only
         where the update lowers a variable (SU2 scales on any change; growth
         is left to the line search here, so that the turbulence can develop
-        from a low freestream).
+        from a low freestream). With Langtry-Menter gamma and Re_thetat are
+        included, and after the update they are clipped as in SU2
+        (``CTransLMSolver``): gamma to [1e-4, 5], Re_thetat to [1e-4, 1e15].
+        Without the floor a cell whose update keeps asking for a negative gamma
+        loses 99 % per iteration (gamma = 1e-142 after 70 iterations) and the
+        square root of the onset term has an enormous derivative there.
+        ``clip=False`` leaves the transition variables unclipped.
         """
-        cols = [rans_sst.NK, rans_sst.NW]
+        groups = [[rans_sst.NK, rans_sst.NW]]
+        clips = []
+        if self.model.transition == "lm":
+            groups.append(
+                [rans_sst.NGL, rans_sst.NRT]
+            )  # scaled apart (own solver in SU2)
+            if clip:
+                clips = [
+                    (rans_sst.NGL, lm.GAMMA_LIMITS),
+                    (rans_sst.NRT, lm.RE_THETA_LIMITS),
+                ]
 
         def limit_step(u, du):
-            val = np.maximum(u[:, cols], 1e-300)
-            drop = np.maximum(-du[:, cols], 0.0) / val
-            ratio = drop.max(axis=1)
-            scale = np.minimum(1.0, max_update / np.maximum(ratio, 1e-300))
             du = du.copy()
-            du[:, cols] *= scale[:, None]
+            for cols in groups:
+                val = np.maximum(u[:, cols], 1e-300)
+                drop = np.maximum(-du[:, cols], 0.0) / val
+                ratio = drop.max(axis=1)
+                scale = np.minimum(1.0, max_update / np.maximum(ratio, 1e-300))
+                du[:, cols] *= scale[:, None]
+            for col, (low, high) in clips:
+                du[:, col] = np.clip(u[:, col] + du[:, col], low, high) - u[:, col]
             return du
 
         return limit_step
@@ -883,6 +951,7 @@ class IncompressibleProblem:
         callback=None,
         inner_callback=None,
         nu_tilde_step_limit=None,
+        transition_clip=True,
         resume=None,
     ):
         """Dual time stepping from ``w0`` to ``settings.end_time`` (D9, D37).
@@ -891,7 +960,8 @@ class IncompressibleProblem:
         with the inner pseudo-time/Newton-Krylov iterations of
         ``settings.inner``; beta^2 follows the current state, the limiter is
         not frozen. ``nu_tilde_step_limit`` caps every inner update of
-        nu_tilde as in :meth:`solve`. ``resume`` continues an earlier run
+        nu_tilde and ``transition_clip`` clips gamma and Re_thetat as in
+        :meth:`solve`. ``resume`` continues an earlier run
         (``step`` and ``u_previous``, see :func:`solve_unsteady`).
         """
         state = {"beta2": self.beta2(w0)}
@@ -910,7 +980,7 @@ class IncompressibleProblem:
             callback=callback,
             inner_callback=inner_callback,
             jvp=lambda w, dw: self.jvp(w, dw, state["beta2"]),
-            limit_step=self._step_limiter(nu_tilde_step_limit),
+            limit_step=self._step_limiter(nu_tilde_step_limit, transition_clip),
             resume=resume,
         )
 

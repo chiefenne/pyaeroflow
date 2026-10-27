@@ -20,6 +20,7 @@ import numpy as np
 
 from pyaeroflow import __version__
 from pyaeroflow.config import Resolved, load_case, resolve
+from pyaeroflow.control import ControlFiles, check_no_stop_file
 from pyaeroflow.driver import (
     GAMMA_DIAGNOSTICS,
     GAMMA_STEP_DIAGNOSTICS,
@@ -44,6 +45,7 @@ from pyaeroflow.physics import incompressible as inc
 from pyaeroflow.physics import rans
 from pyaeroflow.physics import spalart_allmaras as sa
 from pyaeroflow.solver import DualTimeSettings, LinearSettings, PseudoTimeSettings
+from pyaeroflow.solver.convergence import CauchyCriterion
 
 
 class Scaling(NamedTuple):
@@ -539,15 +541,17 @@ def load_restart(path, mesh, w_default):
 
     A laminar restart used for a RANS case keeps the default nu_tilde, a RANS
     restart used for a laminar case drops it. The column count tells the
-    turbulence model (4 SA, 5 SST, 6 SA-AFT): between SST and SA only p, u, v
-    are taken over.
+    turbulence model (4 SA, 5 SST, 6 SA-AFT, 7 SST-LM): between SST and SA
+    only p, u, v are taken over; SST <-> SST-LM keeps k and omega, SA <-> SA-AFT
+    keeps nu_tilde.
     """
     with np.load(path) as data:
         if str(data["fingerprint"]) != mesh_fingerprint(mesh):
             raise ValueError(f"restart file {path} belongs to a different mesh")
         w = np.array(data["w"], dtype=float)
     n = min(w.shape[1], w_default.shape[1])
-    if (w.shape[1] == 5) != (w_default.shape[1] == 5):
+    sst_family = (5, 7)
+    if (w.shape[1] in sst_family) != (w_default.shape[1] in sst_family):
         n = min(n, 3)
     w0 = np.array(w_default, dtype=float)
     w0[:, :n] = w[:, :n]
@@ -661,6 +665,7 @@ def run_case(path, console=True, mesh=None, restart_mode="continue"):
     config = path if isinstance(path, Resolved) else load_case(path)
     cfg = config.data
     out_dir = config.resolve_path(cfg["output"]["directory"])
+    check_no_stop_file(out_dir)  # before the mesh is read (L7)
     out_dir.mkdir(parents=True, exist_ok=True)
     name = config.name
     (out_dir / f"{name}.resolved.toml").write_text(config.to_toml())
@@ -775,8 +780,10 @@ def _residual_names(problem):
         names += ("k", "om")
     elif problem.turbulent:
         names += ("nu",)
-    if problem.model.n_var == 6:
+    if problem.model.transition == "aft":
         names += ("gam", "n")
+    elif problem.model.transition == "lm":
+        names += ("gam", "ret")
     return names
 
 
@@ -802,6 +809,9 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     extra_names = (("NK", "GMRES") if implicit else ()) + tuple(
         (c, 11) for c in coeff_names
     )
+    control = ControlFiles(out_dir, after or 0)
+    for line in control.notices("iteration"):
+        log.write(line)
     log.iteration_header(names, extra_names)
     fields = FieldWriter(
         out_dir, name, mesh, scaling, problem, monitor, cfg["output"], after=after or 0
@@ -850,14 +860,45 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
             if diagnose
             else (),
         )
-        if fields.due(it, accepted):
+        written = fields.due(it, accepted)
+        if written:
             fields.write(out_dir / fields.series_file(it), w, info.get("cell_residual"))
             fields.write_pvd()
+        for n in control.due_results(it, bool(accepted)):
+            if not (written and n == it):
+                fields.write(
+                    out_dir / fields.series_file(n), w, info.get("cell_residual")
+                )
+                fields.write_pvd()
+            log.write(f"control file .result_{n}: fields written for iteration {n}")
         restarts(it, w, good=bool(accepted), state=restart_state)
+        if cauchy and accepted and cauchy.update(it, coeffs):
+            log.write(
+                f"Cauchy criterion met on {', '.join(cauchy.names)}: mean change "
+                f"below {cauchy.eps:g} over {cauchy.elements} iterations"
+            )
+            info["converged"] = True
+        if control.stop_requested():
+            log.write(
+                f"control file .stop found: stopping after iteration {it}, "
+                "writing the backup and the result files"
+            )
+            info["stop"] = True
 
     callback.info = {}
 
     solver = cfg["solver"]
+    conv = solver["convergence"]
+    cauchy = (
+        CauchyCriterion(
+            conv["fields"],
+            conv["cauchy_elements"],
+            conv["cauchy_eps"],
+            conv["start_iteration"],
+        )
+        if conv["fields"] and monitor and implicit
+        else None
+    )
     vortex = None
     if solver["method"] == "implicit":
         settings = _pseudo_time_settings(cfg)
@@ -878,6 +919,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
             gamma_relaxation=tr_cfg["relaxation"],
             gamma_diagnostics=diagnose,
             nu_tilde_step_limit=solver["nu_tilde_step_limit"],
+            transition_clip=tr_cfg["clip"],
             resume=resume,
         )
     else:
@@ -892,7 +934,9 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     if timing["setup"] is None:  # a restart that is converged already
         timing["setup"] = log.elapsed - offset
 
-    if fields.final:
+    stopped = bool(callback.info.get("stop"))
+    write_final = fields.final or stopped
+    if write_final:
         fields.write(
             out_dir / f"{name}.vtu", result.u, callback.info.get("cell_residual")
         )
@@ -901,6 +945,17 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     nk_steps = int(np.count_nonzero(h["newton_krylov"]))
     rows = [
         ("converged", "yes" if result.converged else "NO"),
+        *(
+            [
+                (
+                    "convergence criterion",
+                    f"Cauchy on {', '.join(cauchy.names)} (mean change < "
+                    f"{cauchy.eps:g} over {cauchy.elements} iterations)",
+                )
+            ]
+            if cauchy and callback.info.get("converged")
+            else []
+        ),
         ("iterations", f"{int(h['iteration'][-1])} ({nk_steps} Newton-Krylov)"),
         ("rejected updates", str(int(np.count_nonzero(~h["accepted"])))),
         (
@@ -910,7 +965,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
         ),
         ("setup and compilation", f"{timing['setup']:.1f} s"),
         ("wall time", f"{log.elapsed:.1f} s"),
-        *([("fields", str(out_dir / f"{name}.vtu"))] if fields.final else []),
+        *([("fields", str(out_dir / f"{name}.vtu"))] if write_final else []),
         *([("field series", str(out_dir / f"{name}.pvd"))] if fields.last else []),
         ("history", str(history.path)),
     ]
@@ -934,6 +989,8 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
             path = out_dir / f"{name}.wall_{bname}.csv"
             monitor.write_wall(result.u, bname, path)
             rows.append((f"wall '{bname}'", str(path)))
+    if stopped:
+        rows.insert(1, ("stopped", "by the .stop file"))
     log.table(rows)
     return result, coefficients
 
@@ -979,6 +1036,9 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
     if diagnose:  # the first step is compared with the restart state
         _, gamma["previous"] = problem.gamma_step_diagnostics(w0)
     detailed = cfg["output"]["verbosity"] == "detailed"
+    control = ControlFiles(out_dir, after or 0)
+    for line in control.notices("step"):
+        log.write(line)
     log.step_header(names, ("GMRES",) + tuple((c, 11) for c in coeff_names))
     series = []
     fields = FieldWriter(
@@ -1034,9 +1094,20 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
             log.elapsed,
             stats,
         )
-        if fields.due(step, converged):
+        written = fields.due(step, converged)
+        if written:
             write_series(step, t, w)
+        for n in control.due_results(step, bool(converged)):
+            if not (written and n == step):
+                write_series(n, t, w)
+            log.write(f"control file .result_{n}: fields written for step {n}")
         restarts(step, w, good=bool(converged), time=t * t_scale, state=restart_state)
+        if control.stop_requested():
+            log.write(
+                f"control file .stop found: stopping after step {step}, "
+                "writing the backup and the result files"
+            )
+            callback.info["stop"] = True
         if detailed:
             log.iteration_header(names, ("NK", "GMRES"))
             log.step_header(names, ("GMRES",) + tuple((c, 11) for c in coeff_names))
@@ -1070,6 +1141,7 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         callback=callback,
         inner_callback=inner_callback if detailed else None,
         nu_tilde_step_limit=cfg["solver"]["nu_tilde_step_limit"],
+        transition_clip=cfg["physics"]["transition"]["clip"],
         resume=resume,
     )
     history.close()
@@ -1081,7 +1153,9 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         if result.history["step"].size
         else (resume or {}).get("step", 0)
     )
-    if fields.final:
+    stopped = bool(callback.info.get("stop"))
+    write_final = fields.final or stopped
+    if write_final:
         if fields.last != n_steps:
             write_series(n_steps, result.time, result.u)
         fields.write(out_dir / f"{name}.vtu", result.u)
@@ -1094,7 +1168,7 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         ("steps at inner limit", str(int(np.count_nonzero(~h["converged"])))),
         ("setup and compilation", f"{timing['setup']:.1f} s"),
         ("wall time", f"{log.elapsed:.1f} s"),
-        *([("fields", str(out_dir / f"{name}.vtu"))] if fields.final else []),
+        *([("fields", str(out_dir / f"{name}.vtu"))] if write_final else []),
         *([("field series", str(out_dir / f"{name}.pvd"))] if series else []),
         ("history", str(history.path)),
     ]
@@ -1110,6 +1184,8 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
             path = out_dir / f"{name}.wall_{bname}.csv"
             monitor.write_wall(result.u, bname, path)
             rows.append((f"wall '{bname}'", str(path)))
+    if stopped:
+        rows.insert(1, ("stopped", "by the .stop file"))
     log.table(rows)
     return result, coefficients
 
@@ -1265,6 +1341,21 @@ def _mode_rows(cfg):
             rows.append(("Newton-Krylov", when))
         else:
             rows.append(("Newton-Krylov", "off"))
+    conv = solver["convergence"]
+    if conv["fields"] and not unsteady and solver["method"] == "implicit":
+        rows.append(
+            (
+                "Cauchy convergence",
+                f"{', '.join(conv['fields'])}: mean change < {conv['cauchy_eps']:g} "
+                f"over {conv['cauchy_elements']} iterations from iteration "
+                f"{conv['start_iteration']}",
+            )
+        )
+    tr = cfg["physics"]["transition"]
+    if tr["model"] == "lm" and not tr["clip"]:
+        rows.append(
+            ("gamma, Re_thetat", "not clipped (physics.transition.clip = false)")
+        )
     if (
         solver["nu_tilde_step_limit"] is not None
         and cfg["physics"]["turbulence"] != "sst"
@@ -1327,7 +1418,9 @@ def _log_setup(log, config, problem, scaling, mesh):
     log.table(rows)
     log.section("Mesh")
     scale = cfg["mesh"]["scale"]
-    log.write(f"  file: {cfg['mesh']['file']}" + (f" (scale {scale})" if scale != 1 else ""))
+    log.write(
+        f"  file: {cfg['mesh']['file']}" + (f" (scale {scale})" if scale != 1 else "")
+    )
     for line in mesh.summary().splitlines():
         log.write("  " + line)
     log.section("Boundary conditions")
@@ -1364,6 +1457,22 @@ def _log_setup(log, config, problem, scaling, mesh):
                     + (" (given)" if given else f" from Tu = {tu:.3g} %"),
                 )
             )
+        elif problem.model.transition == "lm":
+            turb = np.asarray(problem.bc.turbulence)
+            kind = np.asarray(problem.bc.kind)
+            inflow = np.isin(
+                kind, (inc.VELOCITY_INLET, inc.FARFIELD, inc.TOTAL_PRESSURE_INLET)
+            )
+            if inflow.any():
+                re_t = turb[inflow, 3]
+                text = (
+                    f"lm (SST-2003m-LM2009), inflow Re_thetat = {re_t.min():.0f}"
+                    + (f"-{re_t.max():.0f}" if re_t.max() > 1.001 * re_t.min() else "")
+                    + " from the inflow Tu (local Tu from k in the field)"
+                )
+            else:
+                text = "lm (SST-2003m-LM2009)"
+            rows.append(("transition", text))
         elif problem.model.transition != "none":
             tu = problem.model.turbulence_intensity
             re_theta_t = 803.73 * (tu + 0.6067) ** (-1.027)

@@ -28,6 +28,7 @@ Click a case to jump to its section; each section ends with a link back here.
 | 7 (0.8) | [BCM transition, Eppler 387](#sec-7-e387) | validation | McGhee, Walker & Millard 1988 (NASA TM 4062) | `pyaeroflow polar examples/cases/e387_transition.toml --alpha 4 6 8 2 0 -2` |
 | L3 (0.9) | [SA-AFT: flat plate, T3A, E387](#sec-8) | verification/validation | e^N estimate, ERCOFTAC T3A, NASA TM 4062, Penn State 2007, XFOIL | `tests/verification/test_rans_plate.py::test_aft_transition_on_the_plate`, `pyaeroflow polar examples/cases/e387_aft.toml --alpha -2 0 2 4 6 8` |
 | L2 (0.9) | [k-ω SST: flat plate, SD7003](#sec-9) | verification/validation | NASA TMR SST, LES/DNS, XFOIL, SA-AFT, Herbst et al. 2017, Selig et al. 1995 | `tests/verification/test_rans_plate.py::test_sst_turbulent_plate`, `pyaeroflow run examples/cases/sst_sd7003.toml` |
+| L3 (0.9) | [SST-LM γ-Re_θ: T3A, T3B, T3A−, SD7003](#sec-10) | validation | ERCOFTAC T3 (Roach & Brierley), LES/DNS, SA-AFT | `pyaeroflow run examples/cases/lm_t3a.toml` (mesh: `examples/cases/make_plate_lm.py`), `pyaeroflow run examples/cases/lm_sd7003.toml` |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
 the scripts write) is not tracked.
@@ -507,6 +508,130 @@ a reference here.
 
 [↑ back to table](#stage-table)
 
+<a id="sec-10"></a>
+
+## 10. Langtry–Menter γ-Re_θ on SST (SST-2003m-LM2009)
+
+Model and numerics: `docs/configuration.md`, section "Langtry–Menter
+γ-Re_θ" (TMR "langtrymenter_4eqn" and SU2's `MENTER_LANGTRY`
+implementation, local Tu and dU/ds, nothing frozen in the Newton–Krylov
+JVP).
+
+### ERCOFTAC T3A, T3B and T3A−
+
+Plate 1.6 m with the inlet 0.1 m upstream of the leading edge, symmetry
+before the plate, farfield top at 0.5 m, Re per metre of the experiment
+(T3A 3.44·10⁵, T3B 6.40·10⁵, T3A− 1.31·10⁶ with U = 1), first cell
+10⁻⁵ m. Meshes from `examples/cases/make_plate_lm.py`: 120 × 56 cells
+(2 mm at the leading edge, growth 1.026 along the plate) and 240 × 80 for
+the T3A grid check. The inlet Tu and ν_t/ν are fitted to the measured
+freestream decay with the SST decay law k ∝ (1 + β₂ω₀(x − x₀)/U)^(−β*/β₂):
+
+| case | inlet Tu | inlet ν_t/ν | Tu at the first station, computed / measured |
+|---|---|---|---|
+| T3A | 4.49 % | 12.2 | 3.10 / 3.04 % (x = 45 mm); 1.15 / 1.10 % at 1.495 m |
+| T3B | 7.41 % | 100.5 | fitted to 5.95 % (25 mm) and 2.4 % (1.495 m) |
+| T3A− | 1.05 % | 7.8 | fitted to 0.874 % (95 mm) and 0.47 % (1.55 m) |
+
+The fitted ν_t/ν agree with the values used by Langtry & Menter (12, 100,
+8.7). All runs converge (8.3–9.8 orders of the per-variable measure; T3A
+338 iterations / 2.4 min, T3A 240 × 80 455 / 10 min, T3B 200 / 1.3 min,
+T3A− 368 / 2 min on 4 cores).
+
+| case | C_f minimum at Re_x, LM / exp. | halfway to turbulent C_f at Re_x | laminar C_f vs exp. | turbulent C_f vs exp. |
+|---|---|---|---|---|
+| T3A, 120 × 56 | 1.02·10⁵ / 1.35·10⁵ | 1.88·10⁵ (exp. ≈ 2.2·10⁵) | +10–11 % | −5 to +3 % |
+| T3A, 240 × 80 | 1.08·10⁵ / 1.35·10⁵ | 1.92·10⁵ | +11–12 % | −5 to +3 % |
+| T3B | bypass at the leading edge / 5.9·10⁴ | – | – | −1 to +7 % |
+| T3A− | rise from 1.35·10⁶ / 1.44·10⁶ | 1.57·10⁶ (exp. ≈ 2.0·10⁶) | +2–9 % to 7.7·10⁵, +18–35 % to 1.3·10⁶ | – (exp. still transitional) |
+
+**T3A.** The result is grid independent (the two meshes differ by 6 % in
+the onset Re_x and by < 1 % downstream). The onset is about 20–25 % early
+and the laminar C_f 11 % above the measurement: eddy viscosity from the
+3 % freestream turbulence reaches into the laminar layer (γ ≈ 1/c_e2 = 0.02
+there, so P_k is suppressed, but k diffuses in), and Re_θt at the wall lags
+the edge value (152–181 against 159–228 for x = 0.05–0.4 m), so the onset
+follows the lower Tu-correlation value carried from the leading edge.
+Transition length and the turbulent C_f (within 5 %) agree. A second-order
+convection of the turbulence variables did not converge (ω residual stalls)
+and was not pursued.
+
+**T3B.** Bypass transition right behind the leading edge, as in the
+experiment (C_f minimum at Re_x = 5.9·10⁴, already 0.0034 there); the C_f
+between 1.5·10⁴ and 9·10⁴ is 23–53 % above the data, downstream within
+7 % (slightly high, like the SST turbulent level on T3A).
+
+**T3A−.** The decisive case for the low-Tu airfoil cases: LM puts the C_f
+rise at Re_x = 1.35·10⁶ against the measured minimum at 1.44·10⁶ (SA-AFT:
+5–6·10⁵, three times too early, §8). The transition is too short: LM is
+fully turbulent at 1.7·10⁶ (C_f 0.0036, 8 % above the turbulent
+correlation) where the experiment is still transitional up to the last
+station (0.0015 at 2.0·10⁶). The laminar C_f rises above Blasius from
+9·10⁵ on (+18–35 %), the pre-transitional effect of the freestream k.
+
+![SST-LM plates](figures/lm_t3_cf.png)
+
+### SD7003, Re 6·10⁴, α = 4°
+
+39k-cell O-grid (`analysis/sst/sd7003_ogrid.su2`), Tu 0.1 %, ν_t/ν 1 at
+the farfield, first-order turbulence convection. After 1400 iterations the
+residuals sit 2.6–3 orders down and C_L/C_D still drift slowly
+(C_L 0.601, C_D 0.0207).
+
+Result: the upper-side laminar boundary layer separates at x/c = 0.27, which
+is close to LES/DNS (0.21–0.23). It **does not reattach**: C_f stays negative
+up to the trailing edge, so there is an open laminar separation and no
+transition. The cause is that the separated shear layer never triggers. Re_V
+only just exceeds the γ_sep threshold 3.235 Re_θc (the ratio peaks at 1.09 at
+x/c ≈ 0.7), so γ_sep ≤ 0.18 and k stays at its freestream level of about
+1e-6. On this grid LM therefore predicts a laminar open separation, where
+LES/DNS reattach at x/c 0.60–0.67. The fine-mesh case
+`lm_sd7003.toml` (PyAero 320k mesh) is the actual test of whether this is
+a grid-resolution effect.
+
+**320k PyAero mesh** (`lm_sd7003.toml`, Tu 0.1 %, ν_t/ν 1, SER CFL for 1500 iterations, then
+`cfl.control = "growth"`). With the SER control the run crept for 1500
+iterations (C_D 0.0316 at iteration 500, 0.0219 at 1500, C_L 0.59 falling).
+With the growth control the Newton–Krylov phase reached CFL 10¹⁰ within 20
+iterations at iteration 2000, the residuals of p, u, v, k and ω fell to
+10⁻¹⁰ and C_L, C_D, C_M stood still to five digits from iteration 2060 on:
+C_L 0.5931, C_D 0.02276, C_M 0.03926 (targets: C_L 0.60 ± 0.02,
+C_D 0.0208 ± 0.0013, C_M 0.033 ± 20 %).
+
+| | SST-LM, 320k | LES/DNS |
+|---|---|---|
+| Separation x/c | 0.192 | 0.20–0.24 |
+| Transition (ν_t/ν > 1) x/c | 0.468 | |
+| Reattachment x/c | 0.71 | 0.60–0.67 |
+| Bubble length | 0.52 | 0.42–0.45 |
+
+The shear layer triggers through γ_sep at x/c 0.45–0.5 (γ_eff up to 2, k
+growing by four orders by 0.65) and the bubble closes; the pressure plateau
+and the turbulent C_f of about 0.003 after reattachment (XFOIL 0.0047) are in
+the picture. Reattachment is 0.04–0.11 late and
+C_D is 3 % above the highest LES/DNS value. Without the solution limits of
+SU2 the γ residual stalled at 10⁻⁵·⁴ although all others converged: one cell
+in the turbulent layer (x/c 0.843) had fallen to γ = 10⁻¹⁴² (the 99 % step
+limiter, 70 iterations) and the derivative of √γ there is about 10⁷⁰. With γ
+clipped to [10⁻⁴, 5] and Re_θt to [10⁻⁴, 10¹⁵] after every update (SU2,
+`CTransLMSolver`), a restart from iteration 2000 converged in 36 Newton–Krylov
+iterations to 7.3 orders (all residuals 10⁻¹⁰ to 10⁻¹⁶, γ residual peak
+6·10⁻⁵ against 550) at the same forces: C_L 0.59307, C_D 0.022761,
+C_M 0.039252. A restart from the old iteration 2500 state instead left the
+state (C_L 0.43–0.49) because that state held the dead cell.
+
+![SD7003 SST-LM 320k](figures/lm_sd7003_320k_cp_cf.png)
+
+C_p and C_f of the converged 320k run (upper side solid, lower dashed) against
+the fully turbulent SST and SA-neg runs on the 39k grid and XFOIL: separation
+at x/c 0.19, C_f < 0 up to 0.71 (shaded: LES/DNS bands).
+The clip is on by default as in SU2 and can be turned off with
+`physics.transition.clip = false`. `solver.convergence.fields = ["cd"]`
+adds SU2's force-based (Cauchy) criterion to the residual drop, so a run like
+this one can end when C_D has settled instead of at a fixed residual drop.
+
+[↑ back to table](#stage-table)
+
 ## References
 
 - Ghia, U., Ghia, K. N., Shin, C. T. (1982): High-Re solutions for
@@ -534,6 +659,9 @@ a reference here.
   AIAA paper, Universität der Bundeswehr München.
 - Selig, M. S., Guglielmo, J. J., Broeren, A. P., Giguère, P. (1995):
   Summary of Low-Speed Airfoil Data, Vol. 1. SoarTech Publications.
+- Langtry, R. B., Menter, F. R. (2009): Correlation-based transition
+  modeling for unstructured parallelized computational fluid dynamics codes.
+  AIAA J. 47(12), 2894–2906.
 - Ol, M. V., McAuliffe, B. R., Hanff, E. S., Scholz, U., Kähler, C. J.
   (2005): Comparison of laminar separation bubble measurements on a low
   Reynolds number airfoil in three facilities. 35th AIAA Fluid Dynamics

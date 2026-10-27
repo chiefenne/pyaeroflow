@@ -35,6 +35,15 @@ Targets (optional TOML file, every entry optional, see targets.toml):
   The legend uses the unit of the TOML: rtol alone gives "±2 %", tol (or a
   mix of tol and rtol) gives the absolute half-width.
   Only targets that are present AND apply to the run are drawn.
+  Optional [scale.KEY] tables set the y-window of a coefficient panel, centred
+  on the target value of KEY, with the same tol/rtol method:
+      [scale.CD]
+      tol   = 0.004       # absolute half-width of the window
+      rtol  = 0.10        # relative half-width (fraction of |value|); added to tol
+  The window replaces the automatic fit (which follows the data and so is
+  stretched by the first iterations). Values outside it are clipped, on
+  purpose. Needs a target for KEY: without one the entry is ignored with a
+  note. Log-scaled panels (CFL) and residuals keep their own scaling.
 """
 import argparse
 import os
@@ -73,6 +82,40 @@ def is_num(s):
         return False
 
 
+def _read_toml(path):
+    if tomllib is None:
+        raise SystemExit("reading TOML needs Python >= 3.11 or 'pip install tomli'")
+    with open(path, "rb") as f:
+        return tomllib.load(f)
+
+
+def load_scales(path, targets):
+    """Read the optional [scale.KEY] tables -> {key: half_width}, centred on the target.
+
+    half_width = tol + rtol*|value| with the target value of KEY; a key without a
+    target is reported and ignored.
+    """
+    if path is None:
+        return {}
+    raw = _read_toml(path).get("scale", {})
+    scales = {}
+    for raw_key, spec in raw.items():
+        key = TARGET_ALIASES.get(raw_key, raw_key)
+        if key not in TARGET_KEYS:
+            print(f"scale: unknown key '{raw_key}' ignored")
+            continue
+        if key not in targets:
+            print(f"scale: '{raw_key}' has no target value, ignored")
+            continue
+        v = targets[key][0]
+        hw = abs(float(spec.get("tol", 0.0)) + float(spec.get("rtol", 0.0)) * abs(v))
+        if hw == 0:
+            print(f"scale: '{raw_key}' has neither tol nor rtol, ignored")
+            continue
+        scales[key] = hw
+    return scales
+
+
 def load_targets(path):
     """Read the TOML target file -> {key: (value, half_width)}.
 
@@ -83,10 +126,7 @@ def load_targets(path):
     """
     if path is None:
         return {}
-    if tomllib is None:
-        raise SystemExit("reading TOML needs Python >= 3.11 or 'pip install tomli'")
-    with open(path, "rb") as f:
-        data = tomllib.load(f)
+    data = _read_toml(path)
     data = data.get("targets", data)
     targets = {}
     for raw_key, spec in data.items():
@@ -263,11 +303,12 @@ def plot_residuals(d, x, notes, xlabel, targets, title, path):
 
 
 def plot_stack(d, x, notes, xlabel, specs, title, path, targets=None, height=2.4,
-               ylim_window=None, ymax=None):
+               ylim_window=None, ymax=None, scales=None):
     """specs: list of (key, ylabel, logy). Keys missing from d are skipped.
     ylim_window: (lo, hi) on x -> y-limits fitted to that window (+ target band).
-    ymax: optional upper y-limit applied to log-scaled panels."""
-    targets = targets or {}
+    ymax: optional upper y-limit applied to log-scaled panels.
+    scales: {key: half_width} y-window centred on the target (see load_scales)."""
+    targets, scales = targets or {}, scales or {}
     specs = [s for s in specs if s[0] in d]
     if not specs:
         print(f"skipped {path}: no data")
@@ -292,6 +333,9 @@ def plot_stack(d, x, notes, xlabel, specs, title, path, targets=None, height=2.4
         if logy:
             if ymax is not None:
                 a.set_ylim(top=ymax)
+        elif key in scales:
+            v = targets[key][0]
+            a.set_ylim(v - scales[key], v + scales[key])
         elif ylim_window is not None and mask.any():
             y = d[key][mask]
             ymin_, ymax_ = y.min(), y.max()
@@ -340,11 +384,14 @@ def main():
 
     d, notes, mode = parse_log(args.logfile)
     targets = load_targets(args.targets)
+    scales = load_scales(args.targets, targets)
     name = os.path.basename(args.logfile)
     prefix = args.output or os.path.splitext(args.logfile)[0]
     print(f"detected {mode} run")
     if targets:
         print("targets: " + ", ".join(sorted(targets)))
+    if scales:
+        print("scale windows: " + ", ".join(f"{k} ±{h:g}" for k, h in sorted(scales.items())))
 
     if mode == "transient":
         x, xlabel = d["time"], "time [s]"
@@ -369,7 +416,7 @@ def main():
     plot_stack(d, x, notes, xlabel,
                [("CL", "CL", False), ("CD", "CD", False), ("CM", "CM", False)],
                f"Coefficients: {name}", f"{prefix}_coeffs.png",
-               targets=targets, ylim_window=window)
+               targets=targets, ylim_window=window, scales=scales)
     plot_diffs(d, x, notes, xlabel, f"Consecutive differences: {name}",
                f"{prefix}_diffs.png")
 

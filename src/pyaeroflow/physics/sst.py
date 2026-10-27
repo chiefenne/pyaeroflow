@@ -77,7 +77,9 @@ def eddy_viscosity(k, omega, strain, f2):
     return jnp.maximum(k, 0.0) / zeta(omega, strain, f2)
 
 
-def sources(k, omega, strain, f1, f2, k_grad_omega, production_switch=1.0):
+def sources(
+    k, omega, strain, f1, f2, k_grad_omega, production_switch=1.0, gamma_eff=None
+):
     """Return the sources per unit volume (s_k, s_omega) of SST-2003m.
 
     P_k = max(0, min(nu_t S^2, 10 beta* k omega)) times the production switch
@@ -85,6 +87,10 @@ def sources(k, omega, strain, f1, f2, k_grad_omega, production_switch=1.0):
     gamma min(S^2, 10 beta* omega zeta) (no 0/0 where k = 0), destruction
     beta* k omega and beta omega^2, cross diffusion (1 - F1) 2 sigma_omega2
     grad k . grad omega / omega (unclipped, as the source of SU2 7.5).
+
+    ``gamma_eff`` (Langtry-Menter, :mod:`pyaeroflow.physics.lm`) multiplies
+    P_k and min(max(gamma_eff, 0.1), 1) the k destruction; P_omega keeps the
+    unmodified P_k (SU2).
     """
     k_pos = jnp.maximum(k, 0.0)
     z = zeta(omega, strain, f2)
@@ -103,7 +109,12 @@ def sources(k, omega, strain, f1, f2, k_grad_omega, production_switch=1.0):
         0.0,
     )
     cd = (1.0 - f1) * 2.0 * SIGMA_W2 * k_grad_omega / omega
-    s_k = p_k - BETA_STAR * k * omega
+    d_k = BETA_STAR * k * omega
+    if gamma_eff is not None:
+        d_k = jnp.clip(gamma_eff, 0.1, 1.0) * d_k
+        s_k = gamma_eff * p_k - d_k
+    else:
+        s_k = p_k - d_k
     s_w = p_w - beta * omega**2 + cd
     return s_k, s_w
 
