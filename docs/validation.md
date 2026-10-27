@@ -609,9 +609,16 @@ The shear layer triggers through γ_sep at x/c 0.45–0.5 (γ_eff up to 2, k
 growing by four orders by 0.65) and the bubble closes; the pressure plateau
 and the turbulent C_f of about 0.003 after reattachment (XFOIL 0.0047) are in
 the picture. Reattachment is 0.04–0.11 late and
-C_D is 3 % above the highest LES/DNS value. The residual of γ stalls at
-10⁻⁵·⁴ although all others converge, so the run reports "not converged"
-(drop 2.0 of 7 orders) with constant forces; the cause is not diagnosed.
+C_D is 3 % above the highest LES/DNS value. Without the solution limits of
+SU2 the γ residual stalled at 10⁻⁵·⁴ although all others converged: one cell
+in the turbulent layer (x/c 0.843) had fallen to γ = 10⁻¹⁴² (the 99 % step
+limiter, 70 iterations) and the derivative of √γ there is about 10⁷⁰. With γ
+clipped to [10⁻⁴, 5] and Re_θt to [10⁻⁴, 10¹⁵] after every update (SU2,
+`CTransLMSolver`), a restart from iteration 2000 converged in 36 Newton–Krylov
+iterations to 7.3 orders (all residuals 10⁻¹⁰ to 10⁻¹⁶, γ residual peak
+6·10⁻⁵ against 550) at the same forces: C_L 0.59307, C_D 0.022761,
+C_M 0.039252. A restart from the old iteration 2500 state instead left the
+state (C_L 0.43–0.49) because that state held the dead cell.
 
 [↑ back to table](#stage-table)
 
