@@ -312,9 +312,14 @@ merged into the file and start from the nearest angle already computed.
 
 ## 7. Transition
 
-The SA model is fully turbulent. Two ways out: the BCM transition model
-(7.1), or prescribed laminar regions with the location from XFOIL's e^N
-method or from experiment (7.2). Both can be combined.
+The SA model is fully turbulent. Ways out: the transition models, selected
+with `physics.transition.model` (`aft` and `bcm` on SA, `lm` on SST; which
+one for which flow: [model-choice guide](models.md)), or prescribed laminar
+regions with the location from XFOIL's e^N method or from experiment (7.2).
+Sections 7.1 and 7.2 describe BCM and the prescribed regions; AFT and LM are
+documented in [configuration.md](configuration.md) and validated in
+[validation.md](validation.md) §8 to §10. `pyaeroflow init-case --model aft`
+or `lm` writes a starting case file.
 
 ### 7.1 Transition model (BCM)
 
@@ -513,9 +518,11 @@ farfield distance.
 
 ## 10. Current limits
 
-- Transition: the algebraic BCM model (section 7.1) is verified on the
-  flat plate, not yet validated on an airfoil at model-aircraft Reynolds
-  numbers; the e^N-based SA-AFT model is the planned second step (L3).
+- Transition: BCM, SA-AFT and SST-LM are validated on plates and on the E387
+  and SD7003 airfoils; their known limits (AFT above Tu 0.5 %, the SST-LM bubble
+  length, E387 α −2° and 8° not settling with AFT) are listed in
+  [validation.md §11](validation.md#sec-11), the choice between them in the
+  [model-choice guide](models.md).
 - Steady cases are verified; unsteady RANS (shedding at high Re) has not
   been exercised.
 - Drag needs 400–500 points per airfoil side (section 8): with 113 the

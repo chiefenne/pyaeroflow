@@ -6,21 +6,22 @@ JAX, developed as a companion to
 Command and package: `pyaeroflow`. Formerly named *aerojax* (renamed in 0.8;
 not related to other projects of that name).
 
-**Status:** stage 6 of the [stage plan](docs/requirements.md#7-stage-plan-d53):
-steady and unsteady laminar, inviscid and RANS (Spalart–Allmaras, SA-neg)
-incompressible flow with the SU2 INC formulation, a Newton–Krylov solver and
-BDF2 dual time stepping, verified on Couette and Poiseuille flow, the
-lid-driven cavity (Ghia et al.), the inviscid cylinder, the Blasius flat
-plate, the Taylor–Green vortex, the DFG cylinder-in-channel benchmarks
-(steady 2D-1 and vortex shedding 2D-2), the NASA TMR turbulent flat plate
-and the NACA 0012 at Re 6·10⁶ (generated O-grid; PyAero meshes can be used
-directly).
+**Status:** 0.9. Steady and unsteady incompressible laminar, inviscid and
+RANS flow (Spalart–Allmaras SA-neg and k-ω SST, SU2 INC formulation) with the
+transition models BCM, SA-AFT2019b and Langtry–Menter γ-Re_θ, a Newton–Krylov
+solver and BDF2 dual time stepping. Verified and validated against Couette and
+Poiseuille flow, the lid-driven cavity, the DFG cylinder benchmarks, the NASA
+TMR flat plate and NACA 0012, ERCOFTAC T3, the Eppler 387 and the SD7003
+([validation](docs/validation.md)). Meshes come from PyAero (`.su2`) or Gmsh
+(`.msh`). The path to 1.0 is in
+[requirements §4a](docs/requirements.md#4a-milestone-10-proposed-2026-10-27-to-be-confirmed).
 
 ## Documentation
 
 - [Requirements](docs/requirements.md): decisions, planned features, stage plan
 - [Case configuration](docs/configuration.md): TOML case-file reference
 - [From a PyAero mesh to a result](docs/pyaero.md): mesh settings (y⁺, farfield), case file, log, limits
+- [Choosing a model](docs/models.md): SA, SST, BCM, AFT or LM for which flow
 - [Verification and validation](docs/validation.md): every case with its reference, numbers and figure
 
 ## Installation
