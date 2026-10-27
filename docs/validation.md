@@ -619,6 +619,12 @@ iterations to 7.3 orders (all residuals 10⁻¹⁰ to 10⁻¹⁶, γ residual pe
 6·10⁻⁵ against 550) at the same forces: C_L 0.59307, C_D 0.022761,
 C_M 0.039252. A restart from the old iteration 2500 state instead left the
 state (C_L 0.43–0.49) because that state held the dead cell.
+
+![SD7003 SST-LM 320k](figures/lm_sd7003_320k_cp_cf.png)
+
+C_p and C_f of the converged 320k run (upper side solid, lower dashed) against
+the fully turbulent SST and SA-neg runs on the 39k grid and XFOIL: separation
+at x/c 0.19, C_f < 0 up to 0.71 (shaded: LES/DNS bands).
 The clip is on by default as in SU2 and can be turned off with
 `physics.transition.clip = false`. `solver.convergence.fields = ["cd"]`
 adds SU2's force-based (Cauchy) criterion to the residual drop, so a run like
