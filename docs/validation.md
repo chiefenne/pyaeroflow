@@ -589,8 +589,7 @@ LES/DNS reattach at x/c 0.60–0.67. The fine-mesh case
 `lm_sd7003.toml` (PyAero 320k mesh) is the actual test of whether this is
 a grid-resolution effect.
 
-**320k PyAero mesh** (`lm_sd7003.toml`, 5.7 cells per unit boundary-layer
-thickness, Tu 0.1 %, ν_t/ν 1, SER CFL for 1500 iterations, then
+**320k PyAero mesh** (`lm_sd7003.toml`, Tu 0.1 %, ν_t/ν 1, SER CFL for 1500 iterations, then
 `cfl.control = "growth"`). With the SER control the run crept for 1500
 iterations (C_D 0.0316 at iteration 500, 0.0219 at 1500, C_L 0.59 falling).
 With the growth control the Newton–Krylov phase reached CFL 10¹⁰ within 20
@@ -604,12 +603,12 @@ C_D 0.0208 ± 0.0013, C_M 0.033 ± 20 %).
 | Separation x/c | 0.192 | 0.20–0.24 |
 | Transition (ν_t/ν > 1) x/c | 0.468 | |
 | Reattachment x/c | 0.71 | 0.60–0.67 |
-| Bubble length | 0.52 | 0.40–0.46 |
+| Bubble length | 0.52 | 0.42–0.45 |
 
 The shear layer triggers through γ_sep at x/c 0.45–0.5 (γ_eff up to 2, k
 growing by four orders by 0.65) and the bubble closes; the pressure plateau
-and the turbulent C_f of 0.003 after reattachment (XFOIL 0.0047, as for fully
-turbulent SST) are in the picture. Reattachment is about 0.05–0.1 late and
+and the turbulent C_f of about 0.003 after reattachment (XFOIL 0.0047) are in
+the picture. Reattachment is 0.04–0.11 late and
 C_D is 3 % above the highest LES/DNS value. The residual of γ stalls at
 10⁻⁵·⁴ although all others converge, so the run reports "not converged"
 (drop 2.0 of 7 orders) with constant forces; the cause is not diagnosed.
