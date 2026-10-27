@@ -29,6 +29,7 @@ Click a case to jump to its section; each section ends with a link back here.
 | L3 (0.9) | [SA-AFT: flat plate, T3A, E387](#sec-8) | verification/validation | e^N estimate, ERCOFTAC T3A, NASA TM 4062, Penn State 2007, XFOIL | `tests/verification/test_rans_plate.py::test_aft_transition_on_the_plate`, `pyaeroflow polar examples/cases/e387_aft.toml --alpha -2 0 2 4 6 8` |
 | L2 (0.9) | [k-ω SST: flat plate, SD7003](#sec-9) | verification/validation | NASA TMR SST, LES/DNS, XFOIL, SA-AFT, Herbst et al. 2017, Selig et al. 1995 | `tests/verification/test_rans_plate.py::test_sst_turbulent_plate`, `pyaeroflow run examples/cases/sst_sd7003.toml` |
 | L3 (0.9) | [SST-LM γ-Re_θ: T3A, T3B, T3A−, SD7003](#sec-10) | validation | ERCOFTAC T3 (Roach & Brierley), LES/DNS, SA-AFT | `pyaeroflow run examples/cases/lm_t3a.toml` (mesh: `examples/cases/make_plate_lm.py`), `pyaeroflow run examples/cases/lm_sd7003.toml` |
+| – | [Known limits of the transition models](#sec-11) | summary | sections 8–10 | – |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
 the scripts write) is not tracked.
@@ -629,6 +630,29 @@ The clip is on by default as in SU2 and can be turned off with
 `physics.transition.clip = false`. `solver.convergence.fields = ["cd"]`
 adds SU2's force-based (Cauchy) criterion to the residual drop, so a run like
 this one can end when C_D has settled instead of at a fixed residual drop.
+
+[↑ back to table](#stage-table)
+
+<a id="sec-11"></a>
+
+## 11. Known limits of the transition models
+
+What the transition models do not reproduce, with the cause where it is
+known. These are properties of the published models (implemented one to one)
+or open questions, not solver defects; the model-choice guide follows from
+them.
+
+| model | case | limit | cause | use instead |
+|---|---|---|---|---|
+| SA-AFT2019b | T3A− (Tu 0.87 %), [§8](#sec-8) | onset at Re_x 5–6·10⁵ against 1.44·10⁶, about three times too early; with the decayed local Tu (N_crit 3.9–4.4) still 8.5·10⁵–1.0·10⁶ | AFT is an e^N model: the onset is Re_θ0 = 237 plus N_crit/0.0103, with N_crit from Mack/Drela, which is fitted for Tu below about 1 % and assumes Tollmien–Schlichting transition | SST-LM (C_f rise at 1.35·10⁶, [§10](#sec-10)) |
+| SA-AFT2019b | T3B (Tu 6 %, bypass), [§8](#sec-8) | cannot transition before Re_x = 1.3·10⁵ (Re_θ0 = 237) | no bypass mechanism by construction; not run | SST-LM (bypass at the leading edge) |
+| SST-LM | SD7003, Re 6·10⁴, α = 4°, [§10](#sec-10) | bubble too long: reattachment at x/c 0.71 against 0.60–0.67 (LES/DNS), C_D 3 % above the highest LES/DNS value; C_L and C_M inside the bands | transition is triggered in the LES/DNS window (γ_sep from x/c 0.45, ν_t/ν > 1 at 0.468); the turbulent shear layer after transition reattaches too slowly. Not diagnosed further (candidates: freestream decay of k and ω without sustaining terms, SST eddy viscosity in the separated layer) | SA-AFT (reattachment 0.644, inside the band) for low-Re laminar separation bubbles |
+| SA-AFT, SST-LM | turbulent C_f after reattachment (E387, SD7003) | 35–50 % below XFOIL | baseline turbulence model recovering from the bubble; open, not specific to the transition models | – |
+
+Rule of thumb from these cases: SA-AFT for low freestream turbulence
+(Tu up to about 0.5 %, flight and quiet tunnels, laminar separation bubbles
+on airfoils; N_crit comparable with XFOIL), SST-LM for elevated freestream
+turbulence (Tu from about 0.5 %, bypass transition).
 
 [↑ back to table](#stage-table)
 
