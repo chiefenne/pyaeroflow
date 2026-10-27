@@ -5,6 +5,42 @@ solver depends on, the case file, what to look at in the log and the output,
 and the current limits. The reference values quoted come from the NACA 0012
 runs of stage 6 (`docs/requirements.md`, D40 and D54).
 
+## 0. Quick start
+
+```
+pyaeroflow check-mesh naca.su2 --re 6e6
+pyaeroflow init-case naca.su2 --model sst --re 6e6 --alpha 4
+pyaeroflow run naca_sst.toml                      # or: polar naca_sst.toml --alpha 0 2 4 6 8
+```
+
+`check-mesh` prints what sections 1 and 2 below ask for, from the mesh
+alone: cell and boundary counts, the chord and the first layer thickness,
+y⁺ at the first cell centre (with `--re`; the turbulent flat-plate C_f at
+x/c = 0.5 as in the table of section 2, so the suction peak will be higher),
+the y₁/c that gives y⁺ = 1, the faces on the upper and lower side, the
+distance of every farfield boundary in chords, and the largest jump in cell
+area between neighbours. Each finding is a *warning* (y⁺ above 3, fewer than
+100 faces per side, a farfield closer than 10 chords, a chord that is not in
+metres, a size jump above 20) or a *note*. The wall is `airfoil` as PyAero
+names it; `--wall NAME` selects another boundary, `--scale` applies
+`mesh.scale`, `--chord` replaces the chord taken from the wall.
+
+`init-case` writes the case file of section 3 for `--model`
+`sa | bcm | aft | sst | lm | laminar | euler` (default `sa`): `--re` (chord
+Reynolds number; not needed for `euler`), `--alpha`, `--tu` (freestream Tu for
+the transition models, default 0.001), `--name`, `-o FILE`. It takes the
+chord from the mesh (reference length, moment centre at 25 %), sets
+U = 1 m/s and ρ = 1 kg/m³ so that μ = c/Re, makes every boundary besides the
+wall a farfield, and uses the freestream turbulence and solver blocks of the
+validated example cases (`sa`: ν̃/ν = 3; `bcm`, `aft`: 0.1; `sst`, `lm`:
+ν_t/ν = 1 and Tu; `lm` with the growth CFL control of
+`docs/validation.md` §10). The mesh path in the file is relative to the case
+file. The file is validated by the case loader before the command ends, the
+findings of `check-mesh` are printed, and an existing file is only replaced
+with `--force`. It is a starting point: the numbers (iteration limits,
+`vortex_correction`, output fields) are the ones of the examples, not
+tuned to the mesh.
+
 ## 1. What the solver needs from the mesh
 
 - An `.su2` file in **metres** (PyAero's export). Quadrilaterals, triangles
@@ -247,8 +283,14 @@ coefficients are converged to all printed digits.
 - `<name>.vtu` (ParaView): pressure, velocity, velocity magnitude, and with
   a turbulence model `nu_tilde` and `eddy_viscosity_ratio` (ν_t/ν). A
   converged airfoil at Re 6·10⁶ reaches ν_t/ν ≈ 800 in the wake.
-- `<name>.wall_airfoil.csv`: x, y, p, Cp, τ_x, τ_y, Cf, y⁺ per wall face —
-  the file for Cp and Cf plots and for the y⁺ check.
+- `<name>.wall_airfoil.csv`: x, y, p, Cp, τ_x, τ_y, Cf, y⁺ (turbulent
+  models: also `nu_t_ratio_max`) and the arc length `s` per wall face — the
+  file for Cp and Cf plots and for the y⁺ check. The rows run along the
+  contour in PyAero's direction: from the trailing edge over the upper side
+  to the leading edge and back along the lower side (`s` in metres from the
+  start, at the face centre); a plate wall runs in increasing x. A boundary
+  that is not one single contour keeps the face order of the mesh and has no
+  `s` column.
 - `<name>.history.csv`: residuals, CFL, Newton/GMRES counts and
   coefficients per iteration.
 - `<name>.resolved.toml`: every setting with its value and source.

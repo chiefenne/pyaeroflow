@@ -40,6 +40,7 @@ from pyaeroflow.io import (
 )
 from pyaeroflow.io.fields import FieldContext, compute_fields, n_columns
 from pyaeroflow.mesh import Mesh, read_mesh
+from pyaeroflow.mesh.ordering import order_boundary_faces
 from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
 from pyaeroflow.physics import rans
@@ -1278,9 +1279,28 @@ class Monitor:
             # Maximum nu_t/nu over the boundary-layer column above each face:
             # laminar ~1e-6-1e-2, turbulent 10-100.
             columns["nu_t_ratio_max"] = self.problem.wall_eddy_viscosity_ratio(w, faces)
+        order = self._contour_order(boundary, d)
+        if order is not None:
+            columns = {key: col[order] for key, col in columns.items()}
+            # Arc length from the start of the contour to the face centre.
+            length = np.asarray(self.problem.mesh.face_length)[
+                self.problem.mesh.boundary_faces[boundary]
+            ][order]
+            columns["s"] = (np.cumsum(length) - 0.5 * length) * s.length
         header = ",".join(columns)
         rows = np.column_stack(list(columns.values()))
         np.savetxt(path, rows, delimiter=",", header=header, comments="", fmt="%.10e")
+
+    def _contour_order(self, boundary, d):
+        """Face order along the wall contour (PyAero's airfoil direction), or None."""
+        mesh = self.problem.mesh
+        local = mesh.boundary_faces[boundary]
+        centre = np.column_stack((d["x"], d["y"]))
+        if local.size != centre.shape[0] or not np.allclose(
+            mesh.face_centre[local], centre, rtol=1e-9, atol=1e-12
+        ):
+            return None
+        return order_boundary_faces(mesh.face_nodes[local], mesh.nodes)
 
 
 def _scaled_mesh(mesh, factor):

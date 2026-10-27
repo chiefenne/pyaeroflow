@@ -1,10 +1,11 @@
-"""Command line: ``run``, ``check``, ``polar``, ``restart-info`` and ``clean``."""
+"""Command line: run, check, polar, init-case, check-mesh, restart-info and clean."""
 
 import argparse
 import sys
 
 from pyaeroflow import __version__
 from pyaeroflow.config import ConfigError, load_case
+from pyaeroflow.mesh import MeshError
 
 
 def main(argv=None):
@@ -28,6 +29,36 @@ def main(argv=None):
     polar.add_argument("case", help="TOML case file with farfield boundaries")
     polar.add_argument("--alpha", nargs="+", type=float, required=True, help="deg")
     polar.add_argument("--quiet", action="store_true", help="no console output")
+    init = sub.add_parser(
+        "init-case",
+        help="write a case file for an airfoil mesh (.su2 from PyAero, or .msh)",
+    )
+    init.add_argument("mesh", help="mesh file (.su2 or .msh)")
+    init.add_argument(
+        "--model",
+        default="sa",
+        choices=list(_models()),
+        help="sa (default), sst, bcm, aft, lm, laminar or euler",
+    )
+    init.add_argument("--re", type=float, help="chord Reynolds number")
+    init.add_argument("--alpha", type=float, default=0.0, help="deg (default 0)")
+    init.add_argument("--chord", type=float, help="m; default from the mesh")
+    init.add_argument("--wall", help="airfoil boundary (default 'airfoil')")
+    init.add_argument(
+        "--tu", type=float, default=0.001, help="freestream Tu, fraction (0.001)"
+    )
+    init.add_argument("--scale", type=float, default=1.0, help="mesh.scale")
+    init.add_argument("--name", help="case name (default <mesh>_<model>)")
+    init.add_argument("-o", "--output", help="case file (default next to the mesh)")
+    init.add_argument("--force", action="store_true", help="overwrite the case file")
+    cmesh = sub.add_parser(
+        "check-mesh", help="check an airfoil mesh: y+, surface points, farfield"
+    )
+    cmesh.add_argument("mesh", help="mesh file (.su2 or .msh)")
+    cmesh.add_argument("--re", type=float, help="chord Reynolds number (for y+)")
+    cmesh.add_argument("--wall", help="airfoil boundary (default 'airfoil')")
+    cmesh.add_argument("--chord", type=float, help="m; default from the mesh")
+    cmesh.add_argument("--scale", type=float, default=1.0, help="mesh.scale")
     info = sub.add_parser(
         "restart-info",
         help="iteration or step, time and solver state of a restart or backup file",
@@ -71,6 +102,10 @@ def main(argv=None):
             for note in config.notices:
                 print(f"# notice: {note}")
             return 0
+        if args.command == "init-case":
+            return _init_case(args)
+        if args.command == "check-mesh":
+            return _check_mesh(args)
         if args.command == "restart-info":
             from pyaeroflow.housekeeping import restart_info
 
@@ -97,9 +132,64 @@ def main(argv=None):
     except ConfigError as exc:
         print(exc, file=sys.stderr)
         return 1
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, MeshError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+
+
+def _models():
+    from pyaeroflow.initcase import MODELS
+
+    return MODELS
+
+
+def _init_case(args):
+    """Write and validate a case file for an airfoil mesh."""
+    from pathlib import Path
+
+    from pyaeroflow.initcase import make_case
+
+    mesh = Path(args.mesh)
+    model = args.model
+    name = args.name or f"{mesh.stem}_{model}"
+    path = Path(args.output) if args.output else mesh.parent / f"{name}.toml"
+    if path.exists() and not args.force:
+        print(f"error: {path} exists (use --force to overwrite)", file=sys.stderr)
+        return 1
+    text, notes = make_case(
+        mesh,
+        path,
+        model,
+        reynolds=args.re,
+        alpha=args.alpha,
+        chord=args.chord,
+        wall=args.wall,
+        turbulence_intensity=args.tu,
+        scale=args.scale,
+        name=name,
+    )
+    path.write_text(text)
+    print(f"wrote {path}  ({_models()[model]})")
+    for note in notes:
+        print(f"  {note}")
+    config = load_case(path)  # validates the file just written
+    for note in config.notices:
+        print(f"  notice: {note}")
+    print("next:")
+    print(f"  pyaeroflow run {path}")
+    print(f"  pyaeroflow polar {path} --alpha 0 2 4 6 8")
+    return 0
+
+
+def _check_mesh(args):
+    """Print the mesh check; invalid meshes fail with the reader's message."""
+    from pyaeroflow.mesh import read_mesh
+    from pyaeroflow.meshcheck import check_mesh
+
+    mesh = read_mesh(args.mesh, args.scale)
+    report = check_mesh(mesh, wall=args.wall, reynolds=args.re, chord=args.chord)
+    print(report.format())
+    return 0
 
 
 def _clean(args):

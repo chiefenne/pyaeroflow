@@ -129,7 +129,7 @@ Status: 2026-10-13, requirements complete (steps 1–13). Implementation follows
 Bump to 1.0 when all of these hold; until then 0.x. Check this list at every release.
 
 1. Scope statement: incompressible 2D laminar/RANS (SA, SST) with transition (BCM, AFT, LM) for airfoils, next to PyAero.
-2. L4: PyAero end-to-end workflow (exported `.su2` mesh, case, polar) validated on PyAero meshes.
+2. L4: PyAero end-to-end workflow (exported `.su2` mesh, case, polar) validated on PyAero meshes. **Tools done in 0.10** (`init-case`, `check-mesh`, ordered wall CSV); open: one validated polar per model family on a PyAero mesh, documented from mesh to plot.
 3. AFT/LM open validation items fixed or listed as known limits in `docs/validation.md`.
 4. L6: Gmsh `.msh` reader (**done, 0.10**).
 5. User documentation: install, tutorial, model-choice guide.
