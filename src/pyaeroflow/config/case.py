@@ -569,6 +569,21 @@ def _consistency(data, explicit, problems, notices, path):
                 f"output.force_boundaries: '{n}' is not a wall (type {types[n]!r})"
             )
 
+    conv = data["solver"]["convergence"]
+    for field in conv["fields"]:
+        if field not in ("cl", "cd", "cm"):
+            problems.append(
+                _unknown("solver.convergence.fields entry", field, ("cl", "cd", "cm"))
+            )
+    if conv["fields"] and not out["force_boundaries"]:
+        problems.append("solver.convergence.fields needs a wall to integrate forces")
+    if conv["fields"] and data["solver"]["method"] != "implicit":
+        notices.append("solver.convergence.fields ignored: method != implicit")
+    if data["physics"]["transition"]["model"] != "lm" and (
+        "physics.transition.clip" in explicit
+    ):
+        notices.append("physics.transition.clip ignored: model != lm")
+
     # Initial state: explicit values or from_boundary (default: the farfield).
     init = data["initial"]
     if init["from_boundary"] is not None and (

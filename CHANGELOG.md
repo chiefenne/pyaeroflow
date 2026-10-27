@@ -2,6 +2,12 @@
 
 ## Unreleased (0.9) – Transition, step 2: SA-AFT2019b
 
+- Force-based convergence (`solver.convergence`): `fields = ["cd"]` adds
+  SU2's Cauchy criterion (mean change of the coefficient per iteration below
+  `cauchy_eps` over `cauchy_elements` iterations, from `start_iteration`) to
+  the residual drop of steady runs. `physics.transition.clip = false` turns
+  the γ/Re_θt clip off (default on, as SU2).
+
 - Langtry–Menter: after every update γ is clipped to [1e-4, 5] and Re_θt to
   [1e-4, 1e15], as in SU2 (`CTransLMSolver`). Without the floor one cell of
   the 320k SD7003 run fell to γ = 1e-142 (99 % per iteration for 70

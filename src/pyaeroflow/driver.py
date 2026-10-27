@@ -660,6 +660,7 @@ class IncompressibleProblem:
         gamma_relaxation=None,
         gamma_diagnostics=False,
         nu_tilde_step_limit=None,
+        transition_clip=True,
         resume=None,
     ):
         """Implicit pseudo-time solution (D25, D35).
@@ -689,6 +690,10 @@ class IncompressibleProblem:
         mean-flow update is untouched), as SU2 limits its turbulence
         variable: a Newton step that multiplies nu_tilde in one boundary-layer
         cell cannot pass as a small change of the overall residual norm.
+
+        With the Langtry-Menter model the update clips gamma and Re_thetat to
+        SU2's limits (:meth:`_sst_limiter`); ``transition_clip=False`` leaves
+        them unclipped.
 
         ``resume`` is the state of an earlier run (the ``state`` of its result
         or of a restart file, see :func:`pyaeroflow.run.load_restart_state`):
@@ -807,22 +812,23 @@ class IncompressibleProblem:
             jvp=lambda w, dw: self.jvp(
                 w, dw, state["beta2"], state["psi"], state["gamma"]
             ),
-            limit_step=self._step_limiter(nu_tilde_step_limit),
+            limit_step=self._step_limiter(nu_tilde_step_limit, transition_clip),
             resume=resume,
         )
         return result._replace(state={**result.state, **driver_state()})
 
-    def _step_limiter(self, factor):
+    def _step_limiter(self, factor, clip=True):
         """Step limiter of the turbulence variables, or None.
 
-        SST always gets SU2's under-relaxation (:meth:`_sst_limiter`); SA the
+        SST always gets SU2's under-relaxation (:meth:`_sst_limiter`, with the
+        clip of the transition variables unless ``clip`` is False); SA the
         nu_tilde cap of ``factor`` (None = no cap).
         """
         if self.model.turbulence == "sst":
-            return self._sst_limiter()
+            return self._sst_limiter(clip=clip)
         return self._nu_tilde_limiter(factor)
 
-    def _sst_limiter(self, max_update=SST_MAX_UPDATE):
+    def _sst_limiter(self, max_update=SST_MAX_UPDATE, clip=True):
         """SU2's SST under-relaxation: k and omega stay positive.
 
         Per cell the (k, omega) update is scaled by min(1, max_update /
@@ -835,6 +841,7 @@ class IncompressibleProblem:
         Without the floor a cell whose update keeps asking for a negative gamma
         loses 99 % per iteration (gamma = 1e-142 after 70 iterations) and the
         square root of the onset term has an enormous derivative there.
+        ``clip=False`` leaves the transition variables unclipped.
         """
         groups = [[rans_sst.NK, rans_sst.NW]]
         clips = []
@@ -842,10 +849,11 @@ class IncompressibleProblem:
             groups.append(
                 [rans_sst.NGL, rans_sst.NRT]
             )  # scaled apart (own solver in SU2)
-            clips = [
-                (rans_sst.NGL, lm.GAMMA_LIMITS),
-                (rans_sst.NRT, lm.RE_THETA_LIMITS),
-            ]
+            if clip:
+                clips = [
+                    (rans_sst.NGL, lm.GAMMA_LIMITS),
+                    (rans_sst.NRT, lm.RE_THETA_LIMITS),
+                ]
 
         def limit_step(u, du):
             du = du.copy()
@@ -943,6 +951,7 @@ class IncompressibleProblem:
         callback=None,
         inner_callback=None,
         nu_tilde_step_limit=None,
+        transition_clip=True,
         resume=None,
     ):
         """Dual time stepping from ``w0`` to ``settings.end_time`` (D9, D37).
@@ -951,7 +960,8 @@ class IncompressibleProblem:
         with the inner pseudo-time/Newton-Krylov iterations of
         ``settings.inner``; beta^2 follows the current state, the limiter is
         not frozen. ``nu_tilde_step_limit`` caps every inner update of
-        nu_tilde as in :meth:`solve`. ``resume`` continues an earlier run
+        nu_tilde and ``transition_clip`` clips gamma and Re_thetat as in
+        :meth:`solve`. ``resume`` continues an earlier run
         (``step`` and ``u_previous``, see :func:`solve_unsteady`).
         """
         state = {"beta2": self.beta2(w0)}
@@ -970,7 +980,7 @@ class IncompressibleProblem:
             callback=callback,
             inner_callback=inner_callback,
             jvp=lambda w, dw: self.jvp(w, dw, state["beta2"]),
-            limit_step=self._step_limiter(nu_tilde_step_limit),
+            limit_step=self._step_limiter(nu_tilde_step_limit, transition_clip),
             resume=resume,
         )
 

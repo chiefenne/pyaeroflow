@@ -255,7 +255,8 @@ def solve_steady(
     callback : callable, optional
         ``callback(iteration, u, residual_norms, cfl, accepted)`` after every
         iteration (e.g. logging). Setting ``callback.info["stop"]`` ends the
-        run after that iteration. ``callback.info`` may be set beforehand to
+        run after that iteration; ``callback.info["converged"]`` ends it as
+        converged (e.g. a Cauchy criterion on the force coefficients). ``callback.info`` may be set beforehand to
         a dict that receives ``newton_krylov`` and ``linear_iterations``.
     jvp : callable, optional
         ``jvp(u, du) -> dR/du(u) @ du`` of the full residual; enables the
@@ -503,6 +504,9 @@ def solve_steady(
                 info["measure"] = norm
             state["it"] = it
             callback(it, u, hist["residuals"][-1], hist["cfl"][-1], accepted)
+            if info is not None and info.get("converged"):
+                converged = True  # the callback judged a force criterion met
+                break
             if info is not None and info.get("stop"):
                 break  # the callback asked for a clean stop (control file)
         state["it"] = it

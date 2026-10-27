@@ -45,6 +45,7 @@ from pyaeroflow.physics import incompressible as inc
 from pyaeroflow.physics import rans
 from pyaeroflow.physics import spalart_allmaras as sa
 from pyaeroflow.solver import DualTimeSettings, LinearSettings, PseudoTimeSettings
+from pyaeroflow.solver.convergence import CauchyCriterion
 
 
 class Scaling(NamedTuple):
@@ -871,6 +872,12 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
                 fields.write_pvd()
             log.write(f"control file .result_{n}: fields written for iteration {n}")
         restarts(it, w, good=bool(accepted), state=restart_state)
+        if cauchy and accepted and cauchy.update(it, coeffs):
+            log.write(
+                f"Cauchy criterion met on {', '.join(cauchy.names)}: mean change "
+                f"below {cauchy.eps:g} over {cauchy.elements} iterations"
+            )
+            info["converged"] = True
         if control.stop_requested():
             log.write(
                 f"control file .stop found: stopping after iteration {it}, "
@@ -881,6 +888,17 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     callback.info = {}
 
     solver = cfg["solver"]
+    conv = solver["convergence"]
+    cauchy = (
+        CauchyCriterion(
+            conv["fields"],
+            conv["cauchy_elements"],
+            conv["cauchy_eps"],
+            conv["start_iteration"],
+        )
+        if conv["fields"] and monitor and implicit
+        else None
+    )
     vortex = None
     if solver["method"] == "implicit":
         settings = _pseudo_time_settings(cfg)
@@ -901,6 +919,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
             gamma_relaxation=tr_cfg["relaxation"],
             gamma_diagnostics=diagnose,
             nu_tilde_step_limit=solver["nu_tilde_step_limit"],
+            transition_clip=tr_cfg["clip"],
             resume=resume,
         )
     else:
@@ -926,6 +945,17 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     nk_steps = int(np.count_nonzero(h["newton_krylov"]))
     rows = [
         ("converged", "yes" if result.converged else "NO"),
+        *(
+            [
+                (
+                    "convergence criterion",
+                    f"Cauchy on {', '.join(cauchy.names)} (mean change < "
+                    f"{cauchy.eps:g} over {cauchy.elements} iterations)",
+                )
+            ]
+            if cauchy and callback.info.get("converged")
+            else []
+        ),
         ("iterations", f"{int(h['iteration'][-1])} ({nk_steps} Newton-Krylov)"),
         ("rejected updates", str(int(np.count_nonzero(~h["accepted"])))),
         (
@@ -1111,6 +1141,7 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         callback=callback,
         inner_callback=inner_callback if detailed else None,
         nu_tilde_step_limit=cfg["solver"]["nu_tilde_step_limit"],
+        transition_clip=cfg["physics"]["transition"]["clip"],
         resume=resume,
     )
     history.close()
@@ -1310,6 +1341,21 @@ def _mode_rows(cfg):
             rows.append(("Newton-Krylov", when))
         else:
             rows.append(("Newton-Krylov", "off"))
+    conv = solver["convergence"]
+    if conv["fields"] and not unsteady and solver["method"] == "implicit":
+        rows.append(
+            (
+                "Cauchy convergence",
+                f"{', '.join(conv['fields'])}: mean change < {conv['cauchy_eps']:g} "
+                f"over {conv['cauchy_elements']} iterations from iteration "
+                f"{conv['start_iteration']}",
+            )
+        )
+    tr = cfg["physics"]["transition"]
+    if tr["model"] == "lm" and not tr["clip"]:
+        rows.append(
+            ("gamma, Re_thetat", "not clipped (physics.transition.clip = false)")
+        )
     if (
         solver["nu_tilde_step_limit"] is not None
         and cfg["physics"]["turbulence"] != "sst"

@@ -226,3 +226,15 @@ def test_restart_between_sst_and_sst_lm_keeps_k_omega(tmp_path):
     assert n == 5 and np.all(w0[:, :5] == 7.0) and np.all(w0[:, 5:] == 0.0)
     w0, n = load_restart(tmp_path / "r.npz", mesh, np.zeros((mesh.n_cells, 6)))
     assert n == 3
+
+
+def test_step_limiter_without_clip_leaves_gamma_unclipped():
+    p, k_omega = _lm_plate()
+    w = p.initial_state((1.0, 0.0), k_omega=k_omega)
+    w[:, rans_sst.NGL] = 1e-142
+    du = np.zeros_like(w)
+    du[:, rans_sst.NGL] = -1e-60
+    clipped = w + p._step_limiter(None, True)(w, du)
+    free = w + p._step_limiter(None, False)(w, du)
+    assert clipped[:, rans_sst.NGL].min() == pytest.approx(lm.GAMMA_LIMITS[0])
+    assert free[:, rans_sst.NGL].max() < 1e-142  # the 99 % limit only

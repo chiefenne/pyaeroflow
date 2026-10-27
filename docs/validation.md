@@ -619,6 +619,10 @@ iterations to 7.3 orders (all residuals 10⁻¹⁰ to 10⁻¹⁶, γ residual pe
 6·10⁻⁵ against 550) at the same forces: C_L 0.59307, C_D 0.022761,
 C_M 0.039252. A restart from the old iteration 2500 state instead left the
 state (C_L 0.43–0.49) because that state held the dead cell.
+The clip is on by default as in SU2 and can be turned off with
+`physics.transition.clip = false`. `solver.convergence.fields = ["cd"]`
+adds SU2's force-based (Cauchy) criterion to the residual drop, so a run like
+this one can end when C_D has settled instead of at a fixed residual drop.
 
 [↑ back to table](#stage-table)
 
