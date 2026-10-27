@@ -509,6 +509,30 @@ pyaeroflow clean case.toml --all --yes          # everything the case wrote
 `clean` options: `--restarts`, `--backups`, `--fields`, `--history`, `--wall`,
 `--log`, `--all`; without `--yes` it only lists (D60).
 
+### Control files of a running case
+
+Two empty files in the output directory (`output.directory`) steer a running
+case. They are checked after every iteration (steady) or time step (unsteady)
+and never deleted by the solver.
+
+| File | Effect |
+|---|---|
+| `.stop` | The run writes the final backup `<name>.backup_<number>.npz`, the final `<name>.vtu` (even with `fields_final = false`) and the wall files of that iteration or step, and ends. The summary says `stopped`. |
+| `.result_629` | At iteration or step 629 the run writes `<name>_000629.vtu` with the `output.fields` of the case, also when 629 is not in `fields_interval` or `fields_at`, and goes on. |
+
+```
+touch out/case/.stop            # stop gracefully
+touch out/case/.result_629      # fields of iteration 629
+rm out/case/.stop               # needed before the next start
+```
+
+A start or restart with an existing `.stop` fails right away with an error,
+before the mesh is read. An existing `.result_N` is only a notice in the log:
+the fields are written when N is reached, or, if N is not after the iteration
+or step the run starts from, not at all. A `.result_N` created after N has
+passed is ignored. A number that falls on a rejected iteration (or a time step
+at the inner limit) is written at the next good one.
+
 ## 6. Open questions
 
 None.

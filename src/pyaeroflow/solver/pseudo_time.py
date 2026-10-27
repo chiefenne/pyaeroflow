@@ -254,7 +254,8 @@ def solve_steady(
         iterations (e.g. first-order convective states).
     callback : callable, optional
         ``callback(iteration, u, residual_norms, cfl, accepted)`` after every
-        iteration (e.g. logging). ``callback.info`` may be set beforehand to
+        iteration (e.g. logging). Setting ``callback.info["stop"]`` ends the
+        run after that iteration. ``callback.info`` may be set beforehand to
         a dict that receives ``newton_krylov`` and ``linear_iterations``.
     jvp : callable, optional
         ``jvp(u, du) -> dR/du(u) @ du`` of the full residual; enables the
@@ -502,6 +503,8 @@ def solve_steady(
                 info["measure"] = norm
             state["it"] = it
             callback(it, u, hist["residuals"][-1], hist["cfl"][-1], accepted)
+            if info is not None and info.get("stop"):
+                break  # the callback asked for a clean stop (control file)
         state["it"] = it
     history = {k: np.asarray(v) for k, v in hist.items()}
     return SteadyResult(u, bool(converged), history, snapshot())
@@ -587,5 +590,7 @@ def solve_explicit(
         hist["linear_iterations"].append(0)
         if callback is not None:
             callback(it, u, hist["residuals"][-1], cfl, True)
+            if getattr(callback, "info", {}).get("stop"):
+                break  # the callback asked for a clean stop (control file)
     history = {k: np.asarray(v) for k, v in hist.items()}
     return SteadyResult(u, bool(converged), history)

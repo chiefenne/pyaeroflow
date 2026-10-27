@@ -120,7 +120,8 @@ def solve_unsteady(
     callback : callable, optional
         ``callback(step, time, u, residuals, inner_iterations, inner_drop,
         converged)`` after every time step; ``callback.info`` may be a dict
-        that receives ``linear_iterations``.
+        that receives ``linear_iterations``. Setting ``callback.info["stop"]``
+        ends the run after that step.
     inner_callback : callable, optional
         Passed to the inner :func:`solve_steady` (per inner iteration).
     limit_step : callable, optional
@@ -217,6 +218,8 @@ def solve_unsteady(
                 callback.info["u_previous"] = u_nm1
                 callback.info["time_step"] = dt
             callback(step, t, u_n, h["residuals"][-1], n_inner, drop, inner.converged)
+            if getattr(callback, "info", {}).get("stop"):
+                break  # the callback asked for a clean stop (control file)
 
     history = {k: np.asarray(v) for k, v in hist.items()}
     return UnsteadyResult(u_n, t, all_converged, history, u_nm1)

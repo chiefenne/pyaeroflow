@@ -20,6 +20,7 @@ import numpy as np
 
 from pyaeroflow import __version__
 from pyaeroflow.config import Resolved, load_case, resolve
+from pyaeroflow.control import ControlFiles, check_no_stop_file
 from pyaeroflow.driver import (
     GAMMA_DIAGNOSTICS,
     GAMMA_STEP_DIAGNOSTICS,
@@ -663,6 +664,7 @@ def run_case(path, console=True, mesh=None, restart_mode="continue"):
     config = path if isinstance(path, Resolved) else load_case(path)
     cfg = config.data
     out_dir = config.resolve_path(cfg["output"]["directory"])
+    check_no_stop_file(out_dir)  # before the mesh is read (L7)
     out_dir.mkdir(parents=True, exist_ok=True)
     name = config.name
     (out_dir / f"{name}.resolved.toml").write_text(config.to_toml())
@@ -806,6 +808,9 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     extra_names = (("NK", "GMRES") if implicit else ()) + tuple(
         (c, 11) for c in coeff_names
     )
+    control = ControlFiles(out_dir, after or 0)
+    for line in control.notices("iteration"):
+        log.write(line)
     log.iteration_header(names, extra_names)
     fields = FieldWriter(
         out_dir, name, mesh, scaling, problem, monitor, cfg["output"], after=after or 0
@@ -854,10 +859,24 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
             if diagnose
             else (),
         )
-        if fields.due(it, accepted):
+        written = fields.due(it, accepted)
+        if written:
             fields.write(out_dir / fields.series_file(it), w, info.get("cell_residual"))
             fields.write_pvd()
+        for n in control.due_results(it, bool(accepted)):
+            if not (written and n == it):
+                fields.write(
+                    out_dir / fields.series_file(n), w, info.get("cell_residual")
+                )
+                fields.write_pvd()
+            log.write(f"control file .result_{n}: fields written for iteration {n}")
         restarts(it, w, good=bool(accepted), state=restart_state)
+        if control.stop_requested():
+            log.write(
+                f"control file .stop found: stopping after iteration {it}, "
+                "writing the backup and the result files"
+            )
+            info["stop"] = True
 
     callback.info = {}
 
@@ -896,7 +915,9 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     if timing["setup"] is None:  # a restart that is converged already
         timing["setup"] = log.elapsed - offset
 
-    if fields.final:
+    stopped = bool(callback.info.get("stop"))
+    write_final = fields.final or stopped
+    if write_final:
         fields.write(
             out_dir / f"{name}.vtu", result.u, callback.info.get("cell_residual")
         )
@@ -914,7 +935,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
         ),
         ("setup and compilation", f"{timing['setup']:.1f} s"),
         ("wall time", f"{log.elapsed:.1f} s"),
-        *([("fields", str(out_dir / f"{name}.vtu"))] if fields.final else []),
+        *([("fields", str(out_dir / f"{name}.vtu"))] if write_final else []),
         *([("field series", str(out_dir / f"{name}.pvd"))] if fields.last else []),
         ("history", str(history.path)),
     ]
@@ -938,6 +959,8 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
             path = out_dir / f"{name}.wall_{bname}.csv"
             monitor.write_wall(result.u, bname, path)
             rows.append((f"wall '{bname}'", str(path)))
+    if stopped:
+        rows.insert(1, ("stopped", "by the .stop file"))
     log.table(rows)
     return result, coefficients
 
@@ -983,6 +1006,9 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
     if diagnose:  # the first step is compared with the restart state
         _, gamma["previous"] = problem.gamma_step_diagnostics(w0)
     detailed = cfg["output"]["verbosity"] == "detailed"
+    control = ControlFiles(out_dir, after or 0)
+    for line in control.notices("step"):
+        log.write(line)
     log.step_header(names, ("GMRES",) + tuple((c, 11) for c in coeff_names))
     series = []
     fields = FieldWriter(
@@ -1038,9 +1064,20 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
             log.elapsed,
             stats,
         )
-        if fields.due(step, converged):
+        written = fields.due(step, converged)
+        if written:
             write_series(step, t, w)
+        for n in control.due_results(step, bool(converged)):
+            if not (written and n == step):
+                write_series(n, t, w)
+            log.write(f"control file .result_{n}: fields written for step {n}")
         restarts(step, w, good=bool(converged), time=t * t_scale, state=restart_state)
+        if control.stop_requested():
+            log.write(
+                f"control file .stop found: stopping after step {step}, "
+                "writing the backup and the result files"
+            )
+            callback.info["stop"] = True
         if detailed:
             log.iteration_header(names, ("NK", "GMRES"))
             log.step_header(names, ("GMRES",) + tuple((c, 11) for c in coeff_names))
@@ -1085,7 +1122,9 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         if result.history["step"].size
         else (resume or {}).get("step", 0)
     )
-    if fields.final:
+    stopped = bool(callback.info.get("stop"))
+    write_final = fields.final or stopped
+    if write_final:
         if fields.last != n_steps:
             write_series(n_steps, result.time, result.u)
         fields.write(out_dir / f"{name}.vtu", result.u)
@@ -1098,7 +1137,7 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         ("steps at inner limit", str(int(np.count_nonzero(~h["converged"])))),
         ("setup and compilation", f"{timing['setup']:.1f} s"),
         ("wall time", f"{log.elapsed:.1f} s"),
-        *([("fields", str(out_dir / f"{name}.vtu"))] if fields.final else []),
+        *([("fields", str(out_dir / f"{name}.vtu"))] if write_final else []),
         *([("field series", str(out_dir / f"{name}.pvd"))] if series else []),
         ("history", str(history.path)),
     ]
@@ -1114,6 +1153,8 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
             path = out_dir / f"{name}.wall_{bname}.csv"
             monitor.write_wall(result.u, bname, path)
             rows.append((f"wall '{bname}'", str(path)))
+    if stopped:
+        rows.insert(1, ("stopped", "by the .stop file"))
     log.table(rows)
     return result, coefficients
 

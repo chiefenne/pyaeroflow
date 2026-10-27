@@ -2,6 +2,13 @@
 
 ## Unreleased (0.9) – Transition, step 2: SA-AFT2019b
 
+- Control files of a running case (L7): `touch .stop` in the output directory
+  ends the run after the current iteration or step with a final backup,
+  `<name>.vtu` and the wall files; `touch .result_629` writes the VTU file of
+  iteration or step 629 and the run goes on. A start with an existing `.stop`
+  fails before the mesh is read; an existing `.result_N` is a notice.
+  See `docs/configuration.md` ("Control files of a running case").
+
 - Langtry–Menter γ-Re_θ transition on SST (L3 step 4):
   `physics.transition.model = "lm"` with `turbulence = "sst"`, the TMR
   SST-2003-LM2009 equations on the SST-2003m base with SU2's
