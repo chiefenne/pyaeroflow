@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased (0.10) – Gmsh meshes
+
+- Gmsh reader (L6): `mesh.file` may be a Gmsh `.msh` file (`read_msh`, and
+  `read_mesh`, which picks the reader from the extension). Formats 2.2 (also
+  2.0, 2.1), 4.0 (ASCII) and 4.1, ASCII and binary, either byte order; read
+  and tested with files written by Gmsh 4.15.2. Triangles and quadrangles,
+  second-order types with their corner nodes; the curves' physical groups
+  become the boundary names. See `docs/configuration.md` ("Gmsh meshes").
+
 ## 0.9 – Transition models, SST, control files (2026-10-27)
 
 Covers transition steps 1–4 (SA-BCM, SA-AFT2019b, k-ω SST, Langtry–Menter);
