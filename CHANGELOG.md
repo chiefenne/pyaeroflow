@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased (0.9) – Transition, step 2: SA-AFT2019b
+## 0.9 – Transition models, SST, control files (2026-10-27)
+
+Covers transition steps 1–4 (SA-BCM, SA-AFT2019b, k-ω SST, Langtry–Menter);
+the 0.8 section below was never released separately.
+
+### Transition, step 2: SA-AFT2019b
 
 - Force-based convergence (`solver.convergence`): `fields = ["cd"]` adds
   SU2's Cauchy criterion (mean change of the coefficient per iteration below
@@ -97,7 +102,7 @@
   machine zero (`docs/validation.md` §8).
 - `physics.transition.relaxation` is now BCM only.
 
-## Unreleased (0.8) – Transition, step 1: SA-BCM
+### Transition, step 1: SA-BCM (formerly 0.8)
 
 - Restart files during a run: `output.restart_interval` writes two files
   alternately (`<name>.restart_a.npz`, `<name>.restart_b.npz`), and
