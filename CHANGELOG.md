@@ -2,6 +2,10 @@
 
 ## Unreleased (0.10) – Gmsh meshes, airfoil workflow
 
+- The Configuration block of the log names the SU2 clip of gamma and Re_thetat
+  for Langtry–Menter cases also when it is on (the default); before, only
+  `physics.transition.clip = false` was logged.
+
 - `solver.cfl.polar_reset = true`: `pyaeroflow polar` restarts the CFL ramp at each
   new angle (Newton–Krylov switch and limiter kept) instead of carrying the CFL
   of the previous angle. Default off.

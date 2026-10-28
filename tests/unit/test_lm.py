@@ -11,7 +11,7 @@ from pyaeroflow.config import resolve
 from pyaeroflow.driver import IncompressibleProblem
 from pyaeroflow.physics import incompressible as inc
 from pyaeroflow.physics import lm, rans_sst, sst
-from pyaeroflow.run import load_restart, mesh_fingerprint
+from pyaeroflow.run import _mode_rows, load_restart, mesh_fingerprint
 
 jax.config.update("jax_enable_x64", True)
 
@@ -213,6 +213,18 @@ def test_lm_needs_sst_and_config_rules():
     cfg = resolve(raw)
     assert cfg["physics"]["transition"]["model"] == "lm"
     assert any("turbulence_intensity ignored" in n for n in cfg.notices)
+
+
+def test_configuration_block_names_the_transition_clip():
+    raw = {
+        **RANS_MINIMAL,
+        "physics": {"model": "rans", "turbulence": "sst", "transition": {"model": "lm"}},
+    }
+    rows = dict(_mode_rows(resolve(raw)))
+    assert rows["gamma, Re_thetat"].startswith("clipped as in SU2: gamma [0.0001, 5]")
+    raw["physics"]["transition"]["clip"] = False
+    rows = dict(_mode_rows(resolve(raw)))
+    assert rows["gamma, Re_thetat"].startswith("not clipped")
 
 
 def test_restart_between_sst_and_sst_lm_keeps_k_omega(tmp_path):
