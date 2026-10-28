@@ -43,8 +43,7 @@ from pyaeroflow.mesh import Mesh, read_mesh
 from pyaeroflow.mesh.ordering import order_boundary_faces
 from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
-from pyaeroflow.physics import lm
-from pyaeroflow.physics import rans
+from pyaeroflow.physics import lm, rans
 from pyaeroflow.physics import spalart_allmaras as sa
 from pyaeroflow.solver import DualTimeSettings, LinearSettings, PseudoTimeSettings
 from pyaeroflow.solver.convergence import CauchyCriterion

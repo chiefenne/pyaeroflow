@@ -218,7 +218,11 @@ def test_lm_needs_sst_and_config_rules():
 def test_configuration_block_names_the_transition_clip():
     raw = {
         **RANS_MINIMAL,
-        "physics": {"model": "rans", "turbulence": "sst", "transition": {"model": "lm"}},
+        "physics": {
+            "model": "rans",
+            "turbulence": "sst",
+            "transition": {"model": "lm"},
+        },
     }
     rows = dict(_mode_rows(resolve(raw)))
     assert rows["gamma, Re_thetat"].startswith("clipped as in SU2: gamma [0.0001, 5]")
