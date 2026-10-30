@@ -124,16 +124,16 @@ Status: 2026-10-13, requirements complete (steps 1–13). Implementation follows
 | P14 | Convergence and accuracy on 100k+ cell RANS airfoil meshes — **resolved by D54** except the O-grid start-up | Stage 6 findings, PyAero y⁺ = 1 mesh (`examples/meshes/naca0012_pyaero_100k_y1.su2`, 100k cells, first cell 5·10⁻⁶ c, growth 1.15, α = 0, Re 6·10⁶): (1) with the local Venkatakrishnan limiter frozen, Newton steps were rejected whenever the CFL exceeded ~600 and C_f came out 70 % too high and flat (0.0051 along the chord, viscous drag 0.0102 vs TMR ≈ 0.0059): the limiter makes the boundary layer effectively first order, the preconditioned FDS dissipation then acts across the thin cells; (2) GMRES needs 76–153 iterations once the CFL exceeds ~10³ (first-order preconditioner vs second-order operator on cells of aspect ratio 2000) — an adaptive CFL cap in the Newton phase was added (`nk_cfl_adapt_iterations`); (3) releasing the limiter after the start-up (`release_limiter`, unlimited second order) runs without rejections at CFL ≤ 500 with 9–11 GMRES iterations per step and gives a decaying C_f (0.0053 → 0.0034 from x = 0.1 to 0.9), but after 40 iterations the turbulence field is still developing (ν_t/ν rising, C_f ~40 % above TMR) — the pseudo-time transport of ν̃ over the 25-chord domain needs far more iterations at a capped CFL; (4) the convergence norm mixes p, u, v and ν̃ in absolute terms, so the ν̃ residual (~10⁻¹⁰ for ν̃ ~ 10⁻⁵) never influences the stopping test or the Newton switch — per-variable normalisation is needed; (5) the largest residuals sit in the wake cells at the outlet. Next steps: per-variable residual normalisation, backtracking line search instead of step rejection, a smooth SA-neg switch, Newton phase at higher CFL with a stronger preconditioner (P13), continuation in α; on the 131k-cell O-grid the start-up phase itself did not reduce the residual |
 
 
-## 4a. Milestone 1.0 (proposed 2026-10-27, to be confirmed)
+## 4a. Milestone 1.0 (reached 2026-10-30)
 
-Bump to 1.0 when all of these hold; until then 0.x. Check this list at every release.
+Version 1.0 required all of these (checked 2026-10-30, release 1.0.0). Check this list at every release.
 
 1. Scope statement: incompressible 2D laminar/RANS (SA, SST) with transition (BCM, AFT, LM) for airfoils, next to PyAero.
 2. L4: PyAero end-to-end workflow (exported `.su2` mesh, case, polar) validated on PyAero meshes. **Tools done in 0.10** (`init-case`, `check-mesh`, ordered wall CSV); polars on the 320k PyAero SD7003 mesh for SST, SA-AFT and SST-LM (the LM polar 2026-10-30, `docs/validation.md` §10, with its limits: C_D too high, five of seven points ended by hand). Item 2 is done with 1.0 documenting these limits.
 3. AFT/LM open validation items fixed or listed as known limits in `docs/validation.md`. T3A− (AFT) and SD7003 reattachment (LM) are listed in `docs/validation.md` §11; E387 α = −2° and 8° (SA-AFT, no steady convergence; a rerun at −2° with growth CFL and the Cauchy criterion did not settle) are listed there too, with time-accurate runs as the likely remedy (not tried). Item 3 is done with 1.0 documenting these limits.
 4. L6: Gmsh `.msh` reader (**done, 0.10**).
 5. User documentation: install, tutorial, model-choice guide.
-6. Clean `pip install`, CLI smoke test, tag `v1.0`.
+6. Clean `pip install`, CLI smoke test, tag `v1.0` (**done 2026-10-30**: wheel of main built and installed in a fresh virtual environment, `pyaeroflow check-mesh`, `init-case`, `polar --alpha 0 2` on the 100k NACA 0012 PyAero mesh, `fields` and `clean` run from an empty directory; the tag is pushed by the maintainer).
 
 After 1.0: L1 compressible, L5 further turbulence models, late SD7003 reattachment.
 

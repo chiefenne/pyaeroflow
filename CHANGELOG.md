@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (0.10) – Gmsh meshes, airfoil workflow
+## 1.0 – Gmsh meshes, airfoil workflow, control files, LM polar (2026-10-30)
 
 - `.read_toml_N` control file: at iteration or step N the run reads the case
   file again and applies the output and restart settings, and (steady)
