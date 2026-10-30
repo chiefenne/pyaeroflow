@@ -631,6 +631,68 @@ The clip is on by default as in SU2 and can be turned off with
 adds SU2's force-based (Cauchy) criterion to the residual drop, so a run like
 this one can end when C_D has settled instead of at a fixed residual drop.
 
+### SD7003, Re 6·10⁴: SST-LM polar on the 320k PyAero mesh
+
+`pyaeroflow polar lm_sd7003_320k_polar.toml --alpha 4 6 8 9 10 2 0` (restart
+chain from the converged α = 4° state, growth CFL with `polar_reset`, Tu 0.1 %,
+clip on). Polar CSV: `analysis/lm_transition/lm_sd7003_320k.polar.csv`.
+The same mesh was used for the fully turbulent SST and the SA-AFT (Tu 0.5 %,
+sharp trailing edge) polars of §9.
+
+| α | C_L LM | C_D LM | C_M LM | C_L SST | C_D SST | C_L AFT | C_D AFT | C_L XFOIL | C_D XFOIL |
+|---|---|---|---|---|---|---|---|---|---|
+| 0 | 0.045 | 0.01454 | 0.0176 | 0.155 | 0.01586 | | | 0.058 | 0.0148 |
+| 2 | 0.390 | 0.01969 | 0.0539 | 0.366 | 0.01655 | | | 0.424 | 0.0165 |
+| 4 | 0.593 | 0.02278 | 0.0394 | 0.573 | 0.01834 | 0.589 | 0.0176 | 0.620 | 0.0188 |
+| 6 | 0.758 | 0.02911 | 0.0272 | 0.768 | 0.02181 | 0.783 | 0.0218 | 0.813 | 0.0243 |
+| 8 | 0.890 | 0.04263 | 0.0226 | 0.934 | 0.02956 | 0.954 | 0.0303 | 0.992 | 0.0342 |
+| 9 | 0.903 | 0.06023 | 0.0284 | 0.976 | 0.03969 | 1.013 | 0.0390 | 1.065 | 0.0429 |
+| 10 | 0.770 | 0.10298 | 0.0638 | 0.716 | 0.10800 | 0.740 | 0.1260 | 1.109 | 0.0557 |
+
+![SD7003 SST-LM polar](figures/lm_sd7003_320k_polar.png)
+
+What the polar shows:
+
+- At α = 0° and 2° LM follows XFOIL (C_L 0.045 and 0.390 against 0.058 and
+  0.424), where the fully turbulent SST is 0.1 too high at 0°: the laminar
+  bubble that takes lift off the suction side at low α is in the solution.
+- From α = 4° upwards C_D is too high: 0.0228 against 0.0176–0.0188 at 4°, and
+  0.0291, 0.0426, 0.0602 at 6°, 8°, 9° against 0.0218–0.0243, 0.0296–0.0342,
+  0.039–0.043. At 8° the excess is nearly all pressure drag (C_Dp 0.0364
+  against 0.0216 for SST and 0.0238 for AFT; the viscous part, 0.0062, is as
+  AFT's 0.0065). That fits the late reattachment found at α = 4° (§11); the
+  wall data of the other angles were not examined. C_L is 5–7 % below SST and
+  AFT at 8° and 11 % below AFT at 9°.
+- The stall comes earlier: the lift curve flattens from 8° (0.890 and 0.903 at
+  8° and 9°, against 0.93–0.95 and 0.98–1.01) and falls at 10° (0.770) like all
+  models; XFOIL still rises (0.99, 1.07, 1.11). The α = 10° point is a deep-stall state
+  with C_D 0.103 and converged normally (7.6 orders in 122 iterations).
+- All three models are stalled at 10° (C_L 0.72–0.77, C_D 0.10–0.13) and
+  attached at 9°, so the early stall is a property of the RANS closures on
+  this mesh as much as of LM.
+
+Convergence and limits of the data. Five of the seven points (0°, 2°, 4°, 6°,
+8°) are marked `converged = 0` in the CSV: they were ended by hand with the
+`.stop` file or by the iteration limit, not by a criterion. The reason is the
+γ residual, which stalls between 10⁻⁵·⁴ and 10⁻⁶ at the clip floor (probably
+one cell held at γ = 10⁻⁴; not identified, since the forces do not depend on
+it), so the residual drop of 7 orders is never reached (about 2 to 2.6
+orders). The forces themselves stood still to four or five digits: C_L and
+C_D jitter by 2·10⁻⁶ to 5·10⁻⁶ per iteration, which is above the 10⁻⁶ and
+10⁻⁸ of the Cauchy criterion first set; with `cauchy_eps = 1e-5` the criterion
+would have ended α = 4° at about iteration 150 instead of 662. α = 0° was still
+drifting (C_L 2·10⁻⁴ relative per iteration when stopped at iteration 162).
+The CSV holds the last state of each run. α = 9° and 10° ended on the
+criterion (`converged = 1`). No decreasing-α sweep was run, so the polar does
+not show whether the bubble has hysteresis. At α = 0° the CFL stayed near 10³
+(GMRES 30–50 iterations per step, 73 s per iteration against 20–30 s at the
+other angles): `solver.newton_krylov.cfl_adapt_iterations` makes that cap
+adjustable.
+
+Summary of the LM polar: usable for the trend and for the low-α bubble
+(C_L at 0° and 2°), not for drag. For drag and the stall angle use SA-AFT
+(§8, §9), which is also closer to XFOIL; this is listed in §11.
+
 [↑ back to table](#stage-table)
 
 <a id="sec-11"></a>
@@ -649,6 +711,7 @@ them.
 | SST-LM | SD7003, Re 6·10⁴, α = 4°, [§10](#sec-10) | bubble too long: reattachment at x/c 0.71 against 0.60–0.67 (LES/DNS), C_D 3 % above the highest LES/DNS value; C_L and C_M inside the bands | transition is triggered in the LES/DNS window (γ_sep from x/c 0.45, ν_t/ν > 1 at 0.468); the turbulent shear layer after transition reattaches too slowly. Not diagnosed further (candidates: freestream decay of k and ω without sustaining terms, SST eddy viscosity in the separated layer) | SA-AFT (reattachment 0.644, inside the band) for low-Re laminar separation bubbles |
 | SA-AFT2019b | E387, Re 2·10⁵, α = −2°, [§8](#sec-8) | no steady solution found: rerun from the converged α = 0° state with growth CFL (cap 10⁵) and the Cauchy criterion on C_L/C_D (2026-10-27) stays in the Newton–Krylov phase at CFL 10–200 (every step above ~150 fails or is rejected); residuals of p, u, v, ν̃ flat at 10⁻⁶·⁶–10⁻⁹·³, γ 10⁻³–10⁻⁴, ñ 10⁻⁴·⁸; C_L drifts from 0.148 to 0.161 over iterations 83–313 and the drift grows (10⁻⁴ per iteration), C_D 0.0089 → 0.0095 | transition moving slowly over many iterations, as Coder (2019) reports for AFT; not diagnosed further | forces at α = −2° are indicative only (the 2000-iteration polar value C_L 0.163 lies on the same drift). A time-accurate (BDF2) run is the likely remedy, as in §7 for BCM at α = 8°; not tried |
 | SA-AFT2019b | E387, Re 2·10⁵, α = 8°, [§8](#sec-8) | not converged in 2000 iterations of the polar (SER CFL); not rerun | near the leading-edge bubble burst (XFOIL: transition at x/c 0.045); the BCM solution at α = 8° was a limit cycle (C_L 1.11–1.23, period about 0.25 c/U, `analysis/e387_alpha8_ser_stall.md`), so a steady solution may not exist | forces at α = 8° are not reference values; a time-accurate run with cycle-averaged forces is the likely remedy (as SU2 users do for unsteady separation); not tried for AFT |
+| SST-LM | SD7003, Re 6·10⁴, polar α = 0–10°, [§10](#sec-10) | C_D too high from α = 4° (+29 % at 4°, +41 % at 8°, +55 % at 9° against SA-AFT; pressure drag), C_L 5–11 % low at 8°–9°; five of seven points not converged by a criterion (γ residual at the clip floor, forces settled to 4–5 digits) | late reattachment as at α = 4°; the γ residual stalls at the clip floor, so only the force criterion can end a run | SA-AFT for drag and stall angle; LM for the low-α lift (0°, 2° close to XFOIL) |
 | SA-AFT, SST-LM | turbulent C_f after reattachment (E387, SD7003) | 35–50 % below XFOIL | baseline turbulence model recovering from the bubble; open, not specific to the transition models | – |
 
 Rule of thumb from these cases: SA-AFT for low freestream turbulence

@@ -16,6 +16,11 @@ TMR flat plate and NACA 0012, ERCOFTAC T3, the Eppler 387 and the SD7003
 (`.msh`). The path to 1.0 is in
 [requirements §4a](docs/requirements.md#4a-milestone-10-proposed-2026-10-27-to-be-confirmed).
 
+![SD7003 at alpha 4 deg, Re = 60 000, SST-2003m-LM2009](docs/figures/lm_sd7003_a4_re60000.png)
+
+*SD7003, α = 4°, Re = 60 000, k-ω SST-2003m with Langtry–Menter 2009
+transition: laminar separation bubble on the upper surface.*
+
 ## Documentation
 
 - [Requirements](docs/requirements.md): decisions, planned features, stage plan

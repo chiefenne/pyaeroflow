@@ -50,7 +50,7 @@ from pyaeroflow.mesh import Mesh, read_mesh
 from pyaeroflow.mesh.ordering import order_boundary_faces
 from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
-from pyaeroflow.physics import rans
+from pyaeroflow.physics import lm, rans
 from pyaeroflow.physics import spalart_allmaras as sa
 from pyaeroflow.reload import LIVE_STEADY, LIVE_UNSTEADY, reload_case
 from pyaeroflow.solver import DualTimeSettings, LinearSettings, PseudoTimeSettings
@@ -806,6 +806,7 @@ def _pseudo_time_settings(cfg):
         nk_linear_tolerance=solver["newton_krylov"]["linear_tolerance"],
         nk_restart=solver["newton_krylov"]["restart"],
         nk_max_krylov=solver["newton_krylov"]["max_iterations"],
+        nk_cfl_adapt_iterations=solver["newton_krylov"]["cfl_adapt_iterations"],
         refactor_interval=solver["refactor_interval"],
         linear=LinearSettings(**solver["linear_solver"]),
     )
@@ -1484,10 +1485,16 @@ def _mode_rows(cfg):
             )
         )
     tr = cfg["physics"]["transition"]
-    if tr["model"] == "lm" and not tr["clip"]:
-        rows.append(
-            ("gamma, Re_thetat", "not clipped (physics.transition.clip = false)")
-        )
+    if tr["model"] == "lm":
+        if tr["clip"]:
+            (g_lo, g_hi), (r_lo, r_hi) = lm.GAMMA_LIMITS, lm.RE_THETA_LIMITS
+            text = (
+                f"clipped as in SU2: gamma [{g_lo:g}, {g_hi:g}], "
+                f"Re_thetat [{r_lo:g}, {r_hi:g}]"
+            )
+        else:
+            text = "not clipped (physics.transition.clip = false)"
+        rows.append(("gamma, Re_thetat", text))
     if (
         solver["nu_tilde_step_limit"] is not None
         and cfg["physics"]["turbulence"] != "sst"
