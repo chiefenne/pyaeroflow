@@ -181,3 +181,13 @@ def test_load_case_reports_toml_syntax_errors(tmp_path):
     path.write_text("[mesh\nfile = 'x'\n")
     with pytest.raises(ConfigError, match="bad.toml"):
         load_case(path)
+
+
+def test_nk_cfl_adapt_iterations_reaches_the_solver_settings():
+    from pyaeroflow.run import _pseudo_time_settings
+
+    assert (
+        _pseudo_time_settings(resolve(MINIMAL, "c.toml")).nk_cfl_adapt_iterations == 60
+    )
+    raw = {**MINIMAL, "solver": {"newton_krylov": {"cfl_adapt_iterations": 200}}}
+    assert _pseudo_time_settings(resolve(raw, "c.toml")).nk_cfl_adapt_iterations == 200

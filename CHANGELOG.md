@@ -2,6 +2,11 @@
 
 ## Unreleased (0.10) – Gmsh meshes, airfoil workflow
 
+- `solver.newton_krylov.cfl_adapt_iterations` (default 60, as before): the
+  GMRES effort at which the adaptive CFL cap is quartered; a quarter of it is
+  the effort below which the cap grows. A larger value lets the CFL grow where
+  GMRES needs 20–50 iterations per step.
+
 - Documentation: SD7003 SST-LM polar on the 320k PyAero mesh (`docs/validation.md` §10,
   limits in §11); 1.0 list item 2 closed.
 
