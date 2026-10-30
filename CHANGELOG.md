@@ -7,6 +7,13 @@
   the effort below which the cap grows. A larger value lets the CFL grow where
   GMRES needs 20–50 iterations per step.
 
+- Documentation: SD7003 SST-LM polar on the 320k PyAero mesh (`docs/validation.md` §10,
+  limits in §11); 1.0 list item 2 closed.
+
+- The Configuration block of the log names the SU2 clip of gamma and Re_thetat
+  for Langtry–Menter cases also when it is on (the default); before, only
+  `physics.transition.clip = false` was logged.
+
 - `solver.cfl.polar_reset = true`: `pyaeroflow polar` restarts the CFL ramp at each
   new angle (Newton–Krylov switch and limiter kept) instead of carrying the CFL
   of the previous angle. Default off.
