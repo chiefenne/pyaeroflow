@@ -2,6 +2,11 @@
 
 ## Unreleased (0.10) – Gmsh meshes, airfoil workflow
 
+- `solver.newton_krylov.cfl_adapt_iterations` (default 60, as before): the
+  GMRES effort at which the adaptive CFL cap is quartered; a quarter of it is
+  the effort below which the cap grows. A larger value lets the CFL grow where
+  GMRES needs 20–50 iterations per step.
+
 - `solver.cfl.polar_reset = true`: `pyaeroflow polar` restarts the CFL ramp at each
   new angle (Newton–Krylov switch and limiter kept) instead of carrying the CFL
   of the previous angle. Default off.

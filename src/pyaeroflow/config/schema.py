@@ -432,6 +432,18 @@ SCHEMA = {
             "max_iterations": Opt(
                 "int", 200, "Maximum GMRES iterations per Newton step", minimum=1
             ),
+            "cfl_adapt_iterations": Opt(
+                "int",
+                60,
+                "CFL control (growth) in the Newton-Krylov phase: a step that "
+                "needs this many GMRES iterations cuts the CFL cap to a quarter, "
+                "a step that needs a quarter of it or fewer lets the cap grow "
+                "(x4, up to cfl.max); in between the cap is held. A larger "
+                "value allows a higher CFL where GMRES works moderately hard "
+                "(stalled steps of 20-50 iterations hold the CFL near 1e3 with "
+                "the default)",
+                minimum=4,
+            ),
         },
         "linear_solver": {
             "type": Opt(
