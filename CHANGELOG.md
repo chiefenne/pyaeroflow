@@ -2,6 +2,9 @@
 
 ## Unreleased (0.10) – Gmsh meshes, airfoil workflow
 
+- Documentation: SD7003 SST-LM polar on the 320k PyAero mesh (`docs/validation.md` §10,
+  limits in §11); 1.0 list item 2 closed.
+
 - The Configuration block of the log names the SU2 clip of gamma and Re_thetat
   for Langtry–Menter cases also when it is on (the default); before, only
   `physics.transition.clip = false` was logged.
