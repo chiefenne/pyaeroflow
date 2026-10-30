@@ -40,6 +40,17 @@ conda activate pyaeroflow
 pip install -e . --no-deps
 ```
 
+Where JAX wheels exist, plain `pip` works too (Python 3.11 or newer; JAX is
+pulled in as a dependency; tested on Linux), in a virtual environment:
+
+```
+pip install git+https://github.com/chiefenne/pyaeroflow
+pyaeroflow --version
+```
+
+Optional extras: `pip install "pyaeroflow[plot]"` for the plot scripts. The
+package is not on PyPI.
+
 ## Running a case
 
 From a PyAero (or Gmsh) airfoil mesh to a case file:
