@@ -258,8 +258,11 @@ def solve_steady(
         ``callback(iteration, u, residual_norms, cfl, accepted)`` after every
         iteration (e.g. logging). Setting ``callback.info["stop"]`` ends the
         run after that iteration; ``callback.info["converged"]`` ends it as
-        converged (e.g. a Cauchy criterion on the force coefficients). ``callback.info`` may be set beforehand to
-        a dict that receives ``newton_krylov`` and ``linear_iterations``.
+        converged (e.g. a Cauchy criterion on the force coefficients). Setting
+        ``callback.info["max_iterations"]`` or ``["residual_drop"]`` changes
+        these limits of the running iteration. ``callback.info`` may be set
+        beforehand to a dict that receives ``newton_krylov`` and
+        ``linear_iterations``.
     jvp : callable, optional
         ``jvp(u, du) -> dR/du(u) @ du`` of the full residual; enables the
         Newton-Krylov phase.
@@ -375,7 +378,10 @@ def solve_steady(
             callback(0, u, hist["residuals"][0], cfl, True)
     lin, steps_since_factor, cfl_at_factor = None, 0, cfl
     stale = False  # the preconditioner let GMRES work hard: rebuild it
-    for it in range(it0 + 1, s.max_iterations + 1):
+    max_iterations = s.max_iterations
+    it = it0
+    while it < max_iterations:
+        it += 1
         state["it"] = it - 1
         if converged or cfl < s.cfl_min:
             break
@@ -511,6 +517,10 @@ def solve_steady(
                 break
             if info is not None and info.get("stop"):
                 break  # the callback asked for a clean stop (control file)
+            if info is not None:  # limits the callback changed (.read_toml_N)
+                max_iterations = int(info.get("max_iterations", max_iterations))
+                if "residual_drop" in info:
+                    target = 10.0 ** (-float(info["residual_drop"]))
         state["it"] = it
     history = {k: np.asarray(v) for k, v in hist.items()}
     return SteadyResult(u, bool(converged), history, snapshot())

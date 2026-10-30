@@ -536,20 +536,47 @@ pyaeroflow clean case.toml --all --yes          # everything the case wrote
 
 ### Control files of a running case
 
-Two empty files in the output directory (`output.directory`) steer a running
+Plain files in the output directory (`output.directory`) steer a running
 case. They are checked after every iteration (steady) or time step (unsteady)
 and never deleted by the solver.
 
 | File | Effect |
 |---|---|
 | `.stop` | The run writes the final backup `<name>.backup_<number>.npz`, the final `<name>.vtu` (even with `fields_final = false`) and the wall files of that iteration or step, and ends. The summary says `stopped`. |
-| `.result_629` | At iteration or step 629 the run writes `<name>_000629.vtu` with the `output.fields` of the case, also when 629 is not in `fields_interval` or `fields_at`, and goes on. |
+| `.result_629` | At iteration or step 629 the run writes `<name>_000629.vtu` with the `output.fields` of the case, also when 629 is not in `fields_interval` or `fields_at`, and goes on. Field names inside the file (whitespace or commas, `#` starts a comment) are written **in addition** to `output.fields`, for this file only. A name that is unknown or that the case does not provide is reported in the log and skipped; the file is written with the rest. |
+| `.read_toml_380` | At iteration or step 380 the run reads the case file again and applies what may change during a run (below). If nothing changed it does nothing. |
 
 ```
 touch out/case/.stop            # stop gracefully
 touch out/case/.result_629      # fields of iteration 629
+echo "vorticity residual_p" > out/case/.result_629   # plus these two fields
+touch out/case/.read_toml_380   # read the case file at iteration 380
 rm out/case/.stop               # needed before the next start
 ```
+
+**`.read_toml_N`.** Edit the case file, then create the file with a number a
+little ahead of the running iteration. The reload applies
+
+- `output.fields`, `fields_interval`, `fields_at`, `fields_final`,
+  `restart_interval`, `restart_backup_interval`, `restart_backup_at`
+  (steady and unsteady runs);
+- `solver.max_iterations`, `solver.residual_drop` and `solver.convergence`
+  (the Cauchy criterion; its window starts afresh) in steady runs.
+
+Every other difference (physics, mesh, boundary conditions, CFL, numerics, …)
+is reported in the log as `not applied (cannot change during a run)` and
+ignored, because the state of the run belongs to the case it started with
+(stop the run and restart from the backup to change those). The log lists each
+reload (`changed key: old -> new`), and `<name>.read_toml_<N>.toml` in the
+output directory holds the settings in force afterwards, so a run can be
+repeated from its log and these copies. A case file that no longer validates
+(typo, wrong value) leaves everything as it was and the run goes on; the log
+says why. `pyaeroflow polar` reads the case file with the angle and restart of
+the running angle applied. Like `.result_N`, a number that lies in the past is
+ignored and one on a rejected iteration waits for the next good one.
+
+`pyaeroflow fields case.toml` lists the fields a case provides and which are
+selected; the table in [Field output](#field-output) shows them per model.
 
 A start or restart with an existing `.stop` fails right away with an error,
 before the mesh is read. An existing `.result_N` is only a notice in the log:

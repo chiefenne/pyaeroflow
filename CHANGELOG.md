@@ -2,6 +2,15 @@
 
 ## Unreleased (0.10) – Gmsh meshes, airfoil workflow
 
+- `.read_toml_N` control file: at iteration or step N the run reads the case
+  file again and applies the output and restart settings, and (steady)
+  `solver.max_iterations`, `solver.residual_drop` and `solver.convergence`;
+  everything else is reported as not applied. Each reload is logged and a copy
+  of the settings in force goes to `<name>.read_toml_<N>.toml`.
+- Field names inside a `.result_N` file are written in addition to
+  `output.fields` for that file. New command `pyaeroflow fields case.toml`
+  lists the fields a case provides.
+
 - `solver.cfl.polar_reset = true`: `pyaeroflow polar` restarts the CFL ramp at each
   new angle (Newton–Krylov switch and limiter kept) instead of carrying the CFL
   of the previous angle. Default off.

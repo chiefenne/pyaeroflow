@@ -139,3 +139,114 @@ def test_stop_file_unsteady(tmp_path, monkeypatch):
     assert np.load(result.restart_file)["time"] == pytest.approx(0.15)
     log = (out / "couette_unsteady.log").read_text()
     assert "control file .stop found: stopping after step 3" in log
+
+
+def test_read_toml_numbers_and_result_field_names(tmp_path):
+    for name in (".read_toml_7", ".read_toml_2", ".read_toml_x", ".read_toml_"):
+        (tmp_path / name).touch()
+    (tmp_path / ".result_4").write_text("vorticity, k  # debug\nwall_distance\n")
+    (tmp_path / ".result_5").touch()
+    control = ControlFiles(tmp_path, after=3)
+    assert control.reload_numbers() == [2, 7]
+    assert control.result_fields(4) == ["vorticity", "k", "wall_distance"]
+    assert control.result_fields(5) == [] and control.result_fields(9) == []
+    notes = control.notices("iteration")
+    assert any(
+        ".read_toml_7 found, the case file is read at iteration 7" in n for n in notes
+    )
+    assert any(
+        ".read_toml_2 found, but the run starts after iteration 3" in n for n in notes
+    )
+    assert control.due_reloads(2) == [] and control.due_reloads(6) == []
+    assert control.due_reloads(7, good=False) == []
+    assert control.due_reloads(8) == [7]  # waits for the next good iteration
+    assert control.due_reloads(9) == []
+
+
+def test_result_file_with_field_names_adds_them(case_dir):
+    out = case_dir / "out"
+    out.mkdir()
+    (out / ".result_2").write_text("vorticity wall_distance nope\n")
+    (out / ".result_3").touch()
+    run_case(case_dir / "couette.toml", console=False)
+    with_extra = (out / "couette_test_000002.vtu").read_bytes()
+    plain = (out / "couette_test_000003.vtu").read_bytes()
+    assert b"vorticity" in with_extra and b"vorticity" not in plain
+    log = (out / "couette_test.log").read_text()
+    assert "control file .result_2: unknown field 'nope'" in log
+    assert "skipped" in log and "fields written for iteration 2 (4 fields)" in log
+
+
+def _edit_toml_at_first_check(monkeypatch, path, old, new):
+    """Change the case file when the run first looks for ``.read_toml_N``."""
+    original = ControlFiles.due_reloads
+    done = []
+
+    def due(self, number, good=True):
+        if not done:
+            done.append(1)
+            path.write_text(path.read_text().replace(old, new))
+        return original(self, number, good)
+
+    monkeypatch.setattr(ControlFiles, "due_reloads", due)
+
+
+def test_read_toml_applies_live_keys_and_reports_the_rest(case_dir, monkeypatch):
+    out = case_dir / "out"
+    out.mkdir()
+    (out / ".read_toml_3").touch()
+    toml = case_dir / "couette.toml"
+    _edit_toml_at_first_check(
+        monkeypatch,
+        toml,
+        '[output]\ndirectory = "out"',
+        '[output]\ndirectory = "out"\nfields_interval = 2',
+    )
+    toml.write_text(toml.read_text().replace("viscosity = 0.3", "viscosity = 0.5"))
+    toml.write_text(
+        toml.read_text().replace("[solver]\n", "[solver]\nmax_iterations = 6\n")
+    )
+    result = run_case(toml, console=False)
+    log = (out / "couette_test.log").read_text()
+    assert "control file .read_toml_3: case file read at iteration 3" in log
+    assert "changed output.fields_interval: 0 -> 2" in log
+    assert "not applied (cannot change during a run)" not in log  # file is as at start
+    assert int(result.history["iteration"][-1]) == 6
+    assert (out / "couette_test_000004.vtu").exists()
+    assert (out / "couette_test_000006.vtu").exists()
+    snapshot = out / "couette_test.read_toml_000003.toml"
+    assert "fields_interval = 2" in snapshot.read_text()
+
+
+def test_read_toml_changing_the_physics_is_reported_not_applied(case_dir, monkeypatch):
+    out = case_dir / "out"
+    out.mkdir()
+    (out / ".read_toml_2").touch()
+    toml = case_dir / "couette.toml"
+    _edit_toml_at_first_check(monkeypatch, toml, "viscosity = 0.3", "viscosity = 0.5")
+    run_case(toml, console=False)
+    log = (out / "couette_test.log").read_text()
+    assert "not applied (cannot change during a run) fluid.viscosity: 0.3 -> 0.5" in log
+    assert not list(out.glob("*.read_toml_*.toml"))  # nothing applied: no copy
+
+
+def test_read_toml_with_an_invalid_case_file_keeps_the_run_going(case_dir, monkeypatch):
+    out = case_dir / "out"
+    out.mkdir()
+    (out / ".read_toml_2").touch()
+    toml = case_dir / "couette.toml"
+    _edit_toml_at_first_check(monkeypatch, toml, "[numerics]", "[numerics\n")
+    result = run_case(toml, console=False)
+    assert result.converged
+    log = (out / "couette_test.log").read_text()
+    assert "not applied, the case file is invalid" in log
+
+
+def test_fields_listing_of_a_case(case_dir):
+    from pyaeroflow.config import load_case
+    from pyaeroflow.io.fields import case_listing
+
+    text = case_listing(load_case(case_dir / "couette.toml").data)
+    assert "* velocity " in text and "  vorticity " in text
+    assert text.index("provides (") < text.index("does not provide")
+    assert "k  " in text.split("does not provide")[1]  # SST only

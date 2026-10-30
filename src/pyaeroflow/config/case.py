@@ -37,6 +37,9 @@ class Resolved:
         Case file (for relative paths).
     notices : list of str
         Informational messages produced while resolving.
+    reload : callable or None
+        Returns the case resolved anew from its source (``.read_toml_N``
+        during a run); None when there is no source to read.
     """
 
     def __init__(self, data, explicit, path, notices):
@@ -44,6 +47,7 @@ class Resolved:
         self.explicit = explicit
         self.path = Path(path)
         self.notices = notices
+        self.reload = None
 
     def __getitem__(self, section):
         """Return the values of a section."""
@@ -119,7 +123,9 @@ def load_case(path):
         raw = tomllib.loads(path.read_text())
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"{path}: {exc}") from exc
-    return resolve(raw, path)
+    config = resolve(raw, path)
+    config.reload = lambda: load_case(path)
+    return config
 
 
 def resolve(raw, path="case.toml"):
