@@ -40,8 +40,8 @@ conda activate pyaeroflow
 pip install -e . --no-deps
 ```
 
-On Linux, Windows and Apple-silicon Macs plain `pip` works too (Python 3.11 or
-newer; JAX is pulled in as a dependency), in a virtual environment:
+Where JAX wheels exist, plain `pip` works too (Python 3.11 or newer; JAX is
+pulled in as a dependency; tested on Linux), in a virtual environment:
 
 ```
 pip install git+https://github.com/chiefenne/pyaeroflow
