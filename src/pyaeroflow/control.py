@@ -1,4 +1,4 @@
-"""Control files of a running case: ``.stop`` and ``.result_N`` (L7).
+"""Control files of a running case: ``.stop``, ``.result_N``, ``.read_toml_N`` (L7).
 
 Both are looked up in the output directory of the case, once per iteration
 (steady) or time step (unsteady):
@@ -9,15 +9,23 @@ Both are looked up in the output directory of the case, once per iteration
     right away.
 ``.result_N``
     The run writes the VTU file of iteration or step ``N`` with the fields of
-    the case file and goes on. At the start the file only gives a notice. The
-    solver never deletes either file.
+    the case file and goes on. Text in the file names further fields for that
+    one file (whitespace or comma separated, ``#`` starts a comment), in
+    addition to ``output.fields``. At the start the file only gives a notice.
+``.read_toml_N``
+    At iteration or step ``N`` the run reads the case file again and applies
+    the settings that may change during a run (see :mod:`pyaeroflow.reload`).
+
+The solver never deletes a control file.
 """
 
 import re
 
 STOP = ".stop"
 RESULT = ".result_"
+READ_TOML = ".read_toml_"
 _RESULT = re.compile(r"\.result_(\d+)$")
+_READ_TOML = re.compile(r"\.read_toml_(\d+)$")
 
 
 class StopFileError(ValueError):
@@ -48,26 +56,49 @@ class ControlFiles:
         self.out_dir, self.after = out_dir, after
         self.deferred = set()  # due on a rejected iteration: next good one
         self.done = set()
+        self.reload_deferred = set()
+        self.reload_done = set()
+
+    def _numbers(self, prefix, pattern):
+        found = (pattern.match(p.name) for p in self.out_dir.glob(prefix + "*"))
+        return sorted(int(m.group(1)) for m in found if m)
 
     def result_numbers(self):
         """Numbers N of the ``.result_N`` files that exist now, ascending."""
-        found = (_RESULT.match(p.name) for p in self.out_dir.glob(RESULT + "*"))
-        return sorted(int(m.group(1)) for m in found if m)
+        return self._numbers(RESULT, _RESULT)
+
+    def reload_numbers(self):
+        """Numbers N of the ``.read_toml_N`` files that exist now, ascending."""
+        return self._numbers(READ_TOML, _READ_TOML)
+
+    def result_fields(self, number):
+        """Field names written in ``.result_<number>`` (empty = none)."""
+        try:
+            text = (self.out_dir / f"{RESULT}{number}").read_text()
+        except OSError:
+            return []
+        words = []
+        for line in text.splitlines():
+            words += line.split("#", 1)[0].replace(",", " ").split()
+        return words
 
     def notices(self, unit="iteration"):
         """Notices for the ``.result_N`` files found at the start of the run."""
         lines = []
-        for n in self.result_numbers():
-            if n > self.after:
-                lines.append(
-                    f"notice: control file {RESULT}{n} found, the fields are "
-                    f"written at {unit} {n}"
-                )
-            else:
-                lines.append(
-                    f"notice: control file {RESULT}{n} found, but the run starts "
-                    f"after {unit} {self.after}: not written"
-                )
+        for prefix, numbers, what, skipped in (
+            (RESULT, self.result_numbers(), "the fields are written", "not written"),
+            (READ_TOML, self.reload_numbers(), "the case file is read", "not read"),
+        ):
+            for n in numbers:
+                if n > self.after:
+                    lines.append(
+                        f"notice: control file {prefix}{n} found, {what} at {unit} {n}"
+                    )
+                else:
+                    lines.append(
+                        f"notice: control file {prefix}{n} found, but the run starts "
+                        f"after {unit} {self.after}: {skipped}"
+                    )
         return lines
 
     def stop_requested(self):
@@ -90,4 +121,17 @@ class ControlFiles:
         due = sorted(n for n in self.deferred if n not in self.done)
         self.done.update(due)
         self.deferred.clear()
+        return due
+
+    def due_reloads(self, number, good=True):
+        """Numbers N of the ``.read_toml_N`` files due at ``number`` (as results)."""
+        present = set(self.reload_numbers())
+        self.reload_deferred &= present
+        if number in present and number > self.after:
+            self.reload_deferred.add(number)
+        if not good:
+            return []
+        due = sorted(n for n in self.reload_deferred if n not in self.reload_done)
+        self.reload_done.update(due)
+        self.reload_deferred.clear()
         return due

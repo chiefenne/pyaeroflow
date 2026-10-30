@@ -1,4 +1,4 @@
-"""Command line: run, check, polar, init-case, check-mesh, restart-info and clean."""
+"""Command line: run, check, polar, fields, init-case, check-mesh, clean, ..."""
 
 import argparse
 import sys
@@ -59,6 +59,10 @@ def main(argv=None):
     cmesh.add_argument("--wall", help="airfoil boundary (default 'airfoil')")
     cmesh.add_argument("--chord", type=float, help="m; default from the mesh")
     cmesh.add_argument("--scale", type=float, default=1.0, help="mesh.scale")
+    flds = sub.add_parser(
+        "fields", help="list the output fields a case provides (* = selected)"
+    )
+    flds.add_argument("case", help="TOML case file")
     info = sub.add_parser(
         "restart-info",
         help="iteration or step, time and solver state of a restart or backup file",
@@ -101,6 +105,11 @@ def main(argv=None):
             print(config.to_toml())
             for note in config.notices:
                 print(f"# notice: {note}")
+            return 0
+        if args.command == "fields":
+            from pyaeroflow.io.fields import case_listing
+
+            print(case_listing(load_case(args.case).data))
             return 0
         if args.command == "init-case":
             return _init_case(args)

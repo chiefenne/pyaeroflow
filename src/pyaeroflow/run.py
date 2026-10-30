@@ -38,13 +38,21 @@ from pyaeroflow.io import (
     write_pvd,
     write_vtu,
 )
-from pyaeroflow.io.fields import FieldContext, compute_fields, n_columns
+from pyaeroflow.io.fields import (
+    FIELDS,
+    Capabilities,
+    FieldContext,
+    compute_fields,
+    n_columns,
+    resolve_fields,
+)
 from pyaeroflow.mesh import Mesh, read_mesh
 from pyaeroflow.mesh.ordering import order_boundary_faces
 from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
 from pyaeroflow.physics import lm, rans
 from pyaeroflow.physics import spalart_allmaras as sa
+from pyaeroflow.reload import LIVE_STEADY, LIVE_UNSTEADY, reload_case
 from pyaeroflow.solver import DualTimeSettings, LinearSettings, PseudoTimeSettings
 from pyaeroflow.solver.convergence import CauchyCriterion
 
@@ -419,6 +427,16 @@ class RestartWriter:
             "backup": after // self.backup if self.backup else 0,
         }
 
+    def update(self, output, number):
+        """Take new ``restart_*`` settings (``.read_toml_N``) at ``number``."""
+        self.every = output["restart_interval"]
+        self.backup = output["restart_backup_interval"]
+        self.backup_at = [
+            n for n in sorted(set(output.get("restart_backup_at") or [])) if n >= number
+        ]
+        for key, every in (("rolling", self.every), ("backup", self.backup)):
+            self.buckets[key] = (number - 1) // every if every else 0
+
     def __call__(self, number, w, good=True, time=None, state=None):
         """Write the files that are due at iteration or step ``number``.
 
@@ -458,7 +476,10 @@ class FieldWriter:
     time step that hit the inner limit waits for the next good one.
     """
 
-    def __init__(self, out_dir, name, mesh, scaling, problem, monitor, output, after=0):
+    def __init__(
+        self, out_dir, name, mesh, scaling, problem, monitor, output, after=0, caps=None
+    ):
+        self.capabilities = caps
         self.out_dir, self.name, self.mesh = out_dir, name, mesh
         self.scaling, self.problem, self.monitor = scaling, problem, monitor
         self.names = list(output["fields"])
@@ -468,10 +489,24 @@ class FieldWriter:
         self.bucket = after // self.every if self.every else 0
         self.last = None  # number of the latest series file
 
-    def write(self, path, w, cell_residual=None):
-        """Write the selected fields of the non-dimensional state ``w``."""
+    def update(self, output, number):
+        """Take new ``fields_*`` settings (``.read_toml_N``) at ``number``."""
+        self.names = list(output["fields"])
+        self.every = output["fields_interval"]
+        self.final = output["fields_final"]
+        self.at = [n for n in sorted(set(output["fields_at"])) if n >= number]
+        self.bucket = (number - 1) // self.every if self.every else 0
+
+    def with_extra(self, requested):
+        """Return the selected fields plus those of ``.result_N``, and problems."""
+        extra, problems = resolve_fields(requested, self.capabilities)
+        names = set(self.names) | set(extra)
+        return [f.name for f in FIELDS if f.name in names], problems
+
+    def write(self, path, w, cell_residual=None, names=None):
+        """Write the selected fields (or ``names``) of the state ``w``."""
         ctx = FieldContext(self.problem, w, self.scaling, self.monitor, cell_residual)
-        write_vtu(path, self.mesh, cell_data=compute_fields(self.names, ctx))
+        write_vtu(path, self.mesh, cell_data=compute_fields(names or self.names, ctx))
 
     def due(self, number, good=True):
         """Return True if a series file is due at ``number`` (updates the schedule)."""
@@ -791,6 +826,36 @@ def _residual_names(problem):
     return names
 
 
+def _apply_reload(log, config, number, unit, live, out_dir, fields, restarts):
+    """Handle ``.read_toml_<number>``: reload, apply, log, keep a copy."""
+    change = reload_case(config, live)
+    for line in change.lines(number, unit):
+        log.write(line)
+    if change.applied:
+        if change.changed("output"):
+            fields.update(config.data["output"], number)
+            restarts.update(config.data["output"], number)
+        copy_file = out_dir / f"{config.name}.read_toml_{number:06d}.toml"
+        copy_file.write_text(config.to_toml())
+        log.write(f"  settings in force written to {copy_file.name}")
+    return change
+
+
+def _result_names(log, control, fields, number):
+    """Fields of ``.result_<number>``: the selected ones plus those named in it."""
+    requested = control.result_fields(number)
+    if not requested:
+        return None
+    names, problems = fields.with_extra(requested)
+    for problem in problems:
+        log.write(
+            f"control file .result_{number}: "
+            + problem.replace("output.fields: ", "", 1)
+            + ": skipped"
+        )
+    return names
+
+
 def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     """Steady solve with one log line per pseudo-time iteration."""
     cfg = config.data
@@ -818,7 +883,15 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
         log.write(line)
     log.iteration_header(names, extra_names)
     fields = FieldWriter(
-        out_dir, name, mesh, scaling, problem, monitor, cfg["output"], after=after or 0
+        out_dir,
+        name,
+        mesh,
+        scaling,
+        problem,
+        monitor,
+        cfg["output"],
+        after=after or 0,
+        caps=Capabilities.from_config(cfg),
     )
     restarts = RestartWriter(
         out_dir,
@@ -864,17 +937,33 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
             if diagnose
             else (),
         )
+        for n in control.due_reloads(it, bool(accepted)):
+            change = _apply_reload(
+                log, config, n, "iteration", LIVE_STEADY, out_dir, fields, restarts
+            )
+            if change.changed("solver.convergence"):
+                make_cauchy()
+            for key in ("max_iterations", "residual_drop"):
+                if change.changed(f"solver.{key}"):
+                    info[key] = cfg["solver"][key]
         written = fields.due(it, accepted)
         if written:
             fields.write(out_dir / fields.series_file(it), w, info.get("cell_residual"))
             fields.write_pvd()
         for n in control.due_results(it, bool(accepted)):
-            if not (written and n == it):
+            names = _result_names(log, control, fields, n)
+            if names or not (written and n == it):
                 fields.write(
-                    out_dir / fields.series_file(n), w, info.get("cell_residual")
+                    out_dir / fields.series_file(n),
+                    w,
+                    info.get("cell_residual"),
+                    names,
                 )
                 fields.write_pvd()
-            log.write(f"control file .result_{n}: fields written for iteration {n}")
+            extra = f" ({len(names)} fields)" if names else ""
+            log.write(
+                f"control file .result_{n}: fields written for iteration {n}{extra}"
+            )
         restarts(it, w, good=bool(accepted), state=restart_state)
         if cauchy and accepted and cauchy.update(it, coeffs):
             log.write(
@@ -892,17 +981,24 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     callback.info = {}
 
     solver = cfg["solver"]
-    conv = solver["convergence"]
-    cauchy = (
-        CauchyCriterion(
-            conv["fields"],
-            conv["cauchy_elements"],
-            conv["cauchy_eps"],
-            conv["start_iteration"],
+    cauchy = None
+
+    def make_cauchy():
+        """(Re)build the Cauchy criterion from ``solver.convergence``."""
+        nonlocal cauchy
+        conv = solver["convergence"]
+        cauchy = (
+            CauchyCriterion(
+                conv["fields"],
+                conv["cauchy_elements"],
+                conv["cauchy_eps"],
+                conv["start_iteration"],
+            )
+            if conv["fields"] and monitor and implicit
+            else None
         )
-        if conv["fields"] and monitor and implicit
-        else None
-    )
+
+    make_cauchy()
     vortex = None
     if solver["method"] == "implicit":
         settings = _pseudo_time_settings(cfg)
@@ -1046,7 +1142,15 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
     log.step_header(names, ("GMRES",) + tuple((c, 11) for c in coeff_names))
     series = []
     fields = FieldWriter(
-        out_dir, name, mesh, scaling, problem, monitor, cfg["output"], after=after or 0
+        out_dir,
+        name,
+        mesh,
+        scaling,
+        problem,
+        monitor,
+        cfg["output"],
+        after=after or 0,
+        caps=Capabilities.from_config(cfg),
     )
     restarts = RestartWriter(
         out_dir,
@@ -1067,9 +1171,9 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
             "elapsed": log.elapsed,
         }
 
-    def write_series(step, t, w):
+    def write_series(step, t, w, names=None):
         file = fields.series_file(step)
-        fields.write(out_dir / file, w)
+        fields.write(out_dir / file, w, names=names)
         series.append((t * t_scale, file))
         write_pvd(out_dir / f"{name}.pvd", series)
 
@@ -1098,13 +1202,19 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
             log.elapsed,
             stats,
         )
+        for n in control.due_reloads(step, bool(converged)):
+            _apply_reload(
+                log, config, n, "step", LIVE_UNSTEADY, out_dir, fields, restarts
+            )
         written = fields.due(step, converged)
         if written:
             write_series(step, t, w)
         for n in control.due_results(step, bool(converged)):
-            if not (written and n == step):
-                write_series(n, t, w)
-            log.write(f"control file .result_{n}: fields written for step {n}")
+            names = _result_names(log, control, fields, n)
+            if names or not (written and n == step):
+                write_series(n, t, w, names)
+            extra = f" ({len(names)} fields)" if names else ""
+            log.write(f"control file .result_{n}: fields written for step {n}{extra}")
         restarts(step, w, good=bool(converged), time=t * t_scale, state=restart_state)
         if control.stop_requested():
             log.write(
@@ -1561,6 +1671,22 @@ def _describe_boundary(b):
     return ", ".join(parts)
 
 
+def _polar_config(raw, path, base, alpha, previous):
+    """Resolve the case of one polar angle: ``raw`` with angle and restart set."""
+    case = copy.deepcopy(raw)
+    for b in case.get("boundary", {}).values():
+        if b.get("type") == "farfield":
+            b["angle_of_attack"] = float(alpha)
+    case.setdefault("reference", {})["angle_of_attack"] = float(alpha)
+    case.setdefault("case", {})["name"] = f"{base.name}_alpha_{alpha:g}"
+    case.setdefault("output", {})["directory"] = str(
+        Path(base.data["output"]["directory"]) / f"alpha_{alpha:g}"
+    )
+    if previous is not None:
+        case.setdefault("initial", {})["restart"] = str(previous)
+    return resolve(case, path)
+
+
 def run_polar(path, angles, console=True):
     """Run a case at several angles of attack, restarting from the previous one.
 
@@ -1585,18 +1711,10 @@ def run_polar(path, angles, console=True):
     for alpha in angles:
         if previous is None:  # restart from the nearest angle computed before
             previous = _nearest_restart(out_dir, base.name, alpha)
-        case = copy.deepcopy(raw)
-        for b in case.get("boundary", {}).values():
-            if b.get("type") == "farfield":
-                b["angle_of_attack"] = float(alpha)
-        case.setdefault("reference", {})["angle_of_attack"] = float(alpha)
-        case.setdefault("case", {})["name"] = f"{base.name}_alpha_{alpha:g}"
-        case.setdefault("output", {})["directory"] = str(
-            Path(base.data["output"]["directory"]) / f"alpha_{alpha:g}"
+        config = _polar_config(raw, path, base, alpha, previous)
+        config.reload = lambda a=alpha, p=previous: _polar_config(
+            tomllib.loads(path.read_text()), path, base, a, p
         )
-        if previous is not None:
-            case.setdefault("initial", {})["restart"] = str(previous)
-        config = resolve(case, path)
         result = run_case(config, console=console, restart_mode="state")
         previous = result.restart_file
         c = result.coefficients

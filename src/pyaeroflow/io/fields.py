@@ -632,3 +632,25 @@ def catalogue_table():
             f"| `{f.name}` | {f.unit} | {f.description} | {f.needs} | {marks} |"
         )
     return "\n".join(lines)
+
+
+def case_listing(data):
+    """Text listing of the fields a resolved case provides (``*`` = selected).
+
+    ``data`` is ``Resolved.data``. Fields of the registry that the case does
+    not provide are listed after them with what they need.
+    """
+    caps = Capabilities.from_config(data)
+    chosen = set(data["output"]["fields"])
+    here = [f for f in FIELDS if f.available(caps)]
+    rest = [f for f in FIELDS if not f.available(caps)]
+    width = max(len(f.name) for f in FIELDS)
+    lines = ["Fields this case provides (* = in output.fields):"]
+    lines += [
+        f"  {'*' if f.name in chosen else ' '} {f.name:<{width}}  {f.unit:<8} "
+        f"{f.description}"
+        for f in here
+    ]
+    lines += ["", "Fields it does not provide (what they need):"]
+    lines += [f"    {f.name:<{width}}  {f.needs}" for f in rest]
+    return "\n".join(lines)
