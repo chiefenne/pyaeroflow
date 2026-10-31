@@ -585,10 +585,10 @@ def _consistency(data, explicit, problems, notices, path):
         problems.append("solver.convergence.fields needs a wall to integrate forces")
     if conv["fields"] and data["solver"]["method"] != "implicit":
         notices.append("solver.convergence.fields ignored: method != implicit")
-    if data["physics"]["transition"]["model"] != "lm" and (
-        "physics.transition.clip" in explicit
-    ):
-        notices.append("physics.transition.clip ignored: model != lm")
+    if data["physics"]["transition"]["model"] != "lm":
+        for key in ("clip", "newton_guard", "positive_jacobian"):
+            if f"physics.transition.{key}" in explicit:
+                notices.append(f"physics.transition.{key} ignored: model != lm")
 
     # Initial state: explicit values or from_boundary (default: the farfield).
     init = data["initial"]

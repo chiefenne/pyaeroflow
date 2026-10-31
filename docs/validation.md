@@ -674,10 +674,25 @@ What the polar shows:
 Convergence and limits of the data. Five of the seven points (0°, 2°, 4°, 6°,
 8°) are marked `converged = 0` in the CSV: they were ended by hand with the
 `.stop` file or by the iteration limit, not by a criterion. The reason is the
-γ residual, which stalls between 10⁻⁵·⁴ and 10⁻⁶ at the clip floor (probably
-one cell held at γ = 10⁻⁴; not identified, since the forces do not depend on
-it), so the residual drop of 7 orders is never reached (about 2 to 2.6
-orders). The forces themselves stood still to four or five digits: C_L and
+γ residual, which stalls between 10⁻⁵·⁴ and 10⁻⁶ at the clip floor, so the
+residual drop of 7 orders is never reached (about 2 to 2.6 orders). The cells
+were identified afterwards (α = 4°, iteration 666, all 320 600 cells
+searched): eight cells have γ = 10⁻⁴, three at x/c 0.52 above the bubble,
+four at 0.61–0.64 in the turbulent shear layer, one at 0.92 near the wall,
+each surrounded by cells with γ 0.2–0.4. Their γ residuals are −19 to −646
+(the largest of the field; the residual is flux minus source, so they ask for
+a *larger* γ), while 98 % of the raw Newton updates of these cells over 98
+further iterations lowered γ (median −0.15, 1400 times the value): the √γ of
+the production has the derivative 1/(2√γ) = 50 at the floor, which turns the
+diagonal of the γ equation of such a cell negative, so the exact Newton step
+points away from the root, the clip discards it and the cell stays. The same
+cells kept the Newton–Krylov forcing term at its cap of 0.5 in every
+iteration (the residual norm never fell), 20 GMRES products per iteration at
+1.5 s each on this mesh: 73 % of the 43 s per iteration. The remedies
+`physics.transition.positive_jacobian` (default from 1.1) and `newton_guard`
+are described in `docs/configuration.md`; the polar above was run before
+them (exact linearization, no guard). Measured on the 320k case (α = 4°, restart from iteration 662, `positive_jacobian = true`, no guard): the first update lifted the eight floor cells off the floor (γ +0.37 to +0.70), none was at the floor afterwards, the γ residual fell from 10⁻⁵·⁷ to 10⁻¹¹·⁷, and the run converged (7.1 orders) in 13 Newton–Krylov iterations (about 38 s each) at unchanged forces, C_L 0.593069, C_D 0.022761, C_M 0.039252; the exact linearization had not converged in 98 further iterations. The forces
+themselves stood still to four or five digits: C_L and
 C_D jitter by 2·10⁻⁶ to 5·10⁻⁶ per iteration, which is above the 10⁻⁶ and
 10⁻⁸ of the Cauchy criterion first set; with `cauchy_eps = 1e-5` the criterion
 would have ended α = 4° at about iteration 150 instead of 662. α = 0° was still
@@ -711,7 +726,7 @@ them.
 | SST-LM | SD7003, Re 6·10⁴, α = 4°, [§10](#sec-10) | bubble too long: reattachment at x/c 0.71 against 0.60–0.67 (LES/DNS), C_D 3 % above the highest LES/DNS value; C_L and C_M inside the bands | transition is triggered in the LES/DNS window (γ_sep from x/c 0.45, ν_t/ν > 1 at 0.468); the turbulent shear layer after transition reattaches too slowly. Not diagnosed further (candidates: freestream decay of k and ω without sustaining terms, SST eddy viscosity in the separated layer) | SA-AFT (reattachment 0.644, inside the band) for low-Re laminar separation bubbles |
 | SA-AFT2019b | E387, Re 2·10⁵, α = −2°, [§8](#sec-8) | no steady solution found: rerun from the converged α = 0° state with growth CFL (cap 10⁵) and the Cauchy criterion on C_L/C_D (2026-10-27) stays in the Newton–Krylov phase at CFL 10–200 (every step above ~150 fails or is rejected); residuals of p, u, v, ν̃ flat at 10⁻⁶·⁶–10⁻⁹·³, γ 10⁻³–10⁻⁴, ñ 10⁻⁴·⁸; C_L drifts from 0.148 to 0.161 over iterations 83–313 and the drift grows (10⁻⁴ per iteration), C_D 0.0089 → 0.0095 | transition moving slowly over many iterations, as Coder (2019) reports for AFT; not diagnosed further | forces at α = −2° are indicative only (the 2000-iteration polar value C_L 0.163 lies on the same drift). A time-accurate (BDF2) run is the likely remedy, as in §7 for BCM at α = 8°; not tried |
 | SA-AFT2019b | E387, Re 2·10⁵, α = 8°, [§8](#sec-8) | not converged in 2000 iterations of the polar (SER CFL); not rerun | near the leading-edge bubble burst (XFOIL: transition at x/c 0.045); the BCM solution at α = 8° was a limit cycle (C_L 1.11–1.23, period about 0.25 c/U, `analysis/e387_alpha8_ser_stall.md`), so a steady solution may not exist | forces at α = 8° are not reference values; a time-accurate run with cycle-averaged forces is the likely remedy (as SU2 users do for unsteady separation); not tried for AFT |
-| SST-LM | SD7003, Re 6·10⁴, polar α = 0–10°, [§10](#sec-10) | C_D too high from α = 4° (+29 % at 4°, +41 % at 8°, +55 % at 9° against SA-AFT; pressure drag), C_L 5–11 % low at 8°–9°; five of seven points not converged by a criterion (γ residual at the clip floor, forces settled to 4–5 digits) | late reattachment as at α = 4°; the γ residual stalls at the clip floor, so only the force criterion can end a run | SA-AFT for drag and stall angle; LM for the low-α lift (0°, 2° close to XFOIL) |
+| SST-LM | SD7003, Re 6·10⁴, polar α = 0–10°, [§10](#sec-10) | C_D too high from α = 4° (+29 % at 4°, +41 % at 8°, +55 % at 9° against SA-AFT; pressure drag), C_L 5–11 % low at 8°–9°; five of seven points not converged by a criterion (γ residual at the clip floor, forces settled to 4–5 digits) | late reattachment as at α = 4°; the γ residual stalls because eight cells at the clip floor get Newton updates that point away from the root (√γ production derivative, §10), so only the force criterion could end a run; `positive_jacobian` (default from 1.1, `docs/configuration.md`) removes the cause: at α = 4° the restart converged in 13 Newton–Krylov iterations at unchanged forces; the polar has not been rerun with it | SA-AFT for drag and stall angle; LM for the low-α lift (0°, 2° close to XFOIL) |
 | SA-AFT, SST-LM | turbulent C_f after reattachment (E387, SD7003) | 35–50 % below XFOIL | baseline turbulence model recovering from the bubble; open, not specific to the transition models | – |
 
 Rule of thumb from these cases: SA-AFT for low freestream turbulence

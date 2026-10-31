@@ -267,7 +267,7 @@ def residual(model, geom, bc, w, order, beta2, psi=None, gamma=None):
     if model.transition == "lm":
         args = _lm_arguments(model, geom, w, grad, strain)
         g_eff = lm.effective_intermittency(*args[:9])
-        s_g, s_t = lm.sources(*args)
+        s_g, s_t = lm.sources(*args, positive=model.lm_positive_jacobian)
         r = r.at[:, NGL].add(-geom.area * s_g)
         r = r.at[:, NRT].add(-geom.area * s_t)
     s_k, s_w = sst.sources(w[:, NK], _omega(w), strain, f1, f2, kgw, switch, g_eff)

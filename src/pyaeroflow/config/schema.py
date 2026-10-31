@@ -66,6 +66,28 @@ SCHEMA = {
                 "unclipped (a cell can then run to gamma = 1e-142 and stall "
                 "the gamma residual)",
             ),
+            "newton_guard": Opt(
+                "bool",
+                False,
+                "model = lm: descent guard. A Newton update of gamma that would "
+                "end below the clip floor while the residual asks for a larger "
+                "gamma is replaced by the explicit local step -R dt/area at CFL 1 "
+                "(at the floor the sqrt(gamma) derivative of the production turns "
+                "the diagonal of the cell negative and Newton steps away from the "
+                "root). Treats the symptom; on the T3A start-up it was worse than "
+                "plain Newton and positive_jacobian alone was better, so it is off "
+                "by default",
+            ),
+            "positive_jacobian": Opt(
+                "bool",
+                True,
+                "model = lm: the Newton-Krylov Jacobian leaves out the "
+                "derivatives of the gamma source that lower the diagonal of the "
+                "gamma equation (the sqrt(gamma) of the production, the "
+                "destruction below gamma = 0.01); the residual is unchanged, the "
+                "step is a quasi-Newton step. The first-order Jacobian always does "
+                "this. false: exact linearization (the state before 1.1)",
+            ),
             "mode": Opt(
                 "string",
                 "none",

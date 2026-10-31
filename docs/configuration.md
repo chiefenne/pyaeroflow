@@ -221,6 +221,8 @@ file (either byte order). Formats 1 and 3 are rejected; export the mesh as
 | `mode` | `"none"` \| `"prescribed"` | `"none"` | `"none"` = fully turbulent | D15 |
 | `model` | `"none"` \| `"bcm"` \| `"aft"` \| `"lm"` | `"none"` | Transition model (L3). `"lm"`: Langtry–Menter γ-Re_θ on SST (SST-2003m-LM2009 as in SU2), see [Langtry–Menter γ-Re_θ](#langtrymenter-γ-re_θ); needs `turbulence = "sst"`. `"aft"`: SA-AFT2019b (Coder; NASA TMR `aft_transition_3eqn`, equations in `docs/aft_design.md` §5): two more transport equations, for the log-intermittency γ̃ = ln γ and the amplification factor ñ (the transported e^N envelope), so 6 unknowns per cell. ñ grows once the vorticity Reynolds number exceeds its critical value from the local shape factor; onset where ñ passes N_crit; the only change to SA is f_t2 = 1.2 (1 − e^γ̃). Freestream and inflow ñ = 0, γ̃ = 0; zero gradient at walls. Needs a laminar freestream, ν̃/ν ≈ 0.1 (`turbulence = { nu_tilde_ratio = 0.1 }`; a notice outside 0.05–0.5). Output: `intermittency` (= e^γ̃) and `amplification_factor` in the VTU, residual columns `gam` and `n` in the log. `"bcm"`: the algebraic intermittency of Cakmakcioglu, Bas, Mura & Kaynak (2020 revision, as in SU2) multiplies the SA production: γ = 1 − exp(−√T₁ − √T₂) with T₁ from the vorticity Reynolds number d²Ω/ν against Menter's critical Re_θ(Tu) and T₂ = 50 ν_t/ν; SA runs without the f_t2 term (SA-noft2-BCM). Combines with `mode = "prescribed"` (both factors multiply). Needs a laminar freestream: inflow `turbulence = { nu_tilde_ratio = 0.1 }` or `{ turbulent_viscosity_ratio = 2.8e-7, intensity = … }` — with the fully turbulent value 3 the second term makes γ = 0.96 everywhere (a notice says so). Output: `intermittency` field in the VTU, `nu_t_ratio_max` in the wall CSV, transition locations in the summary | L3 |
 | `clip` | bool | `true` | `model = "lm"`: after every update clip γ to [1e-4, 5] and Re_θt to [1e-4, 1e15], as SU2 does (`CTransLMSolver`, `AddClippedSolution`). `false` leaves both unclipped: one cell can then fall by 99 % per iteration to γ = 1e-142, where the derivative of √γ in the onset term is about 1e70, and the γ residual stalls (320k SD7003, `docs/validation.md` §10). Ignored (with a notice) for other models | L3 |
+| `newton_guard` | bool | `false` | `model = "lm"`: descent guard of the γ update. A Newton update that would end below the clip floor while the residual asks for a larger γ (same sign as the update) is replaced by the explicit local step −R Δt/A at CFL 1 of that cell; the clip and the k/ω limiter apply afterwards. At the floor the √γ of the production has the derivative 50 and turns the diagonal of a shear-layer cell negative, so the exact Newton step points away from the root and the clip freezes the cell with a residual of hundreds (eight cells held the γ residual of the 320k SD7003 at 10⁻⁵·⁴, see [Langtry–Menter γ-Re_θ](#langtrymenter-γ-re_θ)). Treats the symptom: on the T3A start-up it fired in 100–800 cells per iteration and the run was slightly worse than plain Newton, so it is off by default; with `positive_jacobian` it rarely fires. The log Summary counts the firings. Ignored (with a notice) for other models | L3 |
+| `positive_jacobian` | bool | `true` | `model = "lm"`: the Newton–Krylov Jacobian leaves out the derivatives of the γ source that lower the diagonal of the γ equation (the √γ of the production, the destruction derivative below γ = 0.01); the residual and so the converged state are unchanged, the step is a quasi-Newton step. The first-order Jacobian always does this. Removes the cause of the floor cells: on the T3A start-up (Newton–Krylov from iteration 5, 60 iterations) the residual fell 2.4 orders against 1.2 with the exact linearization and the γ residual 1.3 orders further. `false`: the exact linearization of 1.0. Ignored (with a notice) for other models | L3 |
 | `turbulence_intensity` | float | inflow table | Freestream turbulence intensity Tu as a fraction (0.001 = 0.1 %) for the transition model (for `"aft"` only used for N_crit; ignored by `"lm"`, which takes Tu from the local k); default: the `intensity` of an inflow turbulence table. Free flight 0.0005–0.001, wind tunnels 0.001–0.01, the T3A plate 0.033. The model's critical Re_θ = 803.73 (100 Tu + 0.6067)^−1.027 is printed in the log | L3 |
 | `critical_amplification` | float | from `turbulence_intensity` | N_crit of `model = "aft"`. Default: Mack's relation with Drela's limit, N_crit = −8.43 − 2.4 ln(τ/100), τ = 2.5 tanh(100 Tu / 2.5) (8.15 at Tu = 0.1 %). Set it directly to match an XFOIL run (Coder used 10.3 for the Schubauer–Klebanoff plate, 9 for the S809, 7.2 for the NLF(1)-0416); `turbulence_intensity` is then not needed | L3 |
 | `relaxation` | float | `1` | Under-relaxation ω in (0, 1] of the BCM intermittency in steady runs: the residual uses a lagged γ that moves by ω (γ_model − γ) per accepted iteration, so a cell crossing the onset threshold ramps its production on over about 1/ω iterations instead of in one step (the step in R_ν seen as a force cycle in E387 α = 8, SER). The converged state is that of the unrelaxed model. `1` = off, 0.2–0.3 typical; not for unsteady runs | L3 |
@@ -340,8 +342,46 @@ normal derivative); the Re_θt equation is solved multiplied by 10⁻³ (the
 log column `ret` and the `residual_re_theta_t` field are 10⁻³ times and
 1 times its residual); their updates are limited like k and ω (at most
 99 % decrease per update, as a separate group); the first-order Jacobian
-adds the negative part of the diagonal source derivatives, Newton–Krylov
-differentiates everything exactly (nothing frozen).
+adds the negative part of the diagonal source derivatives; Newton–Krylov
+differentiates everything exactly (nothing frozen) only with
+`positive_jacobian = false`.
+
+At the clip floor γ = 10⁻⁴ the production P_γ ∝ √γ has the derivative
+1/(2√γ) = 50 with respect to γ, which in a cell of the turbulent shear layer
+outweighs the convective and diffusive diagonal of the γ equation: the exact
+Newton update of such a cell then points *away* from the root (the residual
+asks for a larger γ, the update lowers it), the clip discards it, and the cell
+sits at the floor with a residual of hundreds while its neighbours have
+γ ≈ 0.3. On the 320k SD7003 mesh eight such cells held the γ residual at
+10⁻⁵·⁴ for hundreds of iterations and kept the Newton–Krylov forcing term at
+its cap (`docs/validation.md` §10). Two remedies, both options of
+`[physics.transition]`:
+
+- `positive_jacobian = true` (default): the Newton–Krylov Jacobian leaves
+  out the derivatives of the γ source that lower the diagonal, that is the √γ
+  of the production and the destruction derivative below γ = 1/(2c_e2) =
+  0.01; the (1 − c_e1 γ) factor, the destruction derivative above 0.01 and
+  all derivatives with respect to the other variables stay exact. The
+  residual is unchanged, so the converged state is the same; the Newton step
+  is a quasi-Newton step (what the first-order Jacobian always does). This
+  removes the cause. On the T3A plate start-up (Newton–Krylov forced from
+  iteration 5, 60 iterations, `examples/cases/lm_t3a.toml`; on the 320k SD7003
+  case see `docs/validation.md` §10) the residual fell
+  2.4 orders against 1.2 with the exact linearization, the γ residual to
+  10⁻⁵·⁰ against 10⁻³·⁷, and the number of cells whose update crossed the
+  floor against their residual fell from about 40 to 2 per iteration.
+- `newton_guard = true`: the descent guard. A γ update that would end below
+  the clip floor while the residual has the same sign as the update is
+  replaced by the explicit local step −R Δt/A at CFL 1 of that cell (the k/ω
+  limiter and the clip apply afterwards, the line search may halve it). Only
+  cells the clip would otherwise freeze are touched; the Summary of the log
+  counts how often it fired (`gamma descent guard`). It treats the symptom:
+  in the same T3A start-up it fired in 100–800 cells per iteration (whole
+  patches of low γ, lifted and pushed back) and the run ended slightly worse
+  than plain Newton (1.0 orders), so it is off by default; together with
+  `positive_jacobian` it fired in 29 of 60 updates (at most 107 cells, none
+  at the end) and the run reached 2.7 orders. Not measured on the 320k SD7003
+  case (`positive_jacobian` alone cleared its floor cells).
 
 The freestream turbulence decays between the inflow and the body (SST
 without sustaining terms): set the inflow `intensity` and

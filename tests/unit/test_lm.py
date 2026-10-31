@@ -185,6 +185,110 @@ def test_step_limiter_clips_gamma_and_re_theta_like_su2():
     np.testing.assert_allclose(out[:, rans_sst.NK], w[:, rans_sst.NK])
 
 
+def _source_samples():
+    """States across the gamma range, in a shear layer (onset active)."""
+    gamma = jnp.array([1e-4, 5e-4, 5e-3, 0.02, 0.1, 0.3, 0.9, 1.5])
+    n = len(gamma)
+    args = (
+        gamma,
+        jnp.full(n, 700.0),  # Re_thetat
+        jnp.full(n, 5e-2),  # k
+        jnp.full(n, 140.0),  # omega
+        1e-5,  # nu
+        jnp.full(n, 300.0),  # S
+        jnp.full(n, 280.0),  # Omega
+        jnp.full(n, 0.03),  # d
+        jnp.full(n, 0.5),  # U
+        jnp.full(n, -2.0),  # dU/ds
+    )
+    axes = (0, 0, 0, 0, None, 0, 0, 0, 0, 0)
+    return args, axes
+
+
+def test_positive_linearization_keeps_values_and_the_sign_of_the_derivative():
+    args, axes = _source_samples()
+    exact = lm.sources(*args)
+    positive = lm.sources(*args, positive=True)
+    np.testing.assert_allclose(positive[0], exact[0])  # same residual
+    np.testing.assert_allclose(positive[1], exact[1])
+
+    def d_gamma(positive):
+        return jax.vmap(
+            jax.grad(lambda *x: lm.sources(*x, positive=positive)[0], argnums=0),
+            in_axes=axes,
+        )(*args)
+
+    d_exact, d_pos = np.asarray(d_gamma(False)), np.asarray(d_gamma(True))
+    assert np.all(d_pos <= 0.0)  # never lowers the diagonal of the gamma row
+    # At the clip floor the exact derivative is dominated by 1 / (2 sqrt gamma)
+    # of the production and is large and positive (Newton steps the wrong way).
+    assert d_exact[0] > 1.0 and d_exact[0] > 10.0 * abs(d_pos[0])
+    # Well inside the turbulent range (gamma > 0.01) the destruction derivative
+    # is positive and kept: the two agree on that part.
+    assert d_pos[-1] < 0.0
+    # The derivative with respect to the other variables stays exact.
+    d_k = jax.vmap(
+        jax.grad(lambda *x: lm.sources(*x, positive=True)[0], argnums=2), in_axes=axes
+    )(*args)
+    d_k_exact = jax.vmap(
+        jax.grad(lambda *x: lm.sources(*x)[0], argnums=2), in_axes=axes
+    )(*args)
+    np.testing.assert_allclose(np.asarray(d_k), np.asarray(d_k_exact))
+
+
+def test_positive_jacobian_changes_the_jvp_but_not_the_residual():
+    p, k_omega = _lm_plate()
+    w = p.initial_state((1.0, 0.0), k_omega=k_omega)
+    w[:, rans_sst.NGL] = 1e-4  # every cell at the clip floor
+    q = IncompressibleProblem(
+        p.mesh, p.model._replace(lm_positive_jacobian=True), p.conditions
+    )
+    b2 = p.beta2(w)
+    np.testing.assert_allclose(q.residual(w, b2), p.residual(w, b2))
+    dw = np.zeros_like(w)
+    dw[:, rans_sst.NGL] = 1.0
+    j_exact = p.jvp(w, dw, b2)[:, rans_sst.NGL]
+    j_pos = q.jvp(w, dw, b2)[:, rans_sst.NGL]
+    assert not np.allclose(j_exact, j_pos)
+    # Cells where the exact linearization has a negative diagonal (the
+    # production derivative outweighs convection and diffusion) are the ones
+    # the positive linearization repairs: there j_pos is larger.
+    assert np.all(j_pos >= j_exact - 1e-12 * np.abs(j_exact).max())
+
+
+def test_step_limiter_descent_guard_takes_the_explicit_step():
+    p, k_omega = _lm_plate()
+    w = p.initial_state((1.0, 0.0), k_omega=k_omega)
+    n = len(w)
+    col = rans_sst.NGL
+    w[:, col] = lm.GAMMA_LIMITS[0]  # all at the floor
+    du = np.zeros_like(w)
+    du[:, col] = -0.15  # Newton asks for a negative gamma everywhere
+    r = np.zeros_like(w)
+    r[: n // 2, col] = -600.0  # the residual asks for a larger gamma ...
+    r[n // 2 :, col] = 600.0  # ... or agrees with the update
+    tau = np.full_like(w, 3000.0)  # area / dt at CFL 1
+    stats = {"updates": 0, "fired": 0, "cells_max": 0, "cells_last": 0}
+    out = p._step_limiter(None, True, True, stats)(w, du, r, tau)
+    np.testing.assert_allclose(out[: n // 2, col], 600.0 / 3000.0)  # -R / tau
+    np.testing.assert_allclose(out[n // 2 :, col], 0.0)  # clipped at the floor
+    assert stats == {
+        "updates": 1,
+        "fired": 1,
+        "cells_max": n // 2,
+        "cells_last": n // 2,
+    }
+    # Without the guard, or without the residual, the clip discards the update.
+    off = p._step_limiter(None, True, False)
+    np.testing.assert_allclose(off(w, du, r, tau)[:, col], 0.0)
+    np.testing.assert_allclose(p._step_limiter(None)(w, du)[:, col], 0.0)
+    # A step that ends above the floor is Newton's, whatever the residual says.
+    w[:, col] = 0.3
+    du[:, col] = -0.1
+    out = p._step_limiter(None, True, True)(w, du, r, tau)
+    np.testing.assert_allclose(out[:, col], du[:, col])
+
+
 def test_lm_needs_sst_and_config_rules():
     mesh = tp.plate_mesh(6, 2, 6, reynolds=1e5)
     cond = {
@@ -226,9 +330,25 @@ def test_configuration_block_names_the_transition_clip():
     }
     rows = dict(_mode_rows(resolve(raw)))
     assert rows["gamma, Re_thetat"].startswith("clipped as in SU2: gamma [0.0001, 5]")
+    assert rows["gamma Newton step"].startswith("plain Newton")
+    assert rows["gamma linearization"].startswith("positive")
     raw["physics"]["transition"]["clip"] = False
-    rows = dict(_mode_rows(resolve(raw)))
+    raw["physics"]["transition"]["newton_guard"] = True
+    raw["physics"]["transition"]["positive_jacobian"] = False
+    cfg = resolve(raw)
+    rows = dict(_mode_rows(cfg))
     assert rows["gamma, Re_thetat"].startswith("not clipped")
+    assert rows["gamma Newton step"].startswith("descent guard")
+    assert rows["gamma linearization"].startswith("exact")
+    assert cfg["physics"]["transition"]["positive_jacobian"] is False
+    # The two options are notices for the other transition models.
+    raw["physics"]["turbulence"] = "sa-neg"
+    raw["physics"]["transition"]["model"] = "bcm"
+    raw["physics"]["transition"]["turbulence_intensity"] = 0.01
+    raw["physics"]["transition"].pop("clip")
+    notices = resolve(raw).notices
+    assert any("newton_guard ignored: model != lm" in n for n in notices)
+    assert any("positive_jacobian ignored: model != lm" in n for n in notices)
 
 
 def test_restart_between_sst_and_sst_lm_keeps_k_omega(tmp_path):

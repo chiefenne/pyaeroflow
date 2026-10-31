@@ -271,8 +271,11 @@ def solve_steady(
         Newton-Krylov switch refer to; default the norms of the initial
         residual.
     limit_step : callable, optional
-        ``limit_step(u, du) -> du`` applied to every computed update before
-        the line search (e.g. a cap on the turbulence variable's change).
+        ``limit_step(u, du, r, tau) -> du`` applied to every computed update
+        before the line search: ``r`` is the residual of ``u`` and ``tau`` the
+        diagonal of the pseudo-time matrix at CFL 1 (area / dt per cell and
+        variable, shaped like ``u``), so ``-r / tau`` is the explicit local
+        step of a cell (e.g. a cap on the turbulence variable's change).
     resume : dict, optional
         Solver state of an earlier run (``SteadyResult.state``). With
         ``iteration`` the run continues that run: the counting starts after
@@ -436,7 +439,8 @@ def solve_steady(
                 lin_its = lin.iterations
             du = du.reshape(u.shape)
             if limit_step is not None:
-                du = limit_step(u, du)
+                tau = (t_matrix.diagonal() * cfl).reshape(u.shape)
+                du = limit_step(u, du, r, tau)
             u_new = u + du
             r_new = res(u_new, it + 1)
             abs_new = rms(r_new)
