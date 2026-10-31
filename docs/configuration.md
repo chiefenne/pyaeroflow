@@ -365,7 +365,8 @@ its cap (`docs/validation.md` §10). Two remedies, both options of
   residual is unchanged, so the converged state is the same; the Newton step
   is a quasi-Newton step (what the first-order Jacobian always does). This
   removes the cause. On the T3A plate start-up (Newton–Krylov forced from
-  iteration 5, 60 iterations, `examples/cases/lm_t3a.toml`) the residual fell
+  iteration 5, 60 iterations, `examples/cases/lm_t3a.toml`; on the 320k SD7003
+  case see `docs/validation.md` §10) the residual fell
   2.4 orders against 1.2 with the exact linearization, the γ residual to
   10⁻⁵·⁰ against 10⁻³·⁷, and the number of cells whose update crossed the
   floor against their residual fell from about 40 to 2 per iteration.
@@ -379,8 +380,8 @@ its cap (`docs/validation.md` §10). Two remedies, both options of
   patches of low γ, lifted and pushed back) and the run ended slightly worse
   than plain Newton (1.0 orders), so it is off by default; together with
   `positive_jacobian` it fired in 29 of 60 updates (at most 107 cells, none
-  at the end) and the run reached 2.7 orders. Its effect on the eight
-  isolated floor cells of the 320k SD7003 case is not measured yet.
+  at the end) and the run reached 2.7 orders. Not measured on the 320k SD7003
+  case (`positive_jacobian` alone cleared its floor cells).
 
 The freestream turbulence decays between the inflow and the body (SST
 without sustaining terms): set the inflow `intensity` and

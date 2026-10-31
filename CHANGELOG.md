@@ -11,7 +11,9 @@
   new options of `[physics.transition]`: `positive_jacobian` (default true,
   a change of the LM Newton step) leaves the diagonal-lowering derivatives
   of the γ source out of the Newton–Krylov Jacobian, the residual is
-  unchanged (T3A start-up: 2.4 orders in 60 iterations against 1.2);
+  unchanged (T3A start-up: 2.4 orders in 60 iterations against 1.2; 320k SD7003 α = 4°
+  restart: converged in 13 Newton–Krylov iterations at unchanged forces,
+  where the exact linearization stalled for 98 iterations);
   `newton_guard` (default false) replaces such an update by the explicit
   local step −R Δt/A at CFL 1 of the cell and the log Summary counts the
   firings (`gamma descent guard`). Both are named in the Configuration block
