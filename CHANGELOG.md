@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (1.1)
+## 1.1 – Positive γ linearization for Langtry–Menter (2026-10-31)
 
 - Langtry–Menter: the γ residual of the 320k SD7003 runs stalled at 10⁻⁵·⁴
   because of eight cells at the clip floor γ = 10⁻⁴ whose exact Newton update

@@ -6,15 +6,16 @@ JAX, developed as a companion to
 Command and package: `pyaeroflow`. Formerly named *aerojax* (renamed in 0.8;
 not related to other projects of that name).
 
-**Status:** 0.9. Steady and unsteady incompressible laminar, inviscid and
+**Status:** 1.1. Steady and unsteady incompressible laminar, inviscid and
 RANS flow (Spalart–Allmaras SA-neg and k-ω SST, SU2 INC formulation) with the
 transition models BCM, SA-AFT2019b and Langtry–Menter γ-Re_θ, a Newton–Krylov
 solver and BDF2 dual time stepping. Verified and validated against Couette and
 Poiseuille flow, the lid-driven cavity, the DFG cylinder benchmarks, the NASA
 TMR flat plate and NACA 0012, ERCOFTAC T3, the Eppler 387 and the SD7003
 ([validation](docs/validation.md)). Meshes come from PyAero (`.su2`) or Gmsh
-(`.msh`). The path to 1.0 is in
-[requirements §4a](docs/requirements.md#4a-milestone-10-proposed-2026-10-27-to-be-confirmed).
+(`.msh`). The 1.0 milestone is recorded in
+[requirements §4a](docs/requirements.md#4a-milestone-10-reached-2026-10-30);
+changes are in the [changelog](CHANGELOG.md).
 
 ![SD7003 at alpha 4 deg, Re = 60 000, SST-2003m-LM2009](docs/figures/lm_sd7003_a4_re60000.png)
 
