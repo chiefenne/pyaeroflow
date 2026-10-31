@@ -661,6 +661,7 @@ class IncompressibleProblem:
         gamma_diagnostics=False,
         nu_tilde_step_limit=None,
         transition_clip=True,
+        gamma_guard=False,
         resume=None,
     ):
         """Implicit pseudo-time solution (D25, D35).
@@ -693,7 +694,12 @@ class IncompressibleProblem:
 
         With the Langtry-Menter model the update clips gamma and Re_thetat to
         SU2's limits (:meth:`_sst_limiter`); ``transition_clip=False`` leaves
-        them unclipped.
+        them unclipped. ``gamma_guard`` (off by default) replaces a Newton
+        update of gamma that the clip floor would discard while the residual
+        asks for the other direction by the explicit local step
+        (:meth:`_sst_limiter`); the counts go to the callback's
+        ``info["gamma_guard"]``. The positive linearization of the gamma
+        source is a model flag (``lm_positive_jacobian``).
 
         ``resume`` is the state of an earlier run (the ``state`` of its result
         or of a restart file, see :func:`pyaeroflow.run.load_restart_state`):
@@ -787,6 +793,10 @@ class IncompressibleProblem:
         on_iteration.info = getattr(callback, "info", {})
         if callback is not None and not hasattr(callback, "info"):
             callback.info = on_iteration.info
+        guard_stats = None
+        if self.model.transition == "lm" and gamma_guard:
+            guard_stats = {"updates": 0, "fired": 0, "cells_max": 0, "cells_last": 0}
+            on_iteration.info["gamma_guard"] = guard_stats
 
         def driver_state():
             """Limiter, lagged intermittency and vortex of the live run."""
@@ -812,23 +822,28 @@ class IncompressibleProblem:
             jvp=lambda w, dw: self.jvp(
                 w, dw, state["beta2"], state["psi"], state["gamma"]
             ),
-            limit_step=self._step_limiter(nu_tilde_step_limit, transition_clip),
+            limit_step=self._step_limiter(
+                nu_tilde_step_limit, transition_clip, gamma_guard, guard_stats
+            ),
             resume=resume,
         )
         return result._replace(state={**result.state, **driver_state()})
 
-    def _step_limiter(self, factor, clip=True):
+    def _step_limiter(self, factor, clip=True, gamma_guard=False, guard_stats=None):
         """Step limiter of the turbulence variables, or None.
 
         SST always gets SU2's under-relaxation (:meth:`_sst_limiter`, with the
-        clip of the transition variables unless ``clip`` is False); SA the
+        clip of the transition variables unless ``clip`` is False, and the
+        descent guard of gamma unless ``gamma_guard`` is False); SA the
         nu_tilde cap of ``factor`` (None = no cap).
         """
         if self.model.turbulence == "sst":
-            return self._sst_limiter(clip=clip)
+            return self._sst_limiter(clip=clip, guard=gamma_guard, stats=guard_stats)
         return self._nu_tilde_limiter(factor)
 
-    def _sst_limiter(self, max_update=SST_MAX_UPDATE, clip=True):
+    def _sst_limiter(
+        self, max_update=SST_MAX_UPDATE, clip=True, guard=False, stats=None
+    ):
         """SU2's SST under-relaxation: k and omega stay positive.
 
         Per cell the (k, omega) update is scaled by min(1, max_update /
@@ -842,9 +857,25 @@ class IncompressibleProblem:
         loses 99 % per iteration (gamma = 1e-142 after 70 iterations) and the
         square root of the onset term has an enormous derivative there.
         ``clip=False`` leaves the transition variables unclipped.
+
+        Descent guard (``guard``, Langtry-Menter): a cell whose Newton update
+        of gamma would end below the clip floor while its residual has the
+        same sign as the update (R < 0 asks for a larger gamma, the update
+        lowers it) gets the explicit local step -R / tau instead, tau the
+        pseudo-time diagonal at CFL 1. At the floor the sqrt(gamma) of the
+        production has the derivative 1 / (2 sqrt gamma) = 50, which turns the
+        diagonal of the gamma equation negative in a cell of the shear layer;
+        the Newton update then points away from the root, the clip discards
+        it, and the cell stays at the floor with a residual of hundreds
+        (320k SD7003: 8 such cells held the gamma residual at 10^-5.4). The
+        limiter needs ``r`` and ``tau`` for the guard (:func:`solve_steady`
+        passes them); with ``r=None`` the guard is skipped. ``stats`` (dict)
+        counts the updates seen, those where the guard fired, the largest and
+        the last number of cells.
         """
         groups = [[rans_sst.NK, rans_sst.NW]]
         clips = []
+        guard = guard and self.model.transition == "lm"
         if self.model.transition == "lm":
             groups.append(
                 [rans_sst.NGL, rans_sst.NRT]
@@ -855,8 +886,20 @@ class IncompressibleProblem:
                     (rans_sst.NRT, lm.RE_THETA_LIMITS),
                 ]
 
-        def limit_step(u, du):
+        def limit_step(u, du, r=None, tau=None):
             du = du.copy()
+            if guard and r is not None:
+                col = rans_sst.NGL
+                g, dg, rg = u[:, col], du[:, col], r[:, col]
+                wrong = (dg * rg > 0.0) & (g + dg < lm.GAMMA_LIMITS[0])
+                n_wrong = int(np.count_nonzero(wrong))
+                if n_wrong:
+                    du[wrong, col] = -rg[wrong] / tau[wrong, col]
+                if stats is not None:
+                    stats["updates"] += 1
+                    stats["fired"] += n_wrong > 0
+                    stats["cells_max"] = max(stats["cells_max"], n_wrong)
+                    stats["cells_last"] = n_wrong
             for cols in groups:
                 val = np.maximum(u[:, cols], 1e-300)
                 drop = np.maximum(-du[:, cols], 0.0) / val
@@ -878,7 +921,7 @@ class IncompressibleProblem:
             return None
         nu_floor = self.model.viscosity / self.model.density
 
-        def limit_step(u, du):
+        def limit_step(u, du, r=None, tau=None):
             cap = factor * np.maximum(np.abs(u[:, rans.NT]), nu_floor)
             du = du.copy()
             du[:, rans.NT] = np.clip(du[:, rans.NT], -cap, cap)
@@ -952,6 +995,7 @@ class IncompressibleProblem:
         inner_callback=None,
         nu_tilde_step_limit=None,
         transition_clip=True,
+        gamma_guard=False,
         resume=None,
     ):
         """Dual time stepping from ``w0`` to ``settings.end_time`` (D9, D37).
@@ -960,8 +1004,9 @@ class IncompressibleProblem:
         with the inner pseudo-time/Newton-Krylov iterations of
         ``settings.inner``; beta^2 follows the current state, the limiter is
         not frozen. ``nu_tilde_step_limit`` caps every inner update of
-        nu_tilde and ``transition_clip`` clips gamma and Re_thetat as in
-        :meth:`solve`. ``resume`` continues an earlier run
+        nu_tilde, ``transition_clip`` clips gamma and Re_thetat and
+        ``gamma_guard`` guards the gamma update as in :meth:`solve` (the guard
+        then uses the inner residual). ``resume`` continues an earlier run
         (``step`` and ``u_previous``, see :func:`solve_unsteady`).
         """
         state = {"beta2": self.beta2(w0)}
@@ -980,7 +1025,9 @@ class IncompressibleProblem:
             callback=callback,
             inner_callback=inner_callback,
             jvp=lambda w, dw: self.jvp(w, dw, state["beta2"]),
-            limit_step=self._step_limiter(nu_tilde_step_limit, transition_clip),
+            limit_step=self._step_limiter(
+                nu_tilde_step_limit, transition_clip, gamma_guard
+            ),
             resume=resume,
         )
 

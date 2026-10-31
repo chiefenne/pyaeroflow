@@ -21,6 +21,7 @@ SU2). All functions are pure and cell-local (kinematic form, constant
 density).
 """
 
+import jax
 import jax.numpy as jnp
 
 CA1, CA2 = 2.0, 0.06
@@ -167,7 +168,9 @@ def destruction_factor(gamma_eff):
     return jnp.clip(gamma_eff, 0.1, 1.0)
 
 
-def sources(gamma, re_t, k, omega, nu, strain, vorticity, distance, speed, du_ds):
+def sources(
+    gamma, re_t, k, omega, nu, strain, vorticity, distance, speed, du_ds, positive=False
+):
     """Return the sources per unit volume (s_gamma, s_re_thetat), kinematic.
 
     Parameters
@@ -184,6 +187,18 @@ def sources(gamma, re_t, k, omega, nu, strain, vorticity, distance, speed, du_ds
         Wall distance d.
     speed, du_ds : arrays
         Local velocity magnitude U and dU/ds = u_m u_n / U^2 du_m/dx_n.
+    positive : bool
+        Linearization of the gamma source; the values are the same. With
+        True the derivatives with respect to gamma that would lower the
+        diagonal of the gamma equation are left out (``stop_gradient``): the
+        sqrt(gamma) of the production, whose derivative 1 / (2 sqrt gamma) is
+        50 at the clip floor and outweighs the convective diagonal of a cell
+        (the Newton update then goes against the residual), and the
+        destruction derivative where it is negative (gamma < 1 / (2 c_e2)).
+        Kept: the (1 - c_e1 gamma) factor of the production and the
+        destruction derivative where it is positive, so d s_gamma / d gamma
+        <= 0 everywhere. The derivatives with respect to the other variables
+        stay exact.
     """
     g = jnp.maximum(gamma, 0.0)
     re_v, r_t, re_omega = _reynolds_numbers(k, omega, nu, strain, distance)
@@ -195,8 +210,12 @@ def sources(gamma, re_t, k, omega, nu, strain, vorticity, distance, speed, du_ds
     f3 = jnp.maximum(1.0 - (r_t / 2.5) ** 3, 0.0)
     f_onset = jnp.maximum(f2 - f3, 0.0)
     f_turb = jnp.exp(-((r_t / 4.0) ** 4))
-    p_g = f_length * CA1 * strain * _safe_sqrt(g * f_onset) * (1.0 - CE1 * g)
-    e_g = CA2 * vorticity * g * f_turb * (CE2 * g - 1.0)
+    g_root = jax.lax.stop_gradient(g) if positive else g
+    p_g = f_length * CA1 * strain * _safe_sqrt(g_root * f_onset) * (1.0 - CE1 * g)
+    h = g * (CE2 * g - 1.0)  # h' = 2 c_e2 gamma - 1, negative below gamma = 0.01
+    if positive:
+        h = jnp.where(2.0 * CE2 * g > 1.0, h, jax.lax.stop_gradient(h))
+    e_g = CA2 * vorticity * f_turb * h
 
     tu = turbulence_intensity(k, speed)
     re_eq = equilibrium_re_theta(tu, du_ds, nu, speed)

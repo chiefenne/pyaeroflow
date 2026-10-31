@@ -285,6 +285,9 @@ def setup(config, mesh=None):
         critical_amplification=(
             tr_cfg["critical_amplification"] if tr_cfg["model"] == "aft" else None
         ),
+        lm_positive_jacobian=bool(
+            rans and tr_cfg["model"] == "lm" and tr_cfg["positive_jacobian"]
+        ),
     )
     regions = None
     if rans and physics["transition"]["mode"] == "prescribed":
@@ -1020,6 +1023,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
             gamma_diagnostics=diagnose,
             nu_tilde_step_limit=solver["nu_tilde_step_limit"],
             transition_clip=tr_cfg["clip"],
+            gamma_guard=tr_cfg["newton_guard"],
             resume=resume,
         )
     else:
@@ -1058,6 +1062,17 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
         ),
         ("iterations", f"{int(h['iteration'][-1])} ({nk_steps} Newton-Krylov)"),
         ("rejected updates", str(int(np.count_nonzero(~h["accepted"])))),
+        *(
+            [
+                (
+                    "gamma descent guard",
+                    f"fired in {g['fired']} of {g['updates']} updates, at most "
+                    f"{g['cells_max']} cells, {g['cells_last']} in the last",
+                )
+            ]
+            if (g := callback.info.get("gamma_guard"))
+            else []
+        ),
         (
             "residual drop",
             f"{-np.log10(max(h['measure'][-1], np.finfo(float).tiny)):.1f} orders"
@@ -1256,6 +1271,7 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         inner_callback=inner_callback if detailed else None,
         nu_tilde_step_limit=cfg["solver"]["nu_tilde_step_limit"],
         transition_clip=cfg["physics"]["transition"]["clip"],
+        gamma_guard=cfg["physics"]["transition"]["newton_guard"],
         resume=resume,
     )
     history.close()
@@ -1495,6 +1511,27 @@ def _mode_rows(cfg):
         else:
             text = "not clipped (physics.transition.clip = false)"
         rows.append(("gamma, Re_thetat", text))
+        rows.append(
+            (
+                "gamma Newton step",
+                "descent guard: an update the clip floor would discard against "
+                "the residual becomes the explicit local step at CFL 1 "
+                "(physics.transition.newton_guard = true)"
+                if tr["newton_guard"]
+                else "plain Newton (no descent guard)",
+            )
+        )
+        rows.append(
+            (
+                "gamma linearization",
+                "positive: the sqrt(gamma) production derivative and the negative "
+                "destruction derivative are left out of the Newton-Krylov "
+                "Jacobian, the residual is unchanged"
+                if tr["positive_jacobian"]
+                else "exact: Newton-Krylov differentiates the sources fully "
+                "(physics.transition.positive_jacobian = false)",
+            )
+        )
     if (
         solver["nu_tilde_step_limit"] is not None
         and cfg["physics"]["turbulence"] != "sst"

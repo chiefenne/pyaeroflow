@@ -162,14 +162,17 @@ def test_reference_residual_follows_an_operator_change():
 def test_limit_step_is_applied_to_every_update():
     """The ``limit_step`` hook sees each computed update and its result is used."""
     import numpy as np
+    from scipy.sparse import identity
 
     from pyaeroflow.solver import PseudoTimeSettings, solve_steady
-    from scipy.sparse import identity
 
     calls = []
 
-    def limit(u, du):
+    def limit(u, du, r, tau):
         calls.append(float(np.abs(du).max()))
+        # The residual of u and the pseudo-time diagonal at CFL 1 come along.
+        np.testing.assert_allclose(r, u)
+        np.testing.assert_allclose(tau, 1.0)
         return np.clip(du, -0.25, 0.25)
 
     u0 = np.full((4, 1), 3.0)
@@ -195,8 +198,9 @@ def test_unsteady_inner_iterations_use_limit_step():
 
     calls = []
 
-    def limit(u, du):
+    def limit(u, du, r, tau):
         calls.append(float(np.abs(du).max()))
+        assert r.shape == u.shape and tau.shape == u.shape
         return np.clip(du, -0.25, 0.25)
 
     inner = PseudoTimeSettings(

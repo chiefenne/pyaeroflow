@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased (1.1)
+
+- Langtry–Menter: the γ residual of the 320k SD7003 runs stalled at 10⁻⁵·⁴
+  because of eight cells at the clip floor γ = 10⁻⁴ whose exact Newton update
+  pointed away from the root (the √γ derivative of the production, 50 at the
+  floor, turns the diagonal of a shear-layer cell negative); the clip
+  discarded the update every iteration and the cells kept a residual of
+  hundreds, which also held the Newton–Krylov forcing term at its cap. Two
+  new options of `[physics.transition]`: `positive_jacobian` (default true,
+  a change of the LM Newton step) leaves the diagonal-lowering derivatives
+  of the γ source out of the Newton–Krylov Jacobian, the residual is
+  unchanged (T3A start-up: 2.4 orders in 60 iterations against 1.2);
+  `newton_guard` (default false) replaces such an update by the explicit
+  local step −R Δt/A at CFL 1 of the cell and the log Summary counts the
+  firings (`gamma descent guard`). Both are named in the Configuration block
+  of the log; `positive_jacobian = false` restores the 1.0 behaviour. The
+  step limiter hook of the solver now receives the residual and the
+  pseudo-time diagonal at CFL 1: `limit_step(u, du, r, tau)`.
+
 ## 1.0 – Gmsh meshes, airfoil workflow, control files, LM polar (2026-10-30)
 
 - `.read_toml_N` control file: at iteration or step N the run reads the case

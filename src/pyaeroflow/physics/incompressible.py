@@ -106,6 +106,11 @@ class IncompressibleModel(NamedTuple):
         Freestream Tu in percent.
     critical_amplification : float or None
         N_crit of SA-AFT; None derives it from ``turbulence_intensity``.
+    lm_positive_jacobian : bool
+        Langtry-Menter: the exact Newton-Krylov Jacobian leaves out the
+        derivatives of the gamma source that lower the diagonal of the gamma
+        equation (``positive`` of :func:`pyaeroflow.physics.lm.sources`); the
+        residual is the same.
     """
 
     density: float = 1.0
@@ -124,6 +129,7 @@ class IncompressibleModel(NamedTuple):
     transition: str = "none"  # "none", "bcm", "aft" (SA-AFT2019b) or "lm" (SST)
     turbulence_intensity: float = 0.0  # freestream Tu in percent (BCM, AFT)
     critical_amplification: float = None  # AFT N_crit; None: from Tu
+    lm_positive_jacobian: bool = False  # LM: positive linearization of the gamma source
 
     @property
     def n_var(self):
