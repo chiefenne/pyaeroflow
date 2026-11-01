@@ -21,10 +21,10 @@ from pyaeroflow.solver import (
     PseudoTimeSettings,
     block_diagonal,
     first_order_jacobian,
-    replace_rows,
     solve_explicit,
     solve_steady,
     solve_unsteady,
+    structural_masks,
 )
 
 PRESSURE_FIXING = {"pressure-outlet", "farfield", "total-pressure-inlet"}
@@ -465,9 +465,19 @@ class IncompressibleProblem:
                 if self.model.coupling == "segregated"
                 else None
             )
+        src = None
+        if self.turbulent:
+            src = np.asarray(
+                self.physics.source_blocks(self.model, self.geom, self.bc, w)
+            )
+        pin = ()
+        if self.model.pin is not None:
+            pin = (self.model.pin[0] * self.model.n_var + inc.P,)
         if self._pattern is None:
-            self._pattern = JacobianPattern(self.geom, self.model.n_var)
-        j = first_order_jacobian(
+            self._pattern = self._structural_pattern(
+                w, beta2, b_args, f_args, mask, src
+            )
+        return first_order_jacobian(
             self.geom,
             self._fi,
             self._fb,
@@ -477,16 +487,57 @@ class IncompressibleProblem:
             block_mask=mask,
             pattern=self._pattern,
             f_args=f_args,
+            diag_blocks=src,
+            pin_rows=pin,
         )
-        if self.turbulent:
-            j = j + block_diagonal(
+
+    def _structural_pattern(self, w, beta2, b_args, f_args, mask, src):
+        """Jacobian pattern on the structurally non-zero block entries (C2).
+
+        The structure is the union of the non-zero entries over the current
+        state and two random states (flow variables shifted, positive
+        turbulence variables scaled), so that upwind branches and wall values
+        do not hide an entry; an entry that still turns up later widens the
+        pattern (see :func:`first_order_jacobian`). The diagonal blocks cover
+        the sources and the pseudo-time term.
+        """
+        rng = np.random.default_rng(12345)
+        w0 = np.asarray(w)
+        states = [w0]
+        for _ in range(2):
+            x = w0 * (1.0 + 0.3 * rng.uniform(-1.0, 1.0, w0.shape))
+            x[:, :3] = w0[:, :3] + 0.3 * rng.standard_normal(w0[:, :3].shape) * (
+                np.abs(w0[:, :3]).max(axis=0) + 1.0e-3
+            )
+            states.append(x)
+        diag = []
+        for x in states:
+            xj = jnp.asarray(x)
+            diag.append(
                 np.asarray(
-                    self.physics.source_blocks(self.model, self.geom, self.bc, w)
+                    self.physics.time_term_blocks(
+                        self.model, self.geom, xj, beta2, 10.0
+                    )
                 )
             )
-        if self.model.pin is not None:
-            j = replace_rows(j, [self.model.pin[0] * self.model.n_var + inc.P])
-        return j
+            if self.turbulent:
+                diag.append(
+                    np.asarray(
+                        self.physics.source_blocks(self.model, self.geom, self.bc, xj)
+                    )
+                )
+        masks = structural_masks(
+            self.geom,
+            self._fi,
+            self._fb,
+            [jnp.asarray(x) for x in states],
+            beta2,
+            b_args,
+            f_args,
+            block_mask=mask,
+            diag_samples=diag,
+        )
+        return JacobianPattern(self.geom, self.model.n_var, masks)
 
     def time_term(self, w, beta2, cfl):
         """Block-diagonal pseudo-time matrix Gamma_i Lambda_i / CFL."""

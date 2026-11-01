@@ -11,6 +11,7 @@ from pyaeroflow.solver.jacobian import (
     block_diagonal,
     first_order_jacobian,
     replace_rows,
+    structural_masks,
 )
 from pyaeroflow.solver.linear import (
     LinearSettings,
@@ -42,6 +43,7 @@ __all__ = [
     "factorize",
     "JacobianPattern",
     "first_order_jacobian",
+    "structural_masks",
     "replace_rows",
     "rms",
     "rms_per_variable",

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Performance (C2): the first-order Jacobian is assembled in one pass on its
+  structurally non-zero entries: the sources and the pressure pin are written
+  into the same bincount (no `block_diagonal` / `replace_rows` sparse adds, no
+  copies of the whole matrix), and only the non-zero entries of the 7 x 7
+  blocks are transferred and summed (about 30 % of the dense blocks with LM).
+  The structure is the union over the current state and two random states; an
+  entry that turns up later widens the pattern (checked at every assembly), so
+  the matrix is identical to before (tested entry by entry; T3A history
+  bit-identical). 66k-cell LM plate: 0.99 s -> 0.65 s per assembly.
 - Performance (C1): the Newton-Krylov phase linearizes the residual once per
   Newton step (`jax.linearize`) and applies the stored tangent in the GMRES
   products instead of a full `jax.jvp` (primal and tangent) per product. On the
