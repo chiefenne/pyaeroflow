@@ -68,12 +68,18 @@ pyaeroflow check case.toml        # validate, print the resolved configuration
 pyaeroflow run case.toml          # solve; writes <name>.log, .history.csv, .vtu
 ```
 
-Example case files are in `examples/cases/` (generate their meshes first with
-`python examples/cases/make_meshes.py`; `examples/meshes/` holds three PyAero
-meshes of the NACA 0012: 5- and 25-chord tunnels with 113 points per
-airfoil side, and a 5-chord tunnel with 472). The case-file reference is
-[docs/configuration.md](docs/configuration.md); the same setup is available
+Example case files are in `examples/cases/` (generate the meshes of the
+simple cases first with `python examples/cases/make_meshes.py`; the plate
+meshes of the transition cases come from `examples/cases/make_plate_lm.py`).
+`examples/meshes/` holds the meshes of the validation cases (NACA 0012,
+Eppler 387, SD7003, and a RAE 2822 mesh for later), described in
+[examples/meshes/README.md](examples/meshes/README.md). The case-file reference
+is [docs/configuration.md](docs/configuration.md); the same setup is available
 from Python through `pyaeroflow.driver.IncompressibleProblem`.
+
+`plot_log.py` in the repository root plots a solver `.log` (residuals, solver
+effort, coefficients, differences, four PNG files):
+`python plot_log.py output/case.log`; see its header for the options.
 
 ## Tests and examples
 

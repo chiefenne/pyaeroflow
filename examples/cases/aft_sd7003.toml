@@ -1,18 +1,20 @@
-# SD7003 at Re = 6e4 with the SA-AFT2019b transition model (L3), for the
-# AFT validation against the references in /mnt/project-files/reference/sd7003/.
-# Geometry: CST resampling (1000 points) of the original SD7003 coordinates,
-# made in PyAero 3.0. The mesh is a C-type PyAero mesh, placed next to this
-# file as sd7003_pyaero.su2. Boundary names follow the E387 mesh: change them
-# if the PyAero export uses other names.
+# SD7003 at Re = 6e4 with the SA-AFT2019b transition model (L3); validation
+# against XFOIL, LES/DNS and Herbst et al. 2017 in docs/validation.md section 9.
+# Mesh: ../meshes/sd7003_C10_W25_320k_cells.su2, a C-type PyAero mesh (320 600
+# cells; C10: tunnel 10 chords above and below, W25: 25 chords of wake) of the
+# CST-resampled SD7003 contour (1000 points, PyAero 3.0), sharp trailing edge.
+# ../meshes/sd7003_C10_W25_320k_cells_blunt_TE.su2 is the same with a 0.3 %
+# chord blunt trailing edge (326 580 cells). Boundary faces: airfoil, inlet,
+# outlet, top, bottom (see examples/meshes/README.md).
 # N_crit = 8.15 from Tu = 0.1 % (Mack/Drela), the same value as E387 and the
 # XFOIL comparison (Ncrit 8.15). Tu 0.08 % (TU-BS) would give 8.68.
-# Polar: pyaeroflow polar cases/aft_sd7003.toml --alpha 0 2 4 6 8
+# Polar: pyaeroflow polar examples/cases/aft_sd7003.toml --alpha 0 2 4 6 8
 
 [case]
 name = "aft_sd7003"
 
 [mesh]
-file = "sd7003_pyaero.su2"        # boundary faces: airfoil, inlet, outlet, top, bottom
+file = "../meshes/sd7003_C10_W25_320k_cells.su2"   # boundary faces: airfoil, inlet, outlet, top, bottom
 
 [physics]
 model = "rans"

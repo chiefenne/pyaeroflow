@@ -1,0 +1,41 @@
+# SD7003 at Re = 6e4, alpha 4 deg, fully turbulent k-omega SST on the 39k-cell
+# O-grid (examples/meshes/sd7003_ogrid_39k.su2, made by
+# examples/meshes/make_sd7003_ogrid.py; farfield 100 chords, so the point-vortex
+# correction is on). The SST and SA-neg comparison of docs/validation.md section 9.
+# Run: pyaeroflow run examples/cases/sst_sd7003_ogrid.toml
+
+[case]
+name = "sst_sd7003_ogrid"
+[mesh]
+file = "../meshes/sd7003_ogrid_39k.su2"
+[physics]
+model = "rans"
+turbulence = "sst"
+[fluid]
+density = 1.0
+viscosity = 1.6667e-5
+[reference]
+velocity = 1.0
+length = 1.0
+moment_center = [0.25, 0.0]
+vortex_correction = true
+[boundary.airfoil]
+type = "wall"
+[boundary.farfield]
+type = "farfield"
+velocity = 1.0
+angle_of_attack = 4.0
+pressure = 0.0
+turbulence = { turbulent_viscosity_ratio = 1.0, intensity = 0.001 }
+[numerics]
+limiter = "venkatakrishnan"
+limiter_freeze = { after_residual_drop = 1.5, after_iterations = 40, release = true }
+[solver]
+residual_drop = 7.0
+max_iterations = 1500
+cfl = { control = "ser" }
+newton_krylov = { switch_at_residual_drop = 1.5, switch_at_iteration = 40 }
+[output]
+directory = "output/sst_sd7003_ogrid"
+force_boundaries = ["airfoil"]
+fields = ["all"]
