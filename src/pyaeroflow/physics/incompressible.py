@@ -496,6 +496,21 @@ def residual_jvp(model, geom, bc, w, dw, order, beta2, psi=None):
     return jax.jvp(f, (w,), (dw,))[1]
 
 
+@partial(jax.jit, static_argnums=(0, 4))
+def residual_linearize(model, geom, bc, w, order, beta2, psi=None):
+    """Residual and its linearization at ``w`` (``jax.linearize``).
+
+    Returns ``(r, lin)`` with ``lin`` a :class:`jax.tree_util.Partial` that
+    maps ``dw`` to ``dR/dw(w) @ dw`` without re-evaluating the primal:
+    one call per Newton step, then :func:`apply_linear` per GMRES product.
+    """
+
+    def f(x):
+        return residual(model, geom, bc, x, order, beta2, psi)
+
+    return jax.linearize(f, w)
+
+
 def interior_flux(model, beta2, w_o, w_n, normal, delta):
     """Compact first-order flux through an interior face (for the Jacobian)."""
     conv = fds_flux(model, w_o[None], w_n[None], normal[None], beta2)[0]

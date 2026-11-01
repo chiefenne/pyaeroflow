@@ -7,6 +7,7 @@ and provides the residual, Jacobian and pseudo-time term for the solvers in
 
 from functools import partial
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -105,6 +106,12 @@ GAMMA_DIAGNOSTICS = (
 # The first six of them (no residual) are the per-time-step diagnostics of
 # unsteady runs, relative to the previous step.
 GAMMA_STEP_DIAGNOSTICS = GAMMA_DIAGNOSTICS[:6]
+
+
+@jax.jit
+def _apply_linear(lin, dw):
+    """Evaluate a ``jax.linearize`` map (compiled once per structure)."""
+    return lin(dw)
 
 
 class IncompressibleProblem:
@@ -403,6 +410,31 @@ class IncompressibleProblem:
                 **extra,
             )
         )
+
+    def linearize(self, w, beta2, psi=None, gamma=None):
+        """Return ``apply(dw) -> dR/dw(w) @ dw`` linearized once at ``w``.
+
+        ``jax.linearize`` stores the intermediates of the residual and the
+        returned function evaluates only the tangent, which costs about a
+        quarter of a full ``jax.jvp`` product (C1). The stored arrays live as
+        long as the returned function does.
+        """
+        extra = {} if gamma is None else {"gamma": gamma}
+        _, lin = self.physics.residual_linearize(
+            self.model,
+            self.geom,
+            self.bc,
+            jnp.asarray(w),
+            self.model.spatial_order,
+            beta2,
+            psi,
+            **extra,
+        )
+
+        def apply(dw):
+            return np.asarray(_apply_linear(lin, jnp.asarray(dw)))
+
+        return apply
 
     def limiter(self, w):
         """Limiter values of the state ``w``, shape (n_cells, n_var)."""
@@ -841,6 +873,9 @@ class IncompressibleProblem:
             jvp=lambda w, dw: self.jvp(
                 w, dw, beta2_at(w), state["psi"], state["gamma"]
             ),
+            linearize=lambda w: self.linearize(
+                w, beta2_at(w), state["psi"], state["gamma"]
+            ),
             limit_step=self._step_limiter(
                 nu_tilde_step_limit, transition_clip, gamma_guard, guard_stats
             ),
@@ -1043,6 +1078,7 @@ class IncompressibleProblem:
             callback=callback,
             inner_callback=inner_callback,
             jvp=lambda w, dw: self.jvp(w, dw, beta2_at(w)),
+            linearize=lambda w: self.linearize(w, beta2_at(w)),
             limit_step=self._step_limiter(
                 nu_tilde_step_limit, transition_clip, gamma_guard
             ),

@@ -104,6 +104,7 @@ def solve_unsteady(
     callback=None,
     inner_callback=None,
     jvp=None,
+    linearize=None,
     limit_step=None,
     resume=None,
 ):
@@ -111,7 +112,7 @@ def solve_unsteady(
 
     Parameters
     ----------
-    residual, jacobian, time_term, jvp
+    residual, jacobian, time_term, jvp, linearize
         As in :func:`solve_steady` (steady residual and its operators).
     mass : array, shape (n_cells, n_var)
         Diagonal of the mass matrix M.
@@ -179,6 +180,13 @@ def solve_unsteady(
             def jvp_t(u, du, a0=a0):
                 return np.asarray(jvp(u, du)) + a0 * mass * du
 
+        lin_t = None
+        if linearize is not None:
+
+            def lin_t(u, a0=a0):
+                product = linearize(u)
+                return lambda du: np.asarray(product(du)) + a0 * mass * du
+
         # The inner residual drop refers to R*(u^n): extrapolation lowers the
         # starting residual, not the accuracy required.
         start, norm_n = u_n, None
@@ -192,6 +200,7 @@ def solve_unsteady(
             s.inner,
             callback=inner_callback,
             jvp=jvp_t,
+            linearize=lin_t,
             reference_norm=norm_n,
             limit_step=limit_step,
         )

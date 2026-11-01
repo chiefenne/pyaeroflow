@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Performance (C1): the Newton-Krylov phase linearizes the residual once per
+  Newton step (`jax.linearize`) and applies the stored tangent in the GMRES
+  products instead of a full `jax.jvp` (primal and tangent) per product. On the
+  T3A plate a product costs a quarter of before; the cell-local SST and
+  Langtry-Menter sources are rematerialized (`jax.checkpoint`) so the stored
+  intermediates stay at about 1.4 GB at 320k cells with LM (2.2 GB without),
+  at no cost in the products. Same Jacobian, same iterations.
+  `solver.newton_krylov.linearize = false` restores the `jax.jvp` path (Python
+  API `nk_linearize`, `IncompressibleProblem.linearize`,
+  `physics.*.residual_linearize`). The Timing block has a `linearize` row.
 - Performance (C0): the PARDISO solver no longer lets `pypardiso` hash the whole
   matrix and rebuild the 1-based index arrays at every solve (0.66 s per
   preconditioner application at 78 M non-zeros, i.e. per GMRES iteration), and a

@@ -43,6 +43,7 @@ at most 0.5 above.
 """
 
 from dataclasses import dataclass
+from functools import partial
 from typing import NamedTuple
 
 import numpy as np
@@ -114,6 +115,11 @@ class PseudoTimeSettings:
         0.9 (|R_k| / |R_{k-1}|)^2, bounded by ``nk_linear_tolerance`` from
         below and 0.5 from above, so that the linear solve is only as
         accurate as the nonlinear progress warrants (Knoll & Keyes 2004).
+    nk_linearize : bool
+        Linearize the residual once per Newton step (``jax.linearize``) and
+        apply the stored tangent in the GMRES products, instead of a full
+        ``jax.jvp`` per product (C1). Needs ``linearize``; False uses ``jvp``
+        (less memory, slower products).
     line_search_steps : int
         Backtracking: an update that raises the residual measure is halved
         up to this many times before it is rejected (D54).
@@ -177,6 +183,7 @@ class PseudoTimeSettings:
     refactor_cfl_ratio: float = 4.0
     nk_cfl_adapt_iterations: int = 60
     nk_forcing: bool = True
+    nk_linearize: bool = True
     line_search_steps: int = 2
     cfl_control: str = "growth"
     ser_exponent: float = 1.0
@@ -235,6 +242,7 @@ def solve_steady(
     residual_startup=None,
     callback=None,
     jvp=None,
+    linearize=None,
     reference_norm=None,
     limit_step=None,
     resume=None,
@@ -267,6 +275,10 @@ def solve_steady(
     jvp : callable, optional
         ``jvp(u, du) -> dR/du(u) @ du`` of the full residual; enables the
         Newton-Krylov phase.
+    linearize : callable, optional
+        ``linearize(u) -> apply`` with ``apply(du) -> dR/du(u) @ du``: the
+        residual linearized once per Newton step (``settings.nk_linearize``).
+        Either ``jvp`` or ``linearize`` enables Newton-Krylov.
     reference_norm : array, optional
         Per-variable residual norms that ``residual_drop`` and the
         Newton-Krylov switch refer to; default the norms of the initial
@@ -381,6 +393,8 @@ def solve_steady(
             info["measure"] = norm
         if not it0:
             callback(0, u, hist["residuals"][0], cfl, True)
+    use_linearize = linearize is not None and s.nk_linearize
+    has_jvp = jvp is not None or use_linearize
     lin, steps_since_factor, cfl_at_factor = None, 0, cfl
     stale = False  # the preconditioner let GMRES work hard: rebuild it
     max_iterations = s.max_iterations
@@ -413,7 +427,7 @@ def solve_steady(
         by_iteration = s.nk_switch_iteration is not None and it > s.nk_switch_iteration
         immediate = s.nk_switch_residual_drop <= 0.0  # dual-time inner iterations
         nk_on = nk_on or immediate or norm <= nk_threshold or by_iteration
-        use_nk = s.newton_krylov and jvp is not None and not startup and nk_on
+        use_nk = s.newton_krylov and has_jvp and not startup and nk_on
         with timers.section("time term"):
             t_matrix = time_term(u, cfl)
         accepted, lin_its = False, 0
@@ -433,15 +447,21 @@ def solve_steady(
                 steps_since_factor, cfl_at_factor = 0, cfl
             steps_since_factor += 1
             if use_nk:
+                if use_linearize:
+                    with timers.section("linearize"):
+                        product = linearize(u)
+                else:
+                    product = partial(jvp, u)
                 with timers.section("nk solve (GMRES)"):
                     du, lin_its = solve_matrix_free(
-                        _newton_operator(t_matrix, jvp, u),
+                        _newton_operator(t_matrix, product, u.shape),
                         -r.ravel(),
                         _timed("preconditioner", lin.precondition),
                         tolerance=eta if s.nk_forcing else s.nk_linear_tolerance,
                         restart=s.nk_restart,
                         max_iterations=s.nk_max_krylov,
                     )
+                product = None  # frees the stored linearization
             else:
                 with timers.section("direct solve"):
                     du = lin.solve(-r.ravel())
@@ -499,7 +519,7 @@ def solve_steady(
                 stale = lin_its > s.nk_cfl_adapt_iterations // 4
             # Cap the CFL while the Newton-Krylov switch is pending: a huge
             # pseudo-time step with the approximate Jacobian does not converge.
-            waiting = s.newton_krylov and jvp is not None and not use_nk
+            waiting = s.newton_krylov and has_jvp and not use_nk
             limit = min(cfl_cap, s.cfl_max_approximate) if waiting else cfl_cap
             cfl = min(limit, cfl * ratio)
             if use_nk:
@@ -539,12 +559,15 @@ def solve_steady(
     return SteadyResult(u, bool(converged), history, snapshot())
 
 
-def _newton_operator(t_matrix, jvp, u):
-    """Return v -> (T + J(u)) v for the matrix-free Newton-Krylov solve."""
+def _newton_operator(t_matrix, product, shape):
+    """Return v -> (T + J) v for the matrix-free Newton-Krylov solve.
+
+    ``product(du)`` is ``J @ du`` with ``du`` of the state ``shape``.
+    """
 
     def apply(v):
         with timers.section("Jacobian product"):
-            return t_matrix @ v + np.asarray(jvp(u, v.reshape(u.shape))).ravel()
+            return t_matrix @ v + np.asarray(product(v.reshape(shape))).ravel()
 
     return apply
 
