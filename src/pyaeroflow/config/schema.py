@@ -329,7 +329,7 @@ SCHEMA = {
             "fields": Opt(
                 "string_list",
                 [],
-                "Cauchy convergence on force coefficients, as SU2's CONV_FIELD: "
+                "Cauchy convergence on force coefficients, after SU2's CONV_FIELD: "
                 "the run also stops (converged) when every listed coefficient "
                 "(cl, cd, cm) has changed by less than cauchy_eps on average "
                 "over the last cauchy_elements iterations; empty = residual "
@@ -345,7 +345,8 @@ SCHEMA = {
                 "float",
                 1.0e-10,
                 "Cauchy tolerance on the mean absolute change of a coefficient "
-                "per iteration (SU2 CONV_CAUCHY_EPS)",
+                "per iteration (absolute, not relative to the coefficient; compare "
+                "SU2 CONV_CAUCHY_EPS)",
                 minimum=0.0,
             ),
             "start_iteration": Opt(

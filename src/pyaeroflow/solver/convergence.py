@@ -1,10 +1,14 @@
-"""Force-based convergence of a steady run (SU2's Cauchy criterion)."""
+"""Force-based convergence of a steady run (after SU2's Cauchy criterion)."""
 
 import numpy as np
 
 
 class CauchyCriterion:
-    """Cauchy convergence of monitored coefficients, as SU2's CONV_FIELD.
+    """Cauchy convergence of monitored coefficients, after SU2's CONV_FIELD.
+
+    The change is absolute (``|C_n - C_(n-1)|``), not relative to the
+    coefficient: ``eps`` is in units of the coefficient, so a value taken
+    from an SU2 configuration may need rescaling.
 
     Every accepted iteration adds the change of each coefficient to a window
     of the last ``elements`` changes. The criterion is met when the mean

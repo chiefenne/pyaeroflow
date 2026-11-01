@@ -515,8 +515,9 @@ a reference here.
 
 Model and numerics: `docs/configuration.md`, section "Langtry–Menter
 γ-Re_θ" (TMR "langtrymenter_4eqn" and SU2's `MENTER_LANGTRY`
-implementation, local Tu and dU/ds, nothing frozen in the Newton–Krylov
-JVP).
+implementation, local Tu and dU/ds; the Newton–Krylov step uses the exact
+JVP with `positive_jacobian = false` and the positive linearization of the γ
+source by default since 1.1).
 
 ### ERCOFTAC T3A, T3B and T3A−
 

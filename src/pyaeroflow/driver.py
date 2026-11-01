@@ -349,6 +349,24 @@ class IncompressibleProblem:
         """Artificial compressibility beta^2 for the current state."""
         return inc.beta_squared(self.model, np.asarray(w)[:, :3], self.bc)
 
+    def beta2_tracker(self):
+        """Return ``at(w)``: beta^2 of the state ``w``, cached for the last array.
+
+        The residual takes beta^2 of the state it is evaluated at, including
+        rejected trial states. The Jacobian, the pseudo-time term and the
+        Jacobian-vector products belong to the accepted state, so they must
+        use its beta^2, not the one a rejected trial left behind. The solver
+        passes the same array object to all three during one iteration.
+        """
+        cache = {"w": None, "beta2": None}
+
+        def at(w):
+            if w is not cache["w"]:
+                cache["w"], cache["beta2"] = w, self.beta2(w)
+            return cache["beta2"]
+
+        return at
+
     def residual(self, w, beta2, order=None, psi=None, gamma=None):
         """R(w) for the current beta^2, spatial order and frozen limiter.
 
@@ -730,6 +748,7 @@ class IncompressibleProblem:
                 if resume.get("gamma") is not None:
                     state["gamma"] = jnp.asarray(resume["gamma"])
         uses_limiter = self.model.limiter != "none" and self.model.spatial_order == 2
+        beta2_at = self.beta2_tracker()
 
         def residual(w):
             state["beta2"] = self.beta2(w)
@@ -813,14 +832,14 @@ class IncompressibleProblem:
 
         result = solve_steady(
             residual,
-            lambda w: self.jacobian(w, state["beta2"]),
-            lambda w, cfl: self.time_term(w, state["beta2"], cfl),
+            lambda w: self.jacobian(w, beta2_at(w)),
+            lambda w, cfl: self.time_term(w, beta2_at(w), cfl),
             w0,
             settings or PseudoTimeSettings(),
             residual_startup=residual_startup,
             callback=on_iteration,
             jvp=lambda w, dw: self.jvp(
-                w, dw, state["beta2"], state["psi"], state["gamma"]
+                w, dw, beta2_at(w), state["psi"], state["gamma"]
             ),
             limit_step=self._step_limiter(
                 nu_tilde_step_limit, transition_clip, gamma_guard, guard_stats
@@ -1009,22 +1028,21 @@ class IncompressibleProblem:
         then uses the inner residual). ``resume`` continues an earlier run
         (``step`` and ``u_previous``, see :func:`solve_unsteady`).
         """
-        state = {"beta2": self.beta2(w0)}
+        beta2_at = self.beta2_tracker()
 
         def residual(w):
-            state["beta2"] = self.beta2(w)
-            return self.residual(w, state["beta2"])
+            return self.residual(w, self.beta2(w))
 
         return solve_unsteady(
             residual,
-            lambda w: self.jacobian(w, state["beta2"]),
-            lambda w, cfl: self.time_term(w, state["beta2"], cfl),
+            lambda w: self.jacobian(w, beta2_at(w)),
+            lambda w, cfl: self.time_term(w, beta2_at(w), cfl),
             self.mass(),
             w0,
             settings,
             callback=callback,
             inner_callback=inner_callback,
-            jvp=lambda w, dw: self.jvp(w, dw, state["beta2"]),
+            jvp=lambda w, dw: self.jvp(w, dw, beta2_at(w)),
             limit_step=self._step_limiter(
                 nu_tilde_step_limit, transition_clip, gamma_guard
             ),

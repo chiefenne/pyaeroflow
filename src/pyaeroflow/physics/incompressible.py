@@ -129,7 +129,7 @@ class IncompressibleModel(NamedTuple):
     transition: str = "none"  # "none", "bcm", "aft" (SA-AFT2019b) or "lm" (SST)
     turbulence_intensity: float = 0.0  # freestream Tu in percent (BCM, AFT)
     critical_amplification: float = None  # AFT N_crit; None: from Tu
-    lm_positive_jacobian: bool = False  # LM: positive linearization of the gamma source
+    lm_positive_jacobian: bool = True  # LM: positive linearization of the gamma source
 
     @property
     def n_var(self):
