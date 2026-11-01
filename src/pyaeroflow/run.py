@@ -54,7 +54,7 @@ from pyaeroflow.physics import lm, rans
 from pyaeroflow.physics import spalart_allmaras as sa
 from pyaeroflow.reload import LIVE_STEADY, LIVE_UNSTEADY, reload_case
 from pyaeroflow.solver import DualTimeSettings, LinearSettings, PseudoTimeSettings
-from pyaeroflow.solver.convergence import CauchyCriterion
+from pyaeroflow.solver.convergence import CauchyCriterion, WindowedCauchyCriterion
 
 
 class Scaling(NamedTuple):
@@ -970,8 +970,8 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
         restarts(it, w, good=bool(accepted), state=restart_state)
         if cauchy and accepted and cauchy.update(it, coeffs):
             log.write(
-                f"Cauchy criterion met on {', '.join(cauchy.names)}: mean change "
-                f"below {cauchy.eps:g} over {cauchy.elements} iterations"
+                f"Cauchy criterion met on {', '.join(cauchy.names)}: mean relative "
+                f"change below {cauchy.eps:g} over {cauchy.elements} iterations"
             )
             info["converged"] = True
         if control.stop_requested():
@@ -1147,6 +1147,22 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         GAMMA_STEP_DIAGNOSTICS if diagnose else (),
         resume_after=after,
     )
+    tconv = tm["convergence"]
+    n_steps_total = int(round(tm["end_time"] / tm["time_step"]))
+    window_start = max(tconv["window_start_step"], (after or 0) + 1)
+    tavg = (
+        WindowedCauchyCriterion(
+            tconv["fields"],
+            n_steps_total - window_start + 1,
+            tconv["window_function"],
+            tconv["cauchy_elements"],
+            tconv["cauchy_eps"],
+            tconv["start_step"],
+            window_start,
+        )
+        if tconv["fields"] and monitor
+        else None
+    )
     gamma = {"previous": None}
     if diagnose:  # the first step is compared with the restart state
         _, gamma["previous"] = problem.gamma_step_diagnostics(w0)
@@ -1231,6 +1247,14 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
             extra = f" ({len(names)} fields)" if names else ""
             log.write(f"control file .result_{n}: fields written for step {n}{extra}")
         restarts(step, w, good=bool(converged), time=t * t_scale, state=restart_state)
+        if tavg and tavg.update(step, coeffs):
+            log.write(
+                f"Cauchy criterion met on the time average of "
+                f"{', '.join(tavg.names)}: mean change below {tavg.eps:g} over "
+                f"{tavg.elements} steps"
+            )
+            callback.info["stop"] = True
+            callback.info["time_converged"] = True
         if control.stop_requested():
             log.write(
                 f"control file .stop found: stopping after step {step}, "
@@ -1283,8 +1307,10 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         if result.history["step"].size
         else (resume or {}).get("step", 0)
     )
-    stopped = bool(callback.info.get("stop"))
-    write_final = fields.final or stopped
+    stopped = bool(callback.info.get("stop")) and not callback.info.get(
+        "time_converged"
+    )
+    write_final = fields.final or bool(callback.info.get("stop"))
     if write_final:
         if fields.last != n_steps:
             write_series(n_steps, result.time, result.u)
@@ -1292,6 +1318,17 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
     h = result.history
     log.section("Summary")
     rows = [
+        *(
+            [
+                (
+                    "convergence criterion",
+                    f"Cauchy on the time average of {', '.join(tavg.names)} "
+                    f"(mean change < {tavg.eps:g} over {tavg.elements} steps)",
+                )
+            ]
+            if tavg and callback.info.get("time_converged")
+            else []
+        ),
         ("time steps", f"{n_steps} ({tm['scheme']}, dt = {tm['time_step']} s)"),
         ("final time", f"{result.time * t_scale:.6g} s"),
         ("inner iterations", f"{h['inner_iterations'].mean():.1f} per step (mean)"),
@@ -1495,9 +1532,20 @@ def _mode_rows(cfg):
         rows.append(
             (
                 "Cauchy convergence",
-                f"{', '.join(conv['fields'])}: mean change < {conv['cauchy_eps']:g} "
-                f"over {conv['cauchy_elements']} iterations from iteration "
-                f"{conv['start_iteration']}",
+                f"{', '.join(conv['fields'])}: mean relative change < "
+                f"{conv['cauchy_eps']:g} over {conv['cauchy_elements']} "
+                f"iterations from iteration {conv['start_iteration']}",
+            )
+        )
+    tconv = cfg["time"]["convergence"]
+    if tconv["fields"] and unsteady:
+        rows.append(
+            (
+                "Cauchy convergence (time)",
+                f"time average of {', '.join(tconv['fields'])}: mean relative "
+                f"change < {tconv['cauchy_eps']:g} over {tconv['cauchy_elements']} "
+                f"steps, {tconv['window_function']} window from step "
+                f"{tconv['window_start_step']}",
             )
         )
     tr = cfg["physics"]["transition"]

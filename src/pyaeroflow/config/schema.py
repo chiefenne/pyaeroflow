@@ -329,11 +329,11 @@ SCHEMA = {
             "fields": Opt(
                 "string_list",
                 [],
-                "Cauchy convergence on force coefficients, after SU2's CONV_FIELD: "
+                "Cauchy convergence on force coefficients, as SU2's CONV_FIELD: "
                 "the run also stops (converged) when every listed coefficient "
-                "(cl, cd, cm) has changed by less than cauchy_eps on average "
-                "over the last cauchy_elements iterations; empty = residual "
-                "drop only",
+                "(cl, cd, cm) has changed by less than cauchy_eps (relative "
+                "change between iterations) on average over the last "
+                "cauchy_elements iterations; empty = residual drop only",
             ),
             "cauchy_elements": Opt(
                 "int",
@@ -344,9 +344,8 @@ SCHEMA = {
             "cauchy_eps": Opt(
                 "float",
                 1.0e-10,
-                "Cauchy tolerance on the mean absolute change of a coefficient "
-                "per iteration (absolute, not relative to the coefficient; compare "
-                "SU2 CONV_CAUCHY_EPS)",
+                "Cauchy tolerance on the mean relative change of a coefficient "
+                "per iteration, |C_n - C_(n-1)| / |C_n| (SU2 CONV_CAUCHY_EPS)",
                 minimum=0.0,
             ),
             "start_iteration": Opt(
@@ -541,6 +540,52 @@ SCHEMA = {
             "Starting pseudo-time CFL number of the inner iterations",
             minimum=0.0,
         ),
+        "convergence": {
+            "fields": Opt(
+                "string_list",
+                [],
+                "Cauchy convergence of the windowed time average of force "
+                "coefficients (cl, cd, cm), as SU2's WINDOW_CAUCHY_CRIT with "
+                "CONV_WINDOW_FIELD: the run stops after the current step when "
+                "every listed time-averaged coefficient has changed by less "
+                "than cauchy_eps on average over the last cauchy_elements "
+                "steps; empty = off (the run goes to end_time)",
+            ),
+            "cauchy_elements": Opt(
+                "int",
+                100,
+                "Steps in the Cauchy window (SU2 CONV_WINDOW_CAUCHY_ELEMS)",
+                minimum=2,
+            ),
+            "cauchy_eps": Opt(
+                "float",
+                1.0e-3,
+                "Cauchy tolerance on the mean relative change of the time "
+                "average per step (SU2 CONV_WINDOW_CAUCHY_EPS)",
+                minimum=0.0,
+            ),
+            "start_step": Opt(
+                "int",
+                0,
+                "Steps to wait after window_start_step before the Cauchy "
+                "elements count (SU2 CONV_WINDOW_STARTITER)",
+                minimum=0,
+            ),
+            "window_start_step": Opt(
+                "int",
+                0,
+                "Time step from which the coefficients are averaged "
+                "(SU2 WINDOW_START_ITER)",
+                minimum=0,
+            ),
+            "window_function": Opt(
+                "string",
+                "square",
+                "Weights of the time average over the steps from "
+                "window_start_step to the last step (SU2 WINDOW_FUNCTION)",
+                choices=("square", "hann", "hann_square", "bump"),
+            ),
+        },
     },
     "output": {
         "directory": Opt(

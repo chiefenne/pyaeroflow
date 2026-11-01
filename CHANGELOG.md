@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Cauchy convergence now follows SU2. Steady: a Cauchy element is the
+  relative change of the coefficient between iterations (`|C_n - C_(n-1)| /
+  |C_n|`), not the absolute change; an old `solver.convergence.cauchy_eps`
+  needs rescaling (1e-5 on C_D = 0.02 is about 5e-4). Unsteady: new table
+  `[time.convergence]` (`fields`, `cauchy_elements`, `cauchy_eps`,
+  `start_step`, `window_start_step`, `window_function`) stops the run when the
+  windowed time average of the coefficients has settled
+  (`WINDOW_CAUCHY_CRIT`); `pyaeroflow.solver.convergence.WindowedCauchyCriterion`.
+
 - Fixed: the pseudo-time Jacobian, the pseudo-time term and the
   Jacobian-vector products used β² of the last evaluated residual state. After
   a rejected step that was the rejected trial state (a diverged trial gave an

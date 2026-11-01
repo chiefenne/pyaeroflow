@@ -585,6 +585,21 @@ def _consistency(data, explicit, problems, notices, path):
         problems.append("solver.convergence.fields needs a wall to integrate forces")
     if conv["fields"] and data["solver"]["method"] != "implicit":
         notices.append("solver.convergence.fields ignored: method != implicit")
+    tconv = data["time"]["convergence"]
+    for field in tconv["fields"]:
+        if field not in ("cl", "cd", "cm"):
+            problems.append(
+                _unknown("time.convergence.fields entry", field, ("cl", "cd", "cm"))
+            )
+    if tconv["fields"] and not out["force_boundaries"]:
+        problems.append("time.convergence.fields needs a wall to integrate forces")
+    if tconv["fields"] and data["time"]["mode"] != "unsteady":
+        notices.append("time.convergence.fields ignored: time.mode is steady")
+    if conv["fields"] and data["time"]["mode"] == "unsteady":
+        notices.append(
+            "solver.convergence.fields ignored in an unsteady run "
+            "(see time.convergence)"
+        )
     if data["physics"]["transition"]["model"] != "lm":
         for key in ("clip", "newton_guard", "positive_jacobian"):
             if f"physics.transition.{key}" in explicit:
