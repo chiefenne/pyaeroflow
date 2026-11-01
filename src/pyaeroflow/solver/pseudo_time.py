@@ -53,6 +53,7 @@ from pyaeroflow.solver.linear import (
     factorize,
     solve_matrix_free,
 )
+from pyaeroflow.solver.profile import timers
 
 
 @dataclass(frozen=True)
@@ -307,9 +308,10 @@ def solve_steady(
     u = np.array(u0, dtype=float)
 
     def res(u, it):
-        if residual_startup is not None and it <= s.first_order_iterations:
-            return np.asarray(residual_startup(u))
-        return np.asarray(residual(u))
+        with timers.section("residual"):
+            if residual_startup is not None and it <= s.first_order_iterations:
+                return np.asarray(residual_startup(u))
+            return np.asarray(residual(u))
 
     resume = resume or {}
     it0 = int(resume.get("iteration", 0))
@@ -412,7 +414,8 @@ def solve_steady(
         immediate = s.nk_switch_residual_drop <= 0.0  # dual-time inner iterations
         nk_on = nk_on or immediate or norm <= nk_threshold or by_iteration
         use_nk = s.newton_krylov and jvp is not None and not startup and nk_on
-        t_matrix = time_term(u, cfl)
+        with timers.section("time term"):
+            t_matrix = time_term(u, cfl)
         accepted, lin_its = False, 0
         try:
             reuse = (
@@ -422,20 +425,26 @@ def solve_steady(
                 and not stale
             )
             if not reuse:
-                lin = factorize(jacobian(u) + t_matrix, s.linear)
+                with timers.section("assemble matrix"):
+                    matrix = jacobian(u) + t_matrix
+                with timers.section("factorize"):
+                    lin = factorize(matrix, s.linear)
+                del matrix
                 steps_since_factor, cfl_at_factor = 0, cfl
             steps_since_factor += 1
             if use_nk:
-                du, lin_its = solve_matrix_free(
-                    _newton_operator(t_matrix, jvp, u),
-                    -r.ravel(),
-                    lin.precondition,
-                    tolerance=eta if s.nk_forcing else s.nk_linear_tolerance,
-                    restart=s.nk_restart,
-                    max_iterations=s.nk_max_krylov,
-                )
+                with timers.section("nk solve (GMRES)"):
+                    du, lin_its = solve_matrix_free(
+                        _newton_operator(t_matrix, jvp, u),
+                        -r.ravel(),
+                        _timed("preconditioner", lin.precondition),
+                        tolerance=eta if s.nk_forcing else s.nk_linear_tolerance,
+                        restart=s.nk_restart,
+                        max_iterations=s.nk_max_krylov,
+                    )
             else:
-                du = lin.solve(-r.ravel())
+                with timers.section("direct solve"):
+                    du = lin.solve(-r.ravel())
                 lin_its = lin.iterations
             du = du.reshape(u.shape)
             if limit_step is not None:
@@ -534,9 +543,20 @@ def _newton_operator(t_matrix, jvp, u):
     """Return v -> (T + J(u)) v for the matrix-free Newton-Krylov solve."""
 
     def apply(v):
-        return t_matrix @ v + np.asarray(jvp(u, v.reshape(u.shape))).ravel()
+        with timers.section("Jacobian product"):
+            return t_matrix @ v + np.asarray(jvp(u, v.reshape(u.shape))).ravel()
 
     return apply
+
+
+def _timed(name, func):
+    """Wrap ``func`` so that every call is timed under ``name``."""
+
+    def wrapped(x):
+        with timers.section(name):
+            return func(x)
+
+    return wrapped
 
 
 def solve_explicit(

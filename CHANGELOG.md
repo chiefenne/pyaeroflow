@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Performance (C0): the PARDISO solver no longer lets `pypardiso` hash the whole
+  matrix and rebuild the 1-based index arrays at every solve (0.66 s per
+  preconditioner application at 78 M non-zeros, i.e. per GMRES iteration), and a
+  new factorization of the same sparsity re-uses the reordering and symbolic
+  analysis (phase 22). Same results as before; falls back to the stock
+  `pypardiso` calls for other versions. New "Timing" block at the end of the run
+  log with the wall time of assembly, factorization, preconditioner, Jacobian
+  products and residuals.
 - Meshes and example cases: the SD7003 PyAero C-meshes of the validation runs
   (`sd7003_C10_W25_320k_cells.su2` sharp trailing edge, `..._blunt_TE.su2`), the
   SD7003 O-grid (`sd7003_ogrid_39k.su2` with `make_sd7003_ogrid.py`), the NACA
