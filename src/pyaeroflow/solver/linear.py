@@ -338,7 +338,10 @@ def factorize(matrix, settings=None):
 def solve_matrix_free(
     apply, rhs, precondition, tolerance=1.0e-2, restart=50, max_iterations=200
 ):
-    """Right-preconditioned restarted GMRES for an operator given as a function.
+    """Restarted GMRES for an operator given as a function.
+
+    SciPy's GMRES is left-preconditioned: it stops when the preconditioned
+    residual and the true residual have both dropped by ``tolerance``.
 
     Parameters
     ----------

@@ -464,6 +464,25 @@ SCHEMA = {
                 "320k cells with Langtry-Menter during the GMRES solve. false "
                 "uses jax.jvp per product (no extra memory, slower)",
             ),
+            "forcing_max": Opt(
+                "float",
+                0.1,
+                "Upper bound of the Eisenstat-Walker forcing term (relative GMRES "
+                "tolerance of a Newton step, 0.9 (|R_k| / |R_k-1|)^2 bounded below "
+                "by linear_tolerance); was fixed at 0.5 before",
+                minimum=0.0,
+            ),
+            "full_source_jacobian": Opt(
+                "bool",
+                True,
+                "SST and SST-LM: precondition the Newton-Krylov phase with the "
+                "complete cell-local source Jacobian (production, cross "
+                "diffusion, couplings of k, omega, gamma and Re_thetat; gradients "
+                "frozen) instead of the destruction part of the start-up phase: "
+                "about half the GMRES iterations on the Langtry-Menter plates. "
+                "Only the preconditioner changes, not the converged solution; "
+                "false restores the start-up matrix",
+            ),
             "cfl_adapt_iterations": Opt(
                 "int",
                 60,

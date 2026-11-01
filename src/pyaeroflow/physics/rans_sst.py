@@ -77,6 +77,7 @@ __all__ = [
     "boundary_flux",
     "jacobian_coefficients",
     "source_blocks",
+    "full_source_blocks",
     "time_term_blocks",
     "segregated_mask",
     "cell_quantities",
@@ -428,6 +429,63 @@ def source_blocks(model, geom, bc, w):
     blocks = blocks.at[:, NK, NW].set(a * d_fac * sst.BETA_STAR * k)
     nu = kinematic_viscosity(model)
     return blocks.at[:, NW, NW].set(nu * a * 2.0 * beta * omega)
+
+
+@partial(jax.jit, static_argnums=0)
+def full_source_blocks(model, geom, bc, w):
+    """Complete cell-local source Jacobian (n_cells, n_var, n_var).
+
+    The derivatives of all SST (and Langtry-Menter) sources of a cell with
+    respect to the turbulence variables of the same cell, production, cross
+    diffusion and the couplings between k, omega, gamma and Re_thetat
+    included, with the stencil quantities (gradients, strain, vorticity, dU/ds)
+    frozen. Used only in the preconditioner of the Newton-Krylov phase, where
+    the pseudo-time term no longer dominates: the destruction-only blocks of
+    :func:`source_blocks` leave out exactly the cell-local couplings that the
+    exact Jacobian-vector product carries, and GMRES then needs about twice
+    the iterations. The pseudo-time steps of the start-up phase keep
+    :func:`source_blocks` (a positive production derivative there can make
+    the implicit step unstable). Row-scaled like the residual.
+    """
+    w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
+    grad = lsq_gradient(geom, w, w_b)
+    strain, _, _, _, kgw = cell_quantities(model, geom, w, grad)
+    vort, speed, du_ds = _flow_inputs(w, grad)
+    nu = kinematic_viscosity(model)
+    switch = jnp.broadcast_to(
+        1.0 if geom.production_switch is None else geom.production_switch,
+        (w.shape[0],),
+    )
+    scale = _row_scale(model)
+    lm_on = model.transition == "lm"
+
+    def cell(t, area, s, om_v, d, spd, dsd, kg, sw):
+        k = jnp.maximum(t[0], 0.0)
+        omega = jnp.maximum(t[1], OMEGA_MIN)
+        f1, f2 = sst.blending(k, omega, nu, d, kg)
+        g_eff = None
+        out = []
+        if lm_on:
+            f1 = jnp.maximum(f1, lm.blending_f3(k, nu, d))
+            args = (t[2], t[3], k, omega, nu, s, om_v, d, spd, dsd)
+            g_eff = lm.effective_intermittency(*args[:9])
+            out = list(lm.sources(*args, positive=model.lm_positive_jacobian))
+        s_k, s_w = sst.sources(t[0], omega, s, f1, f2, kg, sw, g_eff)
+        return -area * jnp.stack([s_k, s_w] + out) * scale
+
+    local = jax.vmap(jax.jacfwd(cell))(
+        w[:, NK:],
+        geom.area,
+        strain,
+        vort,
+        geom.wall_distance,
+        speed,
+        du_ds,
+        kgw,
+        switch,
+    )
+    blocks = jnp.zeros((w.shape[0], w.shape[1], w.shape[1]))
+    return blocks.at[:, NK:, NK:].set(local)
 
 
 @partial(jax.jit, static_argnums=0)

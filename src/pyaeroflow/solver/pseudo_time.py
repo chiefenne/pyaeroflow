@@ -113,8 +113,24 @@ class PseudoTimeSettings:
     nk_forcing : bool
         Eisenstat-Walker forcing: the GMRES tolerance of a Newton step is
         0.9 (|R_k| / |R_{k-1}|)^2, bounded by ``nk_linear_tolerance`` from
-        below and 0.5 from above, so that the linear solve is only as
+        below and ``nk_forcing_max`` from above, so that the linear solve is only as
         accurate as the nonlinear progress warrants (Knoll & Keyes 2004).
+    nk_forcing_max : float
+        Upper bound of the forcing term. SciPy's GMRES is left-preconditioned
+        and also checks the true residual, so with the first-order
+        preconditioner a bound of 0.5 used to give true linear residuals of
+        0.02-0.07; with the full-source preconditioner it is met as asked and
+        the Newton steps degrade (66k LM plate restart: not converged in 50
+        steps at 0.5, converged in 18 at 0.1).
+    nk_full_sources : bool
+        Precondition the Newton-Krylov phase with the complete cell-local
+        source Jacobian (production, cross diffusion and the couplings of the
+        turbulence and transition variables, gradients frozen) instead of the
+        destruction part that the start-up phase uses (``jacobian_newton`` of
+        :func:`solve_steady`). Only the preconditioner changes, so the
+        converged solution is the same; GMRES needs about half the
+        iterations on the Langtry-Menter plates. The factorization is rebuilt
+        at the switch.
     nk_linearize : bool
         Linearize the residual once per Newton step (``jax.linearize``) and
         apply the stored tangent in the GMRES products, instead of a full
@@ -184,6 +200,8 @@ class PseudoTimeSettings:
     nk_cfl_adapt_iterations: int = 60
     nk_forcing: bool = True
     nk_linearize: bool = True
+    nk_full_sources: bool = True
+    nk_forcing_max: float = 0.1
     line_search_steps: int = 2
     cfl_control: str = "growth"
     ser_exponent: float = 1.0
@@ -246,6 +264,7 @@ def solve_steady(
     reference_norm=None,
     limit_step=None,
     resume=None,
+    jacobian_newton=None,
 ):
     """Drive ``residual(u)`` to zero by implicit pseudo-time stepping.
 
@@ -289,6 +308,10 @@ def solve_steady(
         diagonal of the pseudo-time matrix at CFL 1 (area / dt per cell and
         variable, shaped like ``u``), so ``-r / tau`` is the explicit local
         step of a cell (e.g. a cap on the turbulence variable's change).
+    jacobian_newton : callable, optional
+        ``jacobian_newton(u) -> scipy.sparse``: the matrix (instead of
+        ``jacobian``) whose factorization with the pseudo-time term
+        preconditions the Newton-Krylov phase, if ``settings.nk_full_sources``.
     resume : dict, optional
         Solver state of an earlier run (``SteadyResult.state``). With
         ``iteration`` the run continues that run: the counting starts after
@@ -396,6 +419,7 @@ def solve_steady(
     use_linearize = linearize is not None and s.nk_linearize
     has_jvp = jvp is not None or use_linearize
     lin, steps_since_factor, cfl_at_factor = None, 0, cfl
+    lin_newton = False  # lin was built from jacobian_newton
     stale = False  # the preconditioner let GMRES work hard: rebuild it
     max_iterations = s.max_iterations
     it = it0
@@ -431,20 +455,24 @@ def solve_steady(
         with timers.section("time term"):
             t_matrix = time_term(u, cfl)
         accepted, lin_its = False, 0
+        newton_matrix = use_nk and s.nk_full_sources and jacobian_newton is not None
         try:
             reuse = (
                 lin is not None
+                and lin_newton == newton_matrix
                 and steps_since_factor < s.refactor_interval
                 and cfl <= cfl_at_factor * s.refactor_cfl_ratio
                 and not stale
             )
             if not reuse:
                 with timers.section("assemble matrix"):
-                    matrix = jacobian(u) + t_matrix
+                    jac = jacobian_newton if newton_matrix else jacobian
+                    matrix = jac(u) + t_matrix
                 with timers.section("factorize"):
                     lin = factorize(matrix, s.linear)
                 del matrix
                 steps_since_factor, cfl_at_factor = 0, cfl
+                lin_newton = newton_matrix
             steps_since_factor += 1
             if use_nk:
                 if use_linearize:
@@ -524,7 +552,8 @@ def solve_steady(
             cfl = min(limit, cfl * ratio)
             if use_nk:
                 eta = min(
-                    0.5, max(s.nk_linear_tolerance, 0.9 * (abs_new / norm_abs) ** 2)
+                    s.nk_forcing_max,
+                    max(s.nk_linear_tolerance, 0.9 * (abs_new / norm_abs) ** 2),
                 )
             u, r, norm_abs = u_new, r_new, abs_new
             # Peaks of the per-variable residuals set the scales (D54).

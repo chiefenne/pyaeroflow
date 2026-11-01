@@ -812,6 +812,8 @@ def _pseudo_time_settings(cfg):
         nk_max_krylov=solver["newton_krylov"]["max_iterations"],
         nk_cfl_adapt_iterations=solver["newton_krylov"]["cfl_adapt_iterations"],
         nk_linearize=solver["newton_krylov"]["linearize"],
+        nk_full_sources=solver["newton_krylov"]["full_source_jacobian"],
+        nk_forcing_max=solver["newton_krylov"]["forcing_max"],
         refactor_interval=solver["refactor_interval"],
         linear=LinearSettings(**solver["linear_solver"]),
     )

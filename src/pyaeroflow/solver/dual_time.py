@@ -107,12 +107,13 @@ def solve_unsteady(
     linearize=None,
     limit_step=None,
     resume=None,
+    jacobian_newton=None,
 ):
     """Advance ``M du/dt + R(u) = 0`` from ``u0`` to ``settings.end_time``.
 
     Parameters
     ----------
-    residual, jacobian, time_term, jvp, linearize
+    residual, jacobian, time_term, jvp, linearize, jacobian_newton
         As in :func:`solve_steady` (steady residual and its operators).
     mass : array, shape (n_cells, n_var)
         Diagonal of the mass matrix M.
@@ -174,6 +175,12 @@ def solve_unsteady(
         def jac_t(u, a0=a0):
             return jacobian(u) + a0 * m_diag
 
+        jac_newton_t = None
+        if jacobian_newton is not None:
+
+            def jac_newton_t(u, a0=a0):
+                return jacobian_newton(u) + a0 * m_diag
+
         jvp_t = None
         if jvp is not None:
 
@@ -203,6 +210,7 @@ def solve_unsteady(
             linearize=lin_t,
             reference_norm=norm_n,
             limit_step=limit_step,
+            jacobian_newton=jac_newton_t,
         )
         h = inner.history
         t = step * dt

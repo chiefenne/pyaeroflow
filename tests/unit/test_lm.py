@@ -383,3 +383,66 @@ def test_step_limiter_without_clip_leaves_gamma_unclipped():
     free = w + p._step_limiter(None, False)(w, du)
     assert clipped[:, rans_sst.NGL].min() == pytest.approx(lm.GAMMA_LIMITS[0])
     assert free[:, rans_sst.NGL].max() < 1e-142  # the 99 % limit only
+
+
+def test_full_source_preconditioner_cuts_gmres_iterations():
+    """Newton-Krylov preconditioner with the complete cell-local source Jacobian."""
+    from pyaeroflow.solver.linear import factorize, solve_matrix_free
+
+    p, k_omega = _lm_plate(n=(16, 6, 16), positive=True)
+    w = np.array(p.initial_state((1.0, 0.0), k_omega=k_omega))
+    rng = np.random.default_rng(3)
+    w[:, 1:3] *= 1.0 + 0.05 * rng.standard_normal((w.shape[0], 2))
+    w[:, rans_sst.NGL] = rng.uniform(0.05, 1.0, w.shape[0])
+    w[:, rans_sst.NRT] *= rng.uniform(0.5, 1.5, w.shape[0])
+    blocks = np.asarray(rans_sst.full_source_blocks(p.model, p.geom, p.bc, w))
+    assert blocks.shape == (w.shape[0], 7, 7)
+    assert np.all(blocks[:, :3, :] == 0.0) and np.all(blocks[:, :, :3] == 0.0)
+    assert np.any(blocks[:, rans_sst.NGL, rans_sst.NK] != 0.0)  # gamma <- k coupling
+    b2 = p.beta2(w)
+    t = p.time_term(w, b2, 1e6)
+    apply_j = p.linearize(w, b2)
+    shape = w.shape
+
+    def op(v):
+        return t @ v + np.asarray(apply_j(v.reshape(shape))).ravel()
+
+    rhs = -np.asarray(p.residual(w, b2)).ravel()
+    its = []
+    for newton in (False, True):
+        lu = factorize(p.jacobian(w, b2, newton=newton) + t)
+        _, n = solve_matrix_free(op, rhs, lu.precondition, tolerance=1e-2)
+        its.append(n)
+    assert its[1] <= its[0]
+
+
+def test_solve_steady_uses_newton_matrix_only_in_newton_krylov_phase():
+    from pyaeroflow.solver import PseudoTimeSettings, solve_steady
+
+    p, k_omega = _lm_plate()
+    w0 = p.initial_state((1.0, 0.0), k_omega=k_omega)
+    b2 = p.beta2(w0)
+    calls = []
+
+    def jac(w):
+        calls.append("startup")
+        return p.jacobian(w, b2)
+
+    def jac_newton(w):
+        calls.append("newton")
+        return p.jacobian(w, b2, newton=True)
+
+    s = PseudoTimeSettings(
+        max_iterations=6, nk_switch_iteration=3, nk_switch_residual_drop=20.0
+    )
+    solve_steady(
+        lambda w: p.residual(w, b2),
+        jac,
+        lambda w, cfl: p.time_term(w, b2, cfl),
+        w0,
+        s,
+        linearize=lambda w: p.linearize(w, b2),
+        jacobian_newton=jac_newton,
+    )
+    assert calls[0] == "startup" and "newton" in calls
+    assert "startup" not in calls[calls.index("newton") :]

@@ -440,12 +440,14 @@ class IncompressibleProblem:
         """Limiter values of the state ``w``, shape (n_cells, n_var)."""
         return self.physics.limiter(self.model, self.geom, self.bc, jnp.asarray(w))
 
-    def jacobian(self, w, beta2):
+    def jacobian(self, w, beta2, newton=False):
         """First-order Jacobian, with the pinned row replaced if any.
 
         With a turbulence model the cell-local source Jacobian is added and,
         for ``coupling = "segregated"``, the mean-flow/turbulence coupling
-        blocks are dropped (D34).
+        blocks are dropped (D34). ``newton=True`` (preconditioner of the
+        Newton-Krylov phase, SST) adds the complete cell-local source Jacobian
+        instead of its destruction part (:func:`rans_sst.full_source_blocks`).
         """
         w = jnp.asarray(w)
         b_args = (self.bc.kind, self.bc.value)
@@ -467,9 +469,12 @@ class IncompressibleProblem:
             )
         src = None
         if self.turbulent:
-            src = np.asarray(
-                self.physics.source_blocks(self.model, self.geom, self.bc, w)
+            blocks = (
+                rans_sst.full_source_blocks
+                if newton and self.model.turbulence == "sst"
+                else self.physics.source_blocks
             )
+            src = np.asarray(blocks(self.model, self.geom, self.bc, w))
         pin = ()
         if self.model.pin is not None:
             pin = (self.model.pin[0] * self.model.n_var + inc.P,)
@@ -524,6 +529,12 @@ class IncompressibleProblem:
                 diag.append(
                     np.asarray(
                         self.physics.source_blocks(self.model, self.geom, self.bc, xj)
+                    )
+                )
+            if self.model.turbulence == "sst":
+                diag.append(
+                    np.asarray(
+                        rans_sst.full_source_blocks(self.model, self.geom, self.bc, xj)
                     )
                 )
         masks = structural_masks(
@@ -919,6 +930,7 @@ class IncompressibleProblem:
             lambda w, cfl: self.time_term(w, beta2_at(w), cfl),
             w0,
             settings or PseudoTimeSettings(),
+            jacobian_newton=self._newton_jacobian(beta2_at),
             residual_startup=residual_startup,
             callback=on_iteration,
             jvp=lambda w, dw: self.jvp(
@@ -1134,7 +1146,14 @@ class IncompressibleProblem:
                 nu_tilde_step_limit, transition_clip, gamma_guard
             ),
             resume=resume,
+            jacobian_newton=self._newton_jacobian(beta2_at),
         )
+
+    def _newton_jacobian(self, beta2_at):
+        """Preconditioner matrix of the Newton-Krylov phase, or None (= start-up's)."""
+        if self.model.turbulence != "sst":
+            return None
+        return lambda w: self.jacobian(w, beta2_at(w), newton=True)
 
     def solve_explicit(
         self, w0=None, cfl=0.8, max_iterations=20000, residual_drop=8.0, callback=None

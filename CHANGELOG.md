@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Newton-Krylov: the preconditioner of the Newton-Krylov phase (SST, SST-LM)
+  carries the complete cell-local source Jacobian (production, cross diffusion
+  and the couplings of k, omega, gamma and Re_thetat, gradients frozen) instead
+  of the destruction-only blocks of the start-up phase
+  (`solver.newton_krylov.full_source_jacobian = true`, Python API
+  `nk_full_sources`, `rans_sst.full_source_blocks`). The upper bound of the
+  Eisenstat-Walker forcing term is now an option, `forcing_max`, default 0.1
+  (was fixed at 0.5). Only the linear solves change, not the residual or the
+  converged solution. At fixed states GMRES needs about half the iterations
+  (66k-cell LM plate 20 -> 12 at tolerance 0.01); 66k-cell LM plate restart
+  from iteration 400: converged in 18 Newton steps, 245 products, 218 s, where
+  the old settings had not converged after 50 steps (850 products, 582 s).
+  `full_source_jacobian = false, forcing_max = 0.5` restores the old behaviour.
 - Performance (C2): the first-order Jacobian is assembled in one pass on its
   structurally non-zero entries: the sources and the pressure pin are written
   into the same bincount (no `block_diagonal` / `replace_rows` sparse adds, no
