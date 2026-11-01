@@ -99,7 +99,7 @@ def test_separation_intermittency():
     assert float(g) == pytest.approx(0.0, abs=1e-12)
 
 
-def _lm_plate(n=(12, 4, 12)):
+def _lm_plate(n=(12, 4, 12), positive=False):
     k = 1.5 * 0.01**2  # Tu 1 %
     mesh = tp.plate_mesh(*n, reynolds=1e5)
     turb = {"k": k, "omega": k / (10.0 * 1e-5)}
@@ -110,7 +110,12 @@ def _lm_plate(n=(12, 4, 12)):
         "symmetry": {"type": "symmetry"},
         "plate": {"type": "wall"},
     }
-    model = inc.IncompressibleModel(viscosity=1e-5, turbulence="sst", transition="lm")
+    model = inc.IncompressibleModel(
+        viscosity=1e-5,
+        turbulence="sst",
+        transition="lm",
+        lm_positive_jacobian=positive,
+    )
     return IncompressibleProblem(mesh, model, cond), (k, turb["omega"])
 
 

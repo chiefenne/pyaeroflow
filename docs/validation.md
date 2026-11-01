@@ -515,8 +515,9 @@ a reference here.
 
 Model and numerics: `docs/configuration.md`, section "Langtry–Menter
 γ-Re_θ" (TMR "langtrymenter_4eqn" and SU2's `MENTER_LANGTRY`
-implementation, local Tu and dU/ds, nothing frozen in the Newton–Krylov
-JVP).
+implementation, local Tu and dU/ds; the Newton–Krylov step uses the exact
+JVP with `positive_jacobian = false` and the positive linearization of the γ
+source by default since 1.1).
 
 ### ERCOFTAC T3A, T3B and T3A−
 
@@ -694,7 +695,7 @@ are described in `docs/configuration.md`; the polar above was run before
 them (exact linearization, no guard). Measured on the 320k case (α = 4°, restart from iteration 662, `positive_jacobian = true`, no guard): the first update lifted the eight floor cells off the floor (γ +0.37 to +0.70), none was at the floor afterwards, the γ residual fell from 10⁻⁵·⁷ to 10⁻¹¹·⁷, and the run converged (7.1 orders) in 13 Newton–Krylov iterations (about 38 s each) at unchanged forces, C_L 0.593069, C_D 0.022761, C_M 0.039252; the exact linearization had not converged in 98 further iterations. The forces
 themselves stood still to four or five digits: C_L and
 C_D jitter by 2·10⁻⁶ to 5·10⁻⁶ per iteration, which is above the 10⁻⁶ and
-10⁻⁸ of the Cauchy criterion first set; with `cauchy_eps = 1e-5` the criterion
+10⁻⁸ of the Cauchy criterion first set; with an absolute `cauchy_eps = 1e-5` (about 4·10⁻⁴ relative to C_D, which is how the criterion measures since the next release) the criterion
 would have ended α = 4° at about iteration 150 instead of 662. α = 0° was still
 drifting (C_L 2·10⁻⁴ relative per iteration when stopped at iteration 162).
 The CSV holds the last state of each run. α = 9° and 10° ended on the

@@ -1,28 +1,53 @@
 # Changelog
 
-## 1.1 – Positive γ linearization for Langtry–Menter (2026-10-31)
+## Unreleased
 
-- Langtry–Menter: the γ residual of the 320k SD7003 runs stalled at 10⁻⁵·⁴
-  because of eight cells at the clip floor γ = 10⁻⁴ whose exact Newton update
-  pointed away from the root (the √γ derivative of the production, 50 at the
-  floor, turns the diagonal of a shear-layer cell negative); the clip
-  discarded the update every iteration and the cells kept a residual of
-  hundreds, which also held the Newton–Krylov forcing term at its cap. Two
-  new options of `[physics.transition]`: `positive_jacobian` (default true,
-  a change of the LM Newton step) leaves the diagonal-lowering derivatives
-  of the γ source out of the Newton–Krylov Jacobian, the residual is
-  unchanged (T3A start-up: 2.4 orders in 60 iterations against 1.2; 320k SD7003 α = 4°
+- Cauchy convergence now follows SU2. Steady: a Cauchy element is the
+  relative change of the coefficient between iterations (`|C_n - C_(n-1)| /
+  |C_n|`), not the absolute change; an old `solver.convergence.cauchy_eps`
+  needs rescaling (1e-5 on C_D = 0.02 is about 5e-4). Unsteady: new table
+  `[time.convergence]` (`fields`, `cauchy_elements`, `cauchy_eps`,
+  `start_step`, `window_start_step`, `window_function`) stops the run when the
+  windowed time average of the coefficients has settled
+  (`WINDOW_CAUCHY_CRIT`); `pyaeroflow.solver.convergence.WindowedCauchyCriterion`.
+
+- Fixed: the pseudo-time Jacobian, the pseudo-time term and the
+  Jacobian-vector products used β² of the last evaluated residual state. After
+  a rejected step that was the rejected trial state (a diverged trial gave an
+  infinite or NaN β² and every later step failed); they now use β² of the
+  accepted state (`IncompressibleProblem.beta2_tracker`, also in dual time).
+- API: `IncompressibleModel.lm_positive_jacobian` now defaults to True, as the
+  case-file option `positive_jacobian` (1.1) did; before, only case files got
+  the new default.
+- Documentation: the Cauchy criterion works on the absolute change of the
+  coefficient, not on the change relative to it; the docs said "as SU2". Wording
+  fixed, behaviour unchanged. Version references (no release 0.10), the LM
+  linearization wording, the D54 exclusion threshold (10⁻¹²), the status lines
+  of `requirements.md` and the model-choice guide corrected.
+
+## 1.1.0 – Positive γ linearization for Langtry–Menter (2026-10-31)
+
+- Langtry–Menter, `physics.transition.positive_jacobian` (default true; a
+  change of the LM Newton step): the γ residual of the 320k SD7003 runs
+  stalled at 10⁻⁵·⁴ because of eight cells at the clip floor γ = 10⁻⁴ whose
+  exact Newton update pointed away from the root (the √γ derivative of the
+  production, 50 at the floor, turns the diagonal of a shear-layer cell
+  negative); the clip discarded the update every iteration and the cells kept
+  a residual of hundreds, which also held the Newton–Krylov forcing term at
+  its cap. The option leaves the diagonal-lowering derivatives of the γ
+  source out of the Newton–Krylov Jacobian; the residual is unchanged (T3A
+  start-up: 2.4 orders in 60 iterations against 1.2; 320k SD7003 α = 4°
   restart: converged in 13 Newton–Krylov iterations at unchanged forces,
-  where the exact linearization stalled for 98 iterations);
-  `newton_guard` (default false) replaces such an update by the explicit
-  local step −R Δt/A at CFL 1 of the cell and the log Summary counts the
-  firings (`gamma descent guard`). Both are named in the Configuration block
-  of the log; `positive_jacobian = false` restores the 1.0 behaviour. The
-  step limiter hook of the solver now receives the residual and the
+  where the exact linearization stalled for 98 iterations).
+  `positive_jacobian = false` restores the 1.0 behaviour.
+- Langtry–Menter, `physics.transition.newton_guard` (new, default false):
+  replaces such an update by the explicit local step −R Δt/A at CFL 1 of the
+  cell; the log Summary counts the firings (`gamma descent guard`). Both
+  options are named in the Configuration block of the log.
+- API: the step limiter hook of the solver now receives the residual and the
   pseudo-time diagonal at CFL 1: `limit_step(u, du, r, tau)`.
 
-## 1.0 – Gmsh meshes, airfoil workflow, control files, LM polar (2026-10-30)
-
+## 1.0.0 – Gmsh meshes, airfoil workflow, control files, LM polar (2026-10-30)
 - `.read_toml_N` control file: at iteration or step N the run reads the case
   file again and applies the output and restart settings, and (steady)
   `solver.max_iterations`, `solver.residual_drop` and `solver.convergence`;
@@ -31,33 +56,26 @@
 - Field names inside a `.result_N` file are written in addition to
   `output.fields` for that file. New command `pyaeroflow fields case.toml`
   lists the fields a case provides.
-
 - `solver.newton_krylov.cfl_adapt_iterations` (default 60, as before): the
   GMRES effort at which the adaptive CFL cap is quartered; a quarter of it is
   the effort below which the cap grows. A larger value lets the CFL grow where
   GMRES needs 20–50 iterations per step.
-
 - Documentation: SD7003 SST-LM polar on the 320k PyAero mesh (`docs/validation.md` §10,
   limits in §11); 1.0 list item 2 closed.
-
 - The Configuration block of the log names the SU2 clip of gamma and Re_thetat
   for Langtry–Menter cases also when it is on (the default); before, only
   `physics.transition.clip = false` was logged.
-
 - `solver.cfl.polar_reset = true`: `pyaeroflow polar` restarts the CFL ramp at each
   new angle (Newton–Krylov switch and limiter kept) instead of carrying the CFL
   of the previous angle. Default off.
-
 - `pyaeroflow init-case MESH --model sa|bcm|aft|sst|lm|laminar|euler --re R
   --alpha A` writes a validated case file for a PyAero or Gmsh airfoil mesh
   (L4); `pyaeroflow check-mesh MESH --re R` reports y⁺, the first layer,
   faces per side, farfield distance and cell-size jumps with warnings
   (`pyaeroflow.initcase`, `pyaeroflow.meshcheck`, `docs/pyaero.md` section 0).
-
 - The wall CSV files now run along the contour (trailing edge, upper side,
   leading edge, lower side, as PyAero's airfoil) and have an arc-length column
   `s` at the end; the face order of the mesh was the order before.
-
 - Gmsh reader (L6): `mesh.file` may be a Gmsh `.msh` file (`read_msh`, and
   `read_mesh`, which picks the reader from the extension). Formats 2.2 (also
   2.0, 2.1), 4.0 (ASCII) and 4.1, ASCII and binary, either byte order; read
@@ -65,12 +83,12 @@
   second-order types with their corner nodes; the curves' physical groups
   become the boundary names. See `docs/configuration.md` ("Gmsh meshes").
 
-## 0.9 – Transition models, SST, control files (2026-10-27)
+## 0.9.0 – Transition models, SST, control files (2026-10-27)
 
 Covers transition steps 1–4 (SA-BCM, SA-AFT2019b, k-ω SST, Langtry–Menter);
 the 0.8 section below was never released separately.
 
-### Transition, step 2: SA-AFT2019b
+### Transition steps 2–4, SST, solver state and output
 
 - Force-based convergence (`solver.convergence`): `fields = ["cd"]` adds
   SU2's Cauchy criterion (mean change of the coefficient per iteration below
