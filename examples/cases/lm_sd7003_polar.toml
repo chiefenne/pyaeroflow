@@ -1,0 +1,96 @@
+# SD7003 at Re = 6e4, SST-LM (physics.transition.model = "lm"): the polar of
+# docs/validation.md section 10 on the 320k PyAero C-mesh. Tu 0.1 %,
+# nu_t/nu = 1, the SU2 clip of gamma and Re_thetat (default), growth CFL with
+# polar_reset, the Cauchy criterion on C_D and C_L next to the residual drop,
+# a wall CSV per angle and the final fields only.
+# Mesh: ../meshes/sd7003_C10_W25_320k_cells.su2 (see examples/meshes/README.md).
+#
+# The validated polar started at alpha 4 from the converged state of
+# lm_sd7003.toml (alpha 4). Run that case first, then copy its last backup and
+# uncomment the restart line below:
+#   mkdir -p output/lm_sd7003_polar
+#   cp $(ls output/lm_sd7003/lm_sd7003.backup_*.npz | tail -1) output/lm_sd7003_polar/start.npz
+# Without it the first angle starts from the freestream and needs about 2000
+# iterations. Run from the folder of this file:
+#   pyaeroflow polar lm_sd7003_polar.toml --alpha 4 6 8 9 10 2 0
+# Each later angle restarts from the previous one. Since 1.1 the default
+# physics.transition.positive_jacobian = true applies; the polar of section 10
+# was computed before it (positive_jacobian = false) and has not been rerun.
+
+[case]
+name = "lm_sd7003_polar"
+
+[mesh]
+file = "../meshes/sd7003_C10_W25_320k_cells.su2"   # boundary faces: airfoil, inlet, outlet, top, bottom
+
+[physics]
+model = "rans"
+turbulence = "sst"
+
+[physics.transition]
+model = "lm"
+
+[fluid]
+density = 1.0                     # kg/m^3
+viscosity = 1.6667e-5             # Pa s: Re = 6e4 with U = 1 m/s, c = 1 m
+
+[reference]
+velocity = 1.0                    # m/s
+length = 1.0                      # m, chord
+moment_center = [0.25, 0.0]       # m, quarter chord
+vortex_correction = true
+
+[initial]
+from_boundary = "inlet"
+# restart = "output/lm_sd7003_polar/start.npz"   # converged alpha 4 of lm_sd7003.toml
+
+[boundary.airfoil]
+type = "wall"
+
+[boundary.inlet]
+type = "farfield"
+velocity = 1.0
+angle_of_attack = 4.0             # deg, overridden by the polar
+pressure = 0.0
+turbulence = { turbulent_viscosity_ratio = 1.0, intensity = 0.001 }   # Tu 0.1 %, nu_t/nu 1
+
+[boundary.outlet]
+type = "farfield"
+velocity = 1.0
+angle_of_attack = 4.0
+pressure = 0.0
+turbulence = { turbulent_viscosity_ratio = 1.0, intensity = 0.001 }
+
+[boundary.top]
+type = "farfield"
+velocity = 1.0
+angle_of_attack = 4.0
+pressure = 0.0
+turbulence = { turbulent_viscosity_ratio = 1.0, intensity = 0.001 }
+
+[boundary.bottom]
+type = "farfield"
+velocity = 1.0
+angle_of_attack = 4.0
+pressure = 0.0
+turbulence = { turbulent_viscosity_ratio = 1.0, intensity = 0.001 }
+
+[numerics]
+limiter = "venkatakrishnan"
+limiter_freeze = { after_residual_drop = 1.5, after_iterations = 40, release = true }
+
+[solver]
+residual_drop = 7.0
+max_iterations = 1500   # per angle (the polar restarts the counter); a converged angle needs far fewer
+cfl = { control = "growth", max = 1.0e5, polar_reset = true }   # each polar angle restarts the CFL ramp
+newton_krylov = { switch_at_residual_drop = 1.5, switch_at_iteration = 40, restart = 60, max_iterations = 300 }
+convergence = { fields = ["cd", "cl"], cauchy_elements = 50, cauchy_eps = 5.0e-4, start_iteration = 100 }   # relative change (as SU2); CL/CD jitter by 2e-6..5e-6 per iteration (vortex correction, gamma cell), about 1e-4 of C_D, so 1e-6 never fires; the gamma residual stalls at the clip floor, so the residual drop never fires either
+linear_solver = { type = "pardiso" }   # without pypardiso: "umfpack" or "direct"
+refactor_interval = 3
+
+[output]
+directory = "output/lm_sd7003_polar"
+force_boundaries = ["airfoil"]    # -> wall CSV per angle
+restart_interval = 20
+fields = ["pressure", "velocity_magnitude", "eddy_viscosity_ratio", "intermittency", "cf", "cp_wall"]
+fields_interval = 0               # final fields only

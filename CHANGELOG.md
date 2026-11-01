@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Meshes and example cases: the SD7003 PyAero C-meshes of the validation runs
+  (`sd7003_C10_W25_320k_cells.su2` sharp trailing edge, `..._blunt_TE.su2`), the
+  SD7003 O-grid (`sd7003_ogrid_39k.su2` with `make_sd7003_ogrid.py`), the NACA
+  0012 O-grid and a RAE 2822 C-mesh (not used yet) are in `examples/meshes/`,
+  described in its `README.md`. The SD7003 cases use them
+  (`aft_sd7003`, `lm_sd7003`, `sst_sd7003`); new cases `aft_sd7003_tu05`,
+  `aft_sd7003_tu05_blunt`, `lm_sd7003_polar`, `sst_sd7003_ogrid`. Removed the
+  cases that restarted from private output paths (`aft_sd7003_fine*`,
+  `aft_sd7003_alpha_10_cont`, `e387_alpha8_unsteady*`). A test checks that every
+  example case finds its mesh.
+- Documentation: files that `validation.md` cited from the project folder are in
+  the repository (`docs/data/lm_sd7003_320k.polar.csv`,
+  `docs/e387_alpha8_ser_stall.md`); `validation.md` has per-section versions,
+  one stage-table scheme and a bibliography of the models (entries marked †
+  need their details checked); README mesh and `plot_log.py` notes.
+
 - Cauchy convergence now follows SU2. Steady: a Cauchy element is the
   relative change of the coefficient between iterations (`|C_n - C_(n-1)| /
   |C_n|`), not the absolute change; an old `solver.convergence.cauchy_eps`

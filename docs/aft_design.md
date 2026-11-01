@@ -84,7 +84,7 @@ Stefanski et al. (2019, SA-neg coupling), Denison et al. (NASA LAVA, NTRS
    Compare transition and separation/reattachment locations, Cp, CL, CD. Use
    published XFOIL results where available, otherwise run XFOIL locally.
 5. Time-accurate run at the E387 α = 8 case, to see whether the model removes
-   the force oscillation seen with BCM (`analysis/e387_alpha8_ser_stall.md`).
+   the force oscillation seen with BCM (`docs/e387_alpha8_ser_stall.md`).
 
 ## 5. Model definition (transcribed from the TMR page)
 

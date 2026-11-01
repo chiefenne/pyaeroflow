@@ -8,7 +8,7 @@
 name = "naca0012_rans"
 
 [mesh]
-file = "naca0012_ogrid_256x128.su2"   # boundary faces: airfoil, farfield
+file = "../meshes/naca0012_ogrid_256x128.su2"   # boundary faces: airfoil, farfield
 
 [physics]
 model = "rans"

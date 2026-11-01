@@ -5,14 +5,18 @@ What the solver has been checked against, in the order of the stage plan
 solution and test the discretisation; *validation* cases compare with
 benchmark computations or experiments. Every figure is produced by one
 example script from the repository root; the numbers are from the runs
-behind the figures (iMac 2019, 3.6 GHz 8-core Intel Core i9, 32 GB,
-October 2026, v0.7.1; section 7 from the 0.8 development).
+behind the figures (iMac 2019, 3.6 GHz 8-core Intel Core i9, 32 GB, October
+2026). Versions: sections 1 to 6 are from 0.7.1, section 7 from the 0.8
+development (released in 0.9), sections 8 to 10 from 0.9, the LM polar in
+section 10 from 1.0 and the positive-linearization measurement there from
+1.1. The meshes are in `examples/meshes/` (`README.md` there), the case
+files in `examples/cases/`.
 
 Click a case to jump to its section; each section ends with a link back here.
 
 <a id="stage-table"></a>
 
-| stage | case | type | reference | script |
+| stage / step | case | type | reference | script |
 |---|---|---|---|---|
 | 1 | [convection–diffusion](#sec-1) | verification | manufactured exact solution | `examples/stage1_convection_diffusion.py` |
 | 2 | [Poiseuille flow](#sec-2) | verification | exact profile | `examples/stage2_laminar.py --re1000` |
@@ -24,11 +28,11 @@ Click a case to jump to its section; each section ends with a link back here.
 | 4 | [DFG 2D-2 shedding](#sec-4) | validation | Schäfer & Turek 1996 | same |
 | 5 | [turbulent flat plate](#sec-5) | validation | NASA TMR, SA | `examples/stage5_rans.py` |
 | 6 | [NACA 0012, Re 6·10⁶](#sec-6) | validation | Ladson 1988, Gregory & O'Reilly 1970, NASA TMR | `examples/stage6_pyaero_validation.py` |
-| 7 (0.8) | [BCM transition, flat plate](#sec-7-plate) | verification/validation | Blasius, ERCOFTAC T3A | `tests/verification/test_rans_plate.py`, `pyaeroflow run examples/cases/flat_plate_transition.toml` |
-| 7 (0.8) | [BCM transition, Eppler 387](#sec-7-e387) | validation | McGhee, Walker & Millard 1988 (NASA TM 4062) | `pyaeroflow polar examples/cases/e387_transition.toml --alpha 4 6 8 2 0 -2` |
-| L3 (0.9) | [SA-AFT: flat plate, T3A, E387](#sec-8) | verification/validation | e^N estimate, ERCOFTAC T3A, NASA TM 4062, Penn State 2007, XFOIL | `tests/verification/test_rans_plate.py::test_aft_transition_on_the_plate`, `pyaeroflow polar examples/cases/e387_aft.toml --alpha -2 0 2 4 6 8` |
-| L2 (0.9) | [k-ω SST: flat plate, SD7003](#sec-9) | verification/validation | NASA TMR SST, LES/DNS, XFOIL, SA-AFT, Herbst et al. 2017, Selig et al. 1995 | `tests/verification/test_rans_plate.py::test_sst_turbulent_plate`, `pyaeroflow run examples/cases/sst_sd7003.toml` |
-| L3 (0.9) | [SST-LM γ-Re_θ: T3A, T3B, T3A−, SD7003](#sec-10) | validation | ERCOFTAC T3 (Roach & Brierley), LES/DNS, SA-AFT | `pyaeroflow run examples/cases/lm_t3a.toml` (mesh: `examples/cases/make_plate_lm.py`), `pyaeroflow run examples/cases/lm_sd7003.toml` |
+| L3 step 1 (0.9) | [BCM transition, flat plate](#sec-7-plate) | verification/validation | Blasius, ERCOFTAC T3A | `tests/verification/test_rans_plate.py`, `pyaeroflow run examples/cases/flat_plate_transition.toml` |
+| L3 step 1 (0.9) | [BCM transition, Eppler 387](#sec-7-e387) | validation | McGhee, Walker & Millard 1988 (NASA TM 4062) | `pyaeroflow polar examples/cases/e387_transition.toml --alpha 4 6 8 2 0 -2` |
+| L3 step 2 (0.9) | [SA-AFT: flat plate, T3A, E387](#sec-8) | verification/validation | e^N estimate, ERCOFTAC T3A, NASA TM 4062, Penn State 2007, XFOIL | `tests/verification/test_rans_plate.py::test_aft_transition_on_the_plate`, `pyaeroflow polar examples/cases/e387_aft.toml --alpha -2 0 2 4 6 8` |
+| L2 (0.9) | [k-ω SST: flat plate, SD7003](#sec-9) | verification/validation | NASA TMR SST, LES/DNS, XFOIL, SA-AFT, Herbst et al. 2017, Selig et al. 1995 | `tests/verification/test_rans_plate.py::test_sst_turbulent_plate`, `pyaeroflow run examples/cases/sst_sd7003.toml`, `sst_sd7003_ogrid.toml` |
+| L3 step 4 (0.9) | [SST-LM γ-Re_θ: T3A, T3B, T3A−, SD7003](#sec-10) | validation | ERCOFTAC T3 (Roach & Brierley), LES/DNS, SA-AFT | `pyaeroflow run examples/cases/lm_t3a.toml` (mesh: `examples/cases/make_plate_lm.py`), `pyaeroflow run examples/cases/lm_sd7003.toml`, `pyaeroflow polar examples/cases/lm_sd7003_polar.toml --alpha 4 6 8 9 10 2 0` |
 | – | [Known limits of the transition models](#sec-11) | summary | sections 8–10 | – |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
@@ -253,7 +257,7 @@ At α = −2° and 8° the iteration does not converge: the transition location
 keeps moving and the forces drift slowly (8°: C_D 0.019–0.035; −2°: a
 lower-surface transition appears at x = 0.15). Whether the discrete problem
 has no stable steady state there, or the linearisation with frozen
-intermittency (CHANGELOG 0.8) cannot reach it, is open.
+intermittency (CHANGELOG 0.9, "Transition, step 1: SA-BCM") cannot reach it, is open.
 
 With SA-AFT2019b (`physics.transition.model = "aft"`, §8 and the E387 case
 `examples/cases/e387_aft.toml`) the converged α = 4° solution (632 iterations
@@ -264,7 +268,7 @@ XFOIL at N_crit 8.15 and 0.40 / 0.62 from the oil flow. C_L = 0.809 lies
 The Penn State measurements of Somers & Maughmer (2007) at Tu ≈ 0.045 %
 give C_L = 0.762 and C_D = 0.0131 at 4° and agree with the oil flow to 0.03 c.
 Known discrepancy, not yet explained: the drag is 9–14 % below both
-experiments at α = −2 to 6°. Candidates, not tested: the thickened trailing
+experiments at α = 0° to 6°. Candidates, not tested: the thickened trailing
 edge of the model (0.5 % c, sharp in the mesh) and the 5-chord farfield with
 the point-vortex correction.
 
@@ -395,6 +399,8 @@ varied. α = −2° and 8° do not converge: the transition location keeps
 moving, as with BCM in §7, so the lift and drag there are not reference
 values.
 
+[↑ back to table](#stage-table)
+
 <a id="sec-9"></a>
 
 ## 9. k-ω SST (SST-2003m)
@@ -457,9 +463,9 @@ Herbst, Kähler & Hain (2017) measured the SD7003 at Re 6·10⁴ in the
 Atmospheric Wind Tunnel Munich at Tu = 0.5 %: surface pressure on taps up
 to x/c = 0.74 (suction side) and PIV of the separation bubble at α = 4° and
 8°. SA-AFT, Tu 0.5 % (N_crit 4.29, the Mack/Drela value), is the case
-`aft_sd7003.toml` with `turbulence_intensity = 0.005`, on a 320 000-cell
-C-mesh, run with a sharp trailing edge and with a blunt one (0.3 % chord).
-Polar: `pyaeroflow polar aft_sd7003.toml --alpha 4 6 8 9` with that setting.
+`aft_sd7003_tu05.toml` (`turbulence_intensity = 0.005`), on a 320 600-cell
+C-mesh (`examples/meshes/sd7003_C10_W25_320k_cells.su2`), run with a sharp trailing edge and with a blunt one (0.3 % chord).
+Polar: `pyaeroflow polar examples/cases/aft_sd7003_tu05.toml --alpha 4 6 8 9`; the blunt trailing edge is `aft_sd7003_tu05_blunt.toml` (mesh `…_blunt_TE.su2`).
 
 | α | C_L sharp TE | C_L blunt TE | C_D sharp TE | C_D blunt TE |
 |---|---|---|---|---|
@@ -575,7 +581,7 @@ station (0.0015 at 2.0·10⁶). The laminar C_f rises above Blasius from
 
 ### SD7003, Re 6·10⁴, α = 4°
 
-39k-cell O-grid (`analysis/sst/sd7003_ogrid.su2`), Tu 0.1 %, ν_t/ν 1 at
+39k-cell O-grid (`examples/meshes/sd7003_ogrid_39k.su2`, case `examples/cases/sst_sd7003_ogrid.toml`), Tu 0.1 %, ν_t/ν 1 at
 the farfield, first-order turbulence convection. After 1400 iterations the
 residuals sit 2.6–3 orders down and C_L/C_D still drift slowly
 (C_L 0.601, C_D 0.0207).
@@ -588,7 +594,7 @@ only just exceeds the γ_sep threshold 3.235 Re_θc (the ratio peaks at 1.09 at
 x/c ≈ 0.7), so γ_sep ≤ 0.18 and k stays at its freestream level of about
 1e-6. On this grid LM therefore predicts a laminar open separation, where
 LES/DNS reattach at x/c 0.60–0.67. The fine-mesh case
-`lm_sd7003.toml` (PyAero 320k mesh) is the actual test of whether this is
+`examples/cases/lm_sd7003.toml` (PyAero 320k mesh) is the actual test of whether this is
 a grid-resolution effect.
 
 **320k PyAero mesh** (`lm_sd7003.toml`, Tu 0.1 %, ν_t/ν 1, SER CFL for 1500 iterations, then
@@ -634,9 +640,9 @@ this one can end when C_D has settled instead of at a fixed residual drop.
 
 ### SD7003, Re 6·10⁴: SST-LM polar on the 320k PyAero mesh
 
-`pyaeroflow polar lm_sd7003_320k_polar.toml --alpha 4 6 8 9 10 2 0` (restart
+`pyaeroflow polar examples/cases/lm_sd7003_polar.toml --alpha 4 6 8 9 10 2 0` (restart
 chain from the converged α = 4° state, growth CFL with `polar_reset`, Tu 0.1 %,
-clip on). Polar CSV: `analysis/lm_transition/lm_sd7003_320k.polar.csv`.
+clip on). Polar CSV: `docs/data/lm_sd7003_320k.polar.csv`.
 The same mesh was used for the fully turbulent SST and the SA-AFT (Tu 0.5 %,
 sharp trailing edge) polars of §9.
 
@@ -692,10 +698,20 @@ iteration (the residual norm never fell), 20 GMRES products per iteration at
 1.5 s each on this mesh: 73 % of the 43 s per iteration. The remedies
 `physics.transition.positive_jacobian` (default from 1.1) and `newton_guard`
 are described in `docs/configuration.md`; the polar above was run before
-them (exact linearization, no guard). Measured on the 320k case (α = 4°, restart from iteration 662, `positive_jacobian = true`, no guard): the first update lifted the eight floor cells off the floor (γ +0.37 to +0.70), none was at the floor afterwards, the γ residual fell from 10⁻⁵·⁷ to 10⁻¹¹·⁷, and the run converged (7.1 orders) in 13 Newton–Krylov iterations (about 38 s each) at unchanged forces, C_L 0.593069, C_D 0.022761, C_M 0.039252; the exact linearization had not converged in 98 further iterations. The forces
+them (exact linearization, no guard).
+
+*Measured with 1.1.* On the 320k case (α = 4°, restart from iteration 662,
+`positive_jacobian = true`, no guard) the first update lifted the eight floor
+cells off the floor (γ +0.37 to +0.70), none was at the floor afterwards, the γ
+residual fell from 10⁻⁵·⁷ to 10⁻¹¹·⁷, and the run converged (7.1 orders) in 13
+Newton–Krylov iterations (about 38 s each) at unchanged forces, C_L 0.593069,
+C_D 0.022761, C_M 0.039252; the exact linearization had not converged in 98
+further iterations.
+
+The forces
 themselves stood still to four or five digits: C_L and
 C_D jitter by 2·10⁻⁶ to 5·10⁻⁶ per iteration, which is above the 10⁻⁶ and
-10⁻⁸ of the Cauchy criterion first set; with an absolute `cauchy_eps = 1e-5` (about 4·10⁻⁴ relative to C_D, which is how the criterion measures since the next release) the criterion
+10⁻⁸ of the Cauchy criterion first set; with an absolute change of 10⁻⁵ (about 4·10⁻⁴ relative to C_D; the criterion measures the relative change since the next release, so `cauchy_eps = 5e-4`) the criterion
 would have ended α = 4° at about iteration 150 instead of 662. α = 0° was still
 drifting (C_L 2·10⁻⁴ relative per iteration when stopped at iteration 162).
 The CSV holds the last state of each run. α = 9° and 10° ended on the
@@ -726,7 +742,7 @@ them.
 | SA-AFT2019b | T3B (Tu 6 %, bypass), [§8](#sec-8) | cannot transition before Re_x = 1.3·10⁵ (Re_θ0 = 237) | no bypass mechanism by construction; not run | SST-LM (bypass at the leading edge) |
 | SST-LM | SD7003, Re 6·10⁴, α = 4°, [§10](#sec-10) | bubble too long: reattachment at x/c 0.71 against 0.60–0.67 (LES/DNS), C_D 3 % above the highest LES/DNS value; C_L and C_M inside the bands | transition is triggered in the LES/DNS window (γ_sep from x/c 0.45, ν_t/ν > 1 at 0.468); the turbulent shear layer after transition reattaches too slowly. Not diagnosed further (candidates: freestream decay of k and ω without sustaining terms, SST eddy viscosity in the separated layer) | SA-AFT (reattachment 0.644, inside the band) for low-Re laminar separation bubbles |
 | SA-AFT2019b | E387, Re 2·10⁵, α = −2°, [§8](#sec-8) | no steady solution found: rerun from the converged α = 0° state with growth CFL (cap 10⁵) and the Cauchy criterion on C_L/C_D (2026-10-27) stays in the Newton–Krylov phase at CFL 10–200 (every step above ~150 fails or is rejected); residuals of p, u, v, ν̃ flat at 10⁻⁶·⁶–10⁻⁹·³, γ 10⁻³–10⁻⁴, ñ 10⁻⁴·⁸; C_L drifts from 0.148 to 0.161 over iterations 83–313 and the drift grows (10⁻⁴ per iteration), C_D 0.0089 → 0.0095 | transition moving slowly over many iterations, as Coder (2019) reports for AFT; not diagnosed further | forces at α = −2° are indicative only (the 2000-iteration polar value C_L 0.163 lies on the same drift). A time-accurate (BDF2) run is the likely remedy, as in §7 for BCM at α = 8°; not tried |
-| SA-AFT2019b | E387, Re 2·10⁵, α = 8°, [§8](#sec-8) | not converged in 2000 iterations of the polar (SER CFL); not rerun | near the leading-edge bubble burst (XFOIL: transition at x/c 0.045); the BCM solution at α = 8° was a limit cycle (C_L 1.11–1.23, period about 0.25 c/U, `analysis/e387_alpha8_ser_stall.md`), so a steady solution may not exist | forces at α = 8° are not reference values; a time-accurate run with cycle-averaged forces is the likely remedy (as SU2 users do for unsteady separation); not tried for AFT |
+| SA-AFT2019b | E387, Re 2·10⁵, α = 8°, [§8](#sec-8) | not converged in 2000 iterations of the polar (SER CFL); not rerun | near the leading-edge bubble burst (XFOIL: transition at x/c 0.045); the BCM solution at α = 8° was a limit cycle (C_L 1.11–1.23, period about 0.25 c/U, `docs/e387_alpha8_ser_stall.md`), so a steady solution may not exist | forces at α = 8° are not reference values; a time-accurate run with cycle-averaged forces is the likely remedy (as SU2 users do for unsteady separation); not tried for AFT |
 | SST-LM | SD7003, Re 6·10⁴, polar α = 0–10°, [§10](#sec-10) | C_D too high from α = 4° (+29 % at 4°, +41 % at 8°, +55 % at 9° against SA-AFT; pressure drag), C_L 5–11 % low at 8°–9°; five of seven points not converged by a criterion (γ residual at the clip floor, forces settled to 4–5 digits) | late reattachment as at α = 4°; the γ residual stalls because eight cells at the clip floor get Newton updates that point away from the root (√γ production derivative, §10), so only the force criterion could end a run; `positive_jacobian` (default from 1.1, `docs/configuration.md`) removes the cause: at α = 4° the restart converged in 13 Newton–Krylov iterations at unchanged forces; the polar has not been rerun with it | SA-AFT for drag and stall angle; LM for the low-α lift (0°, 2° close to XFOIL) |
 | SA-AFT, SST-LM | turbulent C_f after reattachment (E387, SD7003) | 35–50 % below XFOIL | baseline turbulence model recovering from the bubble; open, not specific to the transition models | – |
 
@@ -761,7 +777,7 @@ turbulence (Tu from about 0.5 %, bypass transition).
   low-turbulence pressure tunnel. NASA TM 4062.
 - Herbst, S. L., Kähler, C. J., Hain, R. (2017): Influence of large-scale
   free-stream turbulence on an SD7003 airfoil at low Reynolds numbers.
-  AIAA paper, Universität der Bundeswehr München.
+  AIAA paper, Universität der Bundeswehr München (paper number to be added †).
 - Selig, M. S., Guglielmo, J. J., Broeren, A. P., Giguère, P. (1995):
   Summary of Low-Speed Airfoil Data, Vol. 1. SoarTech Publications.
 - Langtry, R. B., Menter, F. R. (2009): Correlation-based transition
@@ -779,3 +795,53 @@ turbulence (Tu from about 0.5 %, bypass transition).
   development, Part I: test cases T3A and T3B. In: Numerical Simulation of
   Unsteady Flows and Transition to Turbulence, Cambridge University Press.
   Data: ERCOFTAC Classic Collection, case 020.
+
+### Turbulence and transition models, numerics, other codes
+
+Entries marked † were added from memory in a documentation pass and still
+need their volume, page or paper number checked.
+
+- Spalart, P. R., Allmaras, S. R. (1994): A one-equation turbulence model for
+  aerodynamic flows. La Recherche Aérospatiale 1, 5–21. SA-neg and the
+  implementation notes: Allmaras, S. R., Johnson, F. T., Spalart, P. R.
+  (2012): Modifications and clarifications for the implementation of the
+  Spalart–Allmaras turbulence model. ICCFD7-1902 †.
+- Menter, F. R. (1994): Two-equation eddy-viscosity turbulence models for
+  engineering applications. AIAA J. 32(8), 1598–1605. SST-2003: Menter, F. R.,
+  Kuntz, M., Langtry, R. (2003): Ten years of industrial experience with the
+  SST turbulence model. Turbulence, Heat and Mass Transfer 4 †.
+- Langtry–Menter intermittency source and F_turb: Menter, F. R., Langtry, R.
+  B., Völker, S. (2006): Transition modelling for general purpose CFD codes.
+  Flow, Turbulence and Combustion 77, 277–303.
+- Coder, J. G., Maughmer, M. D. (2014): Computational fluid dynamics
+  compatible transition modeling using an amplification factor transport
+  equation. AIAA J. 52(11), 2506–2512. AFT2019b: Coder, J. G. (2019):
+  Enhancement of the amplification factor transport transition modeling
+  framework (AIAA 2019 paper) †, and the TMR page `aft_transition_3eqn`.
+- Cakmakcioglu, S. C., Bas, O., Kaynak, U. (2018): A correlation-based
+  algebraic transition model. Proc. IMechE Part C 232(21), 3915–3929 †. The
+  2020 revision (SA-noft2 form): Cakmakcioglu, S. C., Bas, O., Mura, R.,
+  Kaynak, U. (2020): A revised one-equation transitional model for external
+  aerodynamics. AIAA 2020-2706 †.
+- Mack, L. M. (1977): Transition prediction and linear stability theory.
+  AGARD CP-224. Drela, M., Giles, M. B. (1987): Viscous–inviscid analysis of
+  transonic and low Reynolds number airfoils. AIAA J. 25(10), 1347–1355.
+  Drela, M. (1989): XFOIL: an analysis and design system for low Reynolds
+  number airfoils. In: Low Reynolds Number Aerodynamics, Lecture Notes in
+  Engineering 54, Springer, 1–12. N_crit from Tu (Mack with Drela's limit) and
+  the XFOIL comparison values.
+- SD7003 LES/DNS bands: Galbraith, M. C., Visbal, M. R. (2008): Implicit
+  large eddy simulation of low Reynolds number flow past the SD7003 airfoil.
+  AIAA 2008-225 †; Uranga, A., Persson, P.-O., Drela, M., Peraire, J. (2011):
+  Implicit large eddy simulation of transition to turbulence at low Reynolds
+  numbers using a discontinuous Galerkin method. Int. J. Numer. Methods Eng.
+  87, 232–261 †. The ranges used in §9 and §10 are those compiled in the
+  project's SD7003 reference notes (LES, DNS and flux-reconstruction runs);
+  the quote of Ruiz & D'Ambrosio (2022) in §9 needs its full citation †.
+- Knoll, D. A., Keyes, D. E. (2004): Jacobian-free Newton–Krylov methods: a
+  survey of approaches and applications. J. Comput. Phys. 193, 357–397
+  (Eisenstat–Walker forcing, `pseudo_time.py`).
+- Economon, T. D., Palacios, F., Copeland, S. R., Lukaczyk, T. W., Alonso, J.
+  J. (2016): SU2: an open-source suite for multiphysics simulation and design.
+  AIAA J. 54(3), 828–846. The source of the INC formulation, the SST and LM
+  implementations and the convergence criteria followed here.
