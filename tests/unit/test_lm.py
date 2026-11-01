@@ -152,6 +152,10 @@ def test_inflow_values_initial_state_and_jvp():
     b2 = p.beta2(w)
     dw = rng.standard_normal(w.shape) * np.abs(w) * 1e-3
     exact = p.jvp(w, dw, b2)
+    # C1: the stored linearization (sources rematerialized) gives the same.
+    np.testing.assert_allclose(
+        p.linearize(w, b2)(dw), exact, rtol=1e-10, atol=1e-12 * np.abs(exact).max()
+    )
     eps = 1e-4
     fd = (p.residual(w + eps * dw, b2) - p.residual(w - eps * dw, b2)) / (2 * eps)
     for col in range(7):

@@ -207,6 +207,14 @@ def limiter(model, geom, bc, w):
     return inc._limiter(model, geom, w, w_b, lsq_gradient(geom, w, w_b))
 
 
+_cell_quantities_remat = jax.checkpoint(cell_quantities, static_argnums=(0,))
+_sst_sources_remat = jax.checkpoint(sst.sources)
+
+
+def _lm_sources_remat(*args, positive):
+    return jax.checkpoint(partial(lm.sources, positive=positive))(*args)
+
+
 @partial(jax.jit, static_argnums=(0, 4))
 def residual(model, geom, bc, w, order, beta2, psi=None, gamma=None):
     """Residual R(w), shape (n_cells, n_var): net outflow minus sources.
@@ -240,7 +248,12 @@ def residual(model, geom, bc, w, order, beta2, psi=None, gamma=None):
     t_f = upwind_scalar_flux(vn_f[:, None], s_l, s_r)
     t_b = upwind_scalar_flux(vn_b[:, None], s_in, w_b[:, NK:])
 
-    strain, f1, f2, nu_t, kgw = cell_quantities(model, geom, w, grad)
+    # The cell-local quantities and sources are rematerialized in the
+    # linearization (jax.checkpoint): their many per-cell intermediates are
+    # then recomputed in every Jacobian product instead of being stored (1.4
+    # instead of 2.2 GB at 320k cells with LM), at no measurable cost since
+    # the face terms dominate the product.
+    strain, f1, f2, nu_t, kgw = _cell_quantities_remat(model, geom, w, grad)
     g_f = interior_face_gradient(geom, w, grad, model.viscous_gradient, model.alpha)
     g_b = boundary_face_gradient(geom, w, w_b, grad, model.viscous_gradient)
     mu_f, dc_f = _face_coefficients(model, nu_t, f1, o, n)
@@ -267,10 +280,12 @@ def residual(model, geom, bc, w, order, beta2, psi=None, gamma=None):
     if model.transition == "lm":
         args = _lm_arguments(model, geom, w, grad, strain)
         g_eff = lm.effective_intermittency(*args[:9])
-        s_g, s_t = lm.sources(*args, positive=model.lm_positive_jacobian)
+        s_g, s_t = _lm_sources_remat(*args, positive=model.lm_positive_jacobian)
         r = r.at[:, NGL].add(-geom.area * s_g)
         r = r.at[:, NRT].add(-geom.area * s_t)
-    s_k, s_w = sst.sources(w[:, NK], _omega(w), strain, f1, f2, kgw, switch, g_eff)
+    s_k, s_w = _sst_sources_remat(
+        w[:, NK], _omega(w), strain, f1, f2, kgw, switch, g_eff
+    )
     r = r.at[:, NK].add(-geom.area * s_k)
     r = r.at[:, NW].add(-geom.area * s_w)
     r = r.at[:, NK:].multiply(_row_scale(model)[None, :])  # row scaling
@@ -290,6 +305,21 @@ def residual_jvp(model, geom, bc, w, dw, order, beta2, psi=None, gamma=None):
         return residual(model, geom, bc, x, order, beta2, psi)
 
     return jax.jvp(f, (w,), (dw,))[1]
+
+
+@partial(jax.jit, static_argnums=(0, 4))
+def residual_linearize(model, geom, bc, w, order, beta2, psi=None, gamma=None):
+    """Residual and its linearization at ``w`` (``jax.linearize``).
+
+    Returns ``(r, lin)`` with ``lin`` a :class:`jax.tree_util.Partial` that
+    maps ``dw`` to ``dR/dw(w) @ dw`` without re-evaluating the primal:
+    one call per Newton step, then :func:`apply_linear` per GMRES product.
+    """
+
+    def f(x):
+        return residual(model, geom, bc, x, order, beta2, psi, gamma)
+
+    return jax.linearize(f, w)
 
 
 def _row_scale(model):

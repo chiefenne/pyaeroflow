@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- Performance (C2): the first-order Jacobian is assembled in one pass on its
+  structurally non-zero entries: the sources and the pressure pin are written
+  into the same bincount (no `block_diagonal` / `replace_rows` sparse adds, no
+  copies of the whole matrix), and only the non-zero entries of the 7 x 7
+  blocks are transferred and summed (about 30 % of the dense blocks with LM).
+  The structure is the union over the current state and two random states; an
+  entry that turns up later widens the pattern (checked at every assembly), so
+  the matrix is identical to before (tested entry by entry; T3A history
+  bit-identical). 66k-cell LM plate: 0.99 s -> 0.65 s per assembly.
+- Performance (C1): the Newton-Krylov phase linearizes the residual once per
+  Newton step (`jax.linearize`) and applies the stored tangent in the GMRES
+  products instead of a full `jax.jvp` (primal and tangent) per product. On the
+  T3A plate a product costs a quarter of before; the cell-local SST and
+  Langtry-Menter sources are rematerialized (`jax.checkpoint`) so the stored
+  intermediates stay at about 1.4 GB at 320k cells with LM (2.2 GB without),
+  at no cost in the products. Same Jacobian, same iterations.
+  `solver.newton_krylov.linearize = false` restores the `jax.jvp` path (Python
+  API `nk_linearize`, `IncompressibleProblem.linearize`,
+  `physics.*.residual_linearize`). The Timing block has a `linearize` row.
+- Performance (C0): the PARDISO solver no longer lets `pypardiso` hash the whole
+  matrix and rebuild the 1-based index arrays at every solve (0.66 s per
+  preconditioner application at 78 M non-zeros, i.e. per GMRES iteration), and a
+  new factorization of the same sparsity re-uses the reordering and symbolic
+  analysis (phase 22). Same results as before; falls back to the stock
+  `pypardiso` calls for other versions. New "Timing" block at the end of the run
+  log with the wall time of assembly, factorization, preconditioner, Jacobian
+  products and residuals.
 - Meshes and example cases: the SD7003 PyAero C-meshes of the validation runs
   (`sd7003_C10_W25_320k_cells.su2` sharp trailing edge, `..._blunt_TE.su2`), the
   SD7003 O-grid (`sd7003_ogrid_39k.su2` with `make_sd7003_ogrid.py`), the NACA

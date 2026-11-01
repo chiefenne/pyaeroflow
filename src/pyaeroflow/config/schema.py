@@ -454,6 +454,16 @@ SCHEMA = {
             "max_iterations": Opt(
                 "int", 200, "Maximum GMRES iterations per Newton step", minimum=1
             ),
+            "linearize": Opt(
+                "bool",
+                True,
+                "Linearize the residual once per Newton step (jax.linearize) and "
+                "apply the stored tangent in every GMRES product, instead of a "
+                "full jax.jvp (primal and tangent) per product: products cost "
+                "about a quarter; the stored intermediates take about 1.4 GB at "
+                "320k cells with Langtry-Menter during the GMRES solve. false "
+                "uses jax.jvp per product (no extra memory, slower)",
+            ),
             "cfl_adapt_iterations": Opt(
                 "int",
                 60,

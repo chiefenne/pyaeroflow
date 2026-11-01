@@ -127,3 +127,30 @@ def test_nk_settings_in_config():
     assert cfg["numerics"]["limiter_freeze"]["after_iterations"] is None
     with pytest.raises(Exception, match="not one of"):
         resolve({**raw, "solver": {"linear_solver": {"type": "lu"}}})
+
+
+def test_linearize_matches_jvp_and_newton_history():
+    """C1: the stored linearization gives the jvp products and the same run."""
+    prob = cavity(6, limiter="venkatakrishnan-wang")
+    rng = np.random.default_rng(3)
+    w = 0.3 + rng.uniform(-0.2, 0.2, (prob.mesh.n_cells, 3))
+    dw = rng.standard_normal(w.shape)
+    beta2 = prob.beta2(w)
+    psi = prob.limiter(w)
+    apply = prob.linearize(w, beta2, psi)
+    np.testing.assert_allclose(
+        apply(dw), prob.jvp(w, dw, beta2, psi), rtol=1e-12, atol=1e-14
+    )
+    np.testing.assert_allclose(
+        apply(2.0 * dw), 2.0 * prob.jvp(w, dw, beta2, psi), rtol=1e-12, atol=1e-14
+    )
+    settings = {"max_iterations": 30, "residual_drop": 6.0, "nk_switch_iteration": 3}
+    with_lin = prob.solve(settings=PseudoTimeSettings(**settings))
+    with_jvp = prob.solve(settings=PseudoTimeSettings(nk_linearize=False, **settings))
+    assert with_lin.history["newton_krylov"].any()
+    np.testing.assert_allclose(
+        with_lin.history["residual"], with_jvp.history["residual"], rtol=1e-6
+    )
+    np.testing.assert_array_equal(
+        with_lin.history["linear_iterations"], with_jvp.history["linear_iterations"]
+    )

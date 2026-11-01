@@ -104,6 +104,107 @@ class DirectLU:
         return self._lu.solve(rhs)
 
 
+class _PardisoSession:
+    """One PARDISO instance shared by all factorizations of a run.
+
+    Stock ``pypardiso`` hashes the whole matrix (SHA-1 over ``data``, ``indices``
+    and ``indptr`` once the matrix has more than 5e7 non-zeros) and rebuilds the
+    1-based, int32 ``indptr``/``indices`` copies on *every* solve; at 320k cells
+    x 7 unknowns (78 M non-zeros) that is about 0.7 s per preconditioner
+    application. The sparsity pattern is fixed during a run, so here the index
+    arrays are converted once per pattern, the solve phase (33) is called
+    directly, and a new factorization with an unchanged pattern re-uses the
+    reordering and symbolic analysis (phase 22 instead of 12). Results are
+    identical to the stock path. Needs ``pypardiso`` 0.4.x internals
+    (``set_phase``, ``_call_pardiso`` pattern); :func:`_fast_path_available`
+    falls back to the public API otherwise.
+    """
+
+    def __init__(self, pypardiso):
+        self.solver = pypardiso.PyPardisoSolver()
+        self.pattern = None  # (indptr, indices) of the analysed matrix
+        self.ia = self.ja = None
+        self.generation = 0
+
+    def factorize(self, matrix):
+        """Factorize ``matrix`` (CSR, sorted indices); returns the generation."""
+        sv = self.solver
+        sv._check_A(matrix)
+        same = (
+            self.pattern is not None
+            and self.pattern[0].shape == matrix.indptr.shape
+            and self.pattern[1].shape == matrix.indices.shape
+            and np.array_equal(self.pattern[0], matrix.indptr)
+            and np.array_equal(self.pattern[1], matrix.indices)
+        )
+        if not same:
+            self.pattern = (matrix.indptr.copy(), matrix.indices.copy())
+            self.ia = matrix.indptr.astype(np.int32) + 1
+            self.ja = matrix.indices.astype(np.int32) + 1
+        sv.factorized_A = None  # the stock hash check is bypassed
+        sv.set_phase(22 if same else 12)
+        self._call(matrix, np.zeros((matrix.shape[0], 1)))
+        self.generation += 1
+        return self.generation
+
+    def solve(self, matrix, rhs):
+        """Back-substitution with the current factorization (phase 33)."""
+        self.solver.set_phase(33)
+        b = np.asarray(rhs, dtype=float)
+        x = self._call(matrix, b.reshape(-1, 1) if b.ndim == 1 else b)
+        return x.reshape(b.shape)
+
+    def _call(self, matrix, b):
+        import ctypes
+
+        sv = self.solver
+        x = np.zeros_like(b)
+        err = ctypes.c_int32(0)
+        p32 = ctypes.POINTER(ctypes.c_int32)
+        pf = ctypes.POINTER(ctypes.c_double)
+        sv._mkl_pardiso(
+            sv.pt.ctypes.data_as(ctypes.POINTER(sv._pt_type[0])),
+            ctypes.byref(ctypes.c_int32(1)),
+            ctypes.byref(ctypes.c_int32(1)),
+            ctypes.byref(ctypes.c_int32(sv.mtype)),
+            ctypes.byref(ctypes.c_int32(sv.phase)),
+            ctypes.byref(ctypes.c_int32(matrix.shape[0])),
+            matrix.data.ctypes.data_as(pf),
+            self.ia.ctypes.data_as(p32),
+            self.ja.ctypes.data_as(p32),
+            sv.perm.ctypes.data_as(p32),
+            ctypes.byref(ctypes.c_int32(1 if b.ndim == 1 else b.shape[1])),
+            sv.iparm.ctypes.data_as(p32),
+            ctypes.byref(ctypes.c_int32(sv.msglvl)),
+            b.ctypes.data_as(pf),
+            x.ctypes.data_as(pf),
+            ctypes.byref(err),
+        )
+        if err.value != 0:
+            raise RuntimeError(f"PARDISO error {err.value}")
+        return np.ascontiguousarray(x)
+
+    def free(self):
+        """Release PARDISO's internal memory."""
+        try:
+            self.solver.free_memory(everything=True)
+        except Exception:  # noqa: BLE001 - interpreter shutdown
+            pass
+        self.pattern = None
+
+
+_SESSION = {"obj": None}
+
+
+def _fast_path_available(pypardiso):
+    """Tell whether the installed pypardiso has the internals the session relies on."""
+    sv_cls = pypardiso.PyPardisoSolver
+    return all(
+        hasattr(sv_cls, a)
+        for a in ("set_phase", "_call_pardiso", "_check_A", "free_memory")
+    ) and pypardiso.__version__.startswith("0.4")
+
+
 class PardisoLU:
     """Sparse LU by Intel MKL PARDISO (optional dependency ``pypardiso``)."""
 
@@ -117,11 +218,23 @@ class PardisoLU:
             ) from exc
         self._matrix = matrix.tocsr()
         self._matrix.sort_indices()
-        self._solver = pypardiso.PyPardisoSolver()
+        self._session = None
         try:
-            self._solver.factorize(self._matrix)
+            if _fast_path_available(pypardiso):
+                session = _SESSION["obj"]
+                if session is None:
+                    session = _SESSION["obj"] = _PardisoSession(pypardiso)
+                self._generation = session.factorize(self._matrix)
+                self._session = session
+            else:
+                self._solver = pypardiso.PyPardisoSolver()
+                self._solver.factorize(self._matrix)
         except Exception as exc:  # pypardiso.PyPardisoError on a singular matrix
-            self._solver.free_memory(everything=True)
+            if self._session is None and hasattr(self, "_solver"):
+                self._solver.free_memory(everything=True)
+            elif _SESSION["obj"] is not None:
+                _SESSION["obj"].free()
+                _SESSION["obj"] = None
             raise LinearSolverError(str(exc)) from exc
         self.iterations = 0
 
@@ -131,10 +244,14 @@ class PardisoLU:
 
     def precondition(self, rhs):
         """Apply the factorization."""
+        if self._session is not None:
+            if self._session.generation != self._generation:
+                raise LinearSolverError("PARDISO factorization was replaced")
+            return self._session.solve(self._matrix, rhs)
         return self._solver.solve(self._matrix, rhs).reshape(rhs.shape)
 
     def __del__(self):
-        """Release PARDISO's internal memory."""
+        """Release PARDISO's internal memory (stock path only)."""
         solver = getattr(self, "_solver", None)
         if solver is not None:
             try:

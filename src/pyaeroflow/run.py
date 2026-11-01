@@ -55,6 +55,7 @@ from pyaeroflow.physics import spalart_allmaras as sa
 from pyaeroflow.reload import LIVE_STEADY, LIVE_UNSTEADY, reload_case
 from pyaeroflow.solver import DualTimeSettings, LinearSettings, PseudoTimeSettings
 from pyaeroflow.solver.convergence import CauchyCriterion, WindowedCauchyCriterion
+from pyaeroflow.solver.profile import timers
 
 
 class Scaling(NamedTuple):
@@ -810,6 +811,7 @@ def _pseudo_time_settings(cfg):
         nk_restart=solver["newton_krylov"]["restart"],
         nk_max_krylov=solver["newton_krylov"]["max_iterations"],
         nk_cfl_adapt_iterations=solver["newton_krylov"]["cfl_adapt_iterations"],
+        nk_linearize=solver["newton_krylov"]["linearize"],
         refactor_interval=solver["refactor_interval"],
         linear=LinearSettings(**solver["linear_solver"]),
     )
@@ -859,6 +861,14 @@ def _result_names(log, control, fields, number):
     return names
 
 
+def _log_timing(log, wall):
+    """Write the wall-time breakdown of the implicit iteration."""
+    rows = timers.rows(wall)
+    if rows:
+        log.section("Timing")
+        log.table(rows)
+
+
 def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     """Steady solve with one log line per pseudo-time iteration."""
     cfg = config.data
@@ -906,6 +916,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     )
 
     timing = {"setup": None}
+    timers.reset()
     offset = (resume or {}).get("elapsed", 0.0)  # wall time of the earlier runs
 
     def restart_state():
@@ -1107,6 +1118,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     if stopped:
         rows.insert(1, ("stopped", "by the .stop file"))
     log.table(rows)
+    _log_timing(log, log.elapsed - offset)
     return result, coefficients
 
 
@@ -1192,6 +1204,7 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         loaded=(resume or {}).get("file"),
     )
     timing = {"setup": None}
+    timers.reset()
     offset = (resume or {}).get("elapsed", 0.0)  # wall time of the earlier runs
 
     def restart_state():
@@ -1354,6 +1367,7 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
     if stopped:
         rows.insert(1, ("stopped", "by the .stop file"))
     log.table(rows)
+    _log_timing(log, log.elapsed - offset)
     return result, coefficients
 
 
