@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.0 – LM solver defaults, numerics debug log, Cauchy guard (2026-11-02)
 
 - Langtry-Menter runs (`physics.transition.model = "lm"`) get new solver
   defaults: `solver.cfl.max = 2000`, `solver.newton_krylov.cfl_adapt_iterations
