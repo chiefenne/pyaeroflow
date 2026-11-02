@@ -368,6 +368,16 @@ def _check_value(dotted, opt, value, problems):
     return value
 
 
+# Defaults that replace the schema defaults when physics.transition.model =
+# "lm" and the case file does not set the key (configuration.md, LM section).
+LM_DEFAULTS = {
+    "solver.cfl.max": 2000.0,
+    "solver.newton_krylov.cfl_adapt_iterations": 150,
+    "solver.newton_krylov.variable_scaling": True,
+    "solver.line_search_merit": "no_transition",
+}
+
+
 def _consistency(data, explicit, problems, notices, path):
     """Cross-key rules (D31, D28, D39 R1/R5/R6, configuration.md)."""
     fluid, physics, ref = data["fluid"], data["physics"], data["reference"]
@@ -600,7 +610,21 @@ def _consistency(data, explicit, problems, notices, path):
             "solver.convergence.fields ignored in an unsteady run "
             "(see time.convergence)"
         )
-    if data["physics"]["transition"]["model"] != "lm":
+    if data["physics"]["transition"]["model"] == "lm":
+        # Langtry-Menter defaults: the settings of the fresh SD7003 320k polar
+        # (alpha 0, 2, 4 to 7 orders, 2026-11-02). Explicit values win.
+        applied = []
+        for dotted, value in LM_DEFAULTS.items():
+            if dotted not in explicit:
+                *tables, key = dotted.split(".")
+                table = data
+                for t in tables:
+                    table = table[t]
+                table[key] = value
+                applied.append(f"{dotted} = {_toml_value(value)}")
+        if applied:
+            notices.append("Langtry-Menter defaults: " + ", ".join(applied))
+    else:
         for key in ("clip", "newton_guard", "positive_jacobian"):
             if f"physics.transition.{key}" in explicit:
                 notices.append(f"physics.transition.{key} ignored: model != lm")

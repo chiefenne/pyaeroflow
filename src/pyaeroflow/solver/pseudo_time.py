@@ -123,6 +123,21 @@ class PseudoTimeSettings:
     line_search_steps : int
         Backtracking: an update that raises the residual measure is halved
         up to this many times before it is rejected (D54).
+    nk_variable_scaling : bool
+        Measure the GMRES error of every variable relative to its size: the
+        unknowns of the Newton-Krylov solve are du_j / s_j with s_j = 1 for
+        p, u, v (non-dimensional) and the RMS of the field for the turbulence
+        and transition variables. SciPy's GMRES is left-preconditioned, so it
+        minimizes about the error of du in raw units: with Re_thetat ~ 1e3 and
+        k ~ 1e-3 it solves the Re_thetat rows and leaves the gamma rows
+        unsolved (320k SD7003 LM: 95 % of the gamma residual left in the
+        linear model at tolerance 0.5).
+    merit_columns : tuple of int or None
+        Residual columns of the RMS norm that the line search, the step
+        acceptance and the SER CFL control judge; None = all. Langtry-Menter
+        runs can leave out gamma and Re_thetat: their raw residual is largest
+        in the big outer cells (outlet, farfield), where Re_thetat^eq follows
+        tiny velocity gradients, and would otherwise veto good flow steps.
     nk_cfl_adapt_iterations : int
         GMRES iteration count above which the CFL of the Newton-Krylov phase
         is capped (quartered) for the following steps, and a quarter of
@@ -185,6 +200,8 @@ class PseudoTimeSettings:
     nk_forcing: bool = True
     nk_linearize: bool = True
     line_search_steps: int = 2
+    merit_columns: tuple = None
+    nk_variable_scaling: bool = False
     cfl_control: str = "growth"
     ser_exponent: float = 1.0
     ser_growth_min: float = 1.2
@@ -209,7 +226,9 @@ class SteadyResult(NamedTuple):
         iteration), ``measure`` (per-equation convergence measure, D54),
         ``residuals`` (RMS norm per variable), ``cfl``,
         ``accepted``, ``newton_krylov`` (phase flag), ``linear_iterations``
-        (GMRES iterations of the step, 0 for a direct solve).
+        (GMRES iterations of the step, 0 for a direct solve),
+        ``step_factor`` (the fraction of the Newton step the line search kept:
+        1, 1/2, 1/4 ...; 1 for the start entry and for a failed linear solve).
     state : dict or None
         Solver state at the end (``cfl``, ``cfl_cap``, ``scale``, ``nk_on``,
         ``iteration``), the ``resume`` argument of a continuation.
@@ -246,6 +265,7 @@ def solve_steady(
     reference_norm=None,
     limit_step=None,
     resume=None,
+    debug=None,
 ):
     """Drive ``residual(u)`` to zero by implicit pseudo-time stepping.
 
@@ -300,6 +320,17 @@ def solve_steady(
         ``cfl_cap`` and ``nk_on`` are taken over (a new problem, e.g. the next
         angle of attack, that starts from the earlier solution). The initial
         callback (iteration 0) is not called on a continuation.
+    debug : callable, optional
+        ``debug(record)`` after every iteration with a dict of the numerics:
+        ``it``, ``cfl``, ``nk``, ``gmres``, ``factorized``, ``tolerance`` and
+        ``linear_residual`` (Newton-Krylov: the true relative residual of the
+        linear solve, one extra Jacobian product), ``re_evaluated`` (RMS
+        before and after a change of the operator), ``reference`` (residual
+        array the step is judged against), ``reference_rms``, ``du`` (update
+        after ``limit_step``), ``limited`` (cells per variable changed by
+        ``limit_step``), ``trials`` ((factor, RMS, RMS per variable) of every
+        line-search evaluation), ``new`` (residual of the last trial),
+        ``accepted``, ``step``, ``error`` (failed linear solve).
 
     Convergence is measured per equation (D54): every variable's RMS
     residual is divided by the largest value it has had so far (or by
@@ -340,7 +371,12 @@ def solve_steady(
         active = scale >= 1e-12 * scale.max()
         return float(np.max(np.where(active, rms_per_variable(r) / scale, 0.0)))
 
-    norm_abs = rms(r)
+    cols = None if s.merit_columns is None else list(s.merit_columns)
+
+    def merit(r):
+        return rms(r if cols is None else np.asarray(r)[:, cols])
+
+    norm_abs = merit(r)
     norm = measure(r)
     target = 10.0 ** (-s.residual_drop)
 
@@ -362,6 +398,7 @@ def solve_steady(
         "accepted": [True],
         "newton_krylov": [False],
         "linear_iterations": [0],
+        "step_factor": [1.0],
     }
     converged = done(norm, norm_abs)
     # CFL cap of the Newton-Krylov phase, adapted to the GMRES effort: the
@@ -405,13 +442,17 @@ def solve_steady(
         if converged or cfl < s.cfl_min:
             break
         info = getattr(callback, "info", None)
+        dbg = {"it": it, "cfl": cfl} if debug is not None else None
         if info is not None and info.pop("residual_changed", False):
             # The callback changed the residual operator (limiter frozen or
             # released): the reference for acceptance and convergence is the
             # residual of the current state under the new operator, not the
             # one the previous step produced.
+            before = norm_abs
             r = res(u, it)
-            norm_abs = rms(r)
+            norm_abs = merit(r)
+            if dbg is not None:
+                dbg["re_evaluated"] = (before, norm_abs)
             scale = np.maximum(scale, rms_per_variable(r))
             norm = measure(r)
         startup = residual_startup is not None and it <= s.first_order_iterations
@@ -421,7 +462,7 @@ def solve_steady(
             and residual_startup is not None
         ):
             r = res(u, it)  # switch to the full residual
-            norm_abs = rms(r)
+            norm_abs = merit(r)
             scale = np.maximum(scale, rms_per_variable(r))
             norm = measure(r)
         by_iteration = s.nk_switch_iteration is not None and it > s.nk_switch_iteration
@@ -430,7 +471,7 @@ def solve_steady(
         use_nk = s.newton_krylov and has_jvp and not startup and nk_on
         with timers.section("time term"):
             t_matrix = time_term(u, cfl)
-        accepted, lin_its = False, 0
+        accepted, lin_its, step = False, 0, 1.0
         try:
             reuse = (
                 lin is not None
@@ -452,45 +493,88 @@ def solve_steady(
                         product = linearize(u)
                 else:
                     product = partial(jvp, u)
+                tolerance = eta if s.nk_forcing else s.nk_linear_tolerance
+                operator = _newton_operator(t_matrix, product, u.shape)
+                precondition = _timed("preconditioner", lin.precondition)
+                if s.nk_variable_scaling:
+                    operator, precondition, unscale = _variable_scaling(
+                        operator, precondition, u
+                    )
                 with timers.section("nk solve (GMRES)"):
                     du, lin_its = solve_matrix_free(
-                        _newton_operator(t_matrix, product, u.shape),
+                        operator,
                         -r.ravel(),
-                        _timed("preconditioner", lin.precondition),
-                        tolerance=eta if s.nk_forcing else s.nk_linear_tolerance,
+                        precondition,
+                        tolerance=tolerance,
                         restart=s.nk_restart,
                         max_iterations=s.nk_max_krylov,
                     )
+                if s.nk_variable_scaling:
+                    du = unscale(du)
+                if dbg is not None:
+                    # True linear residual |(T + J) du + R| / |R| (one more
+                    # Jacobian product): GMRES only knows its own estimate.
+                    dbg["tolerance"] = tolerance
+                    a_du = _newton_operator(t_matrix, product, u.shape)(du)
+                    dbg["linear_residual"] = float(
+                        np.linalg.norm(a_du + r.ravel())
+                        / max(np.linalg.norm(r.ravel()), tiny)
+                    )
+                    dbg["linear_misfit"] = (a_du + r.ravel()).reshape(u.shape)
                 product = None  # frees the stored linearization
             else:
                 with timers.section("direct solve"):
                     du = lin.solve(-r.ravel())
                 lin_its = lin.iterations
             du = du.reshape(u.shape)
+            if dbg is not None:
+                dbg.update(nk=use_nk, gmres=lin_its, factorized=not reuse)
+                dbg["reference"] = r
+                du_raw = du
             if limit_step is not None:
                 tau = (t_matrix.diagonal() * cfl).reshape(u.shape)
                 du = limit_step(u, du, r, tau)
+            if dbg is not None:
+                # changed beyond round-off: a clip returns (u + du) - u
+                changed = np.abs(du - du_raw) > 1e-10 * (np.abs(u) + np.abs(du_raw))
+                dbg["limited"] = np.count_nonzero(changed, axis=0)
+                dbg["du_raw"] = du_raw
+                dbg["du"] = du
+                dbg["trials"] = []
             u_new = u + du
             r_new = res(u_new, it + 1)
-            abs_new = rms(r_new)
+            abs_new = merit(r_new)
+            if dbg is not None:
+                dbg["trials"].append((1.0, abs_new, rms_per_variable(r_new)))
+                dbg["full_step"] = r_new
             # Backtracking line search (D54): halve a step that raises the
-            # residual norm before giving up on it.
-            step = 1.0
+            # residual norm before giving up on it. The fraction kept is
+            # logged (``step 1/2``, ``step 1/4``): an iteration that needs it
+            # every time makes little progress however the forces look.
             for _ in range(s.line_search_steps):
                 if np.isfinite(abs_new) and abs_new <= norm_abs:
                     break
                 step *= 0.5
                 u_new = u + step * du
                 r_new = res(u_new, it + 1)
-                abs_new = rms(r_new)
+                abs_new = merit(r_new)
+                if dbg is not None:
+                    dbg["trials"].append((step, abs_new, rms_per_variable(r_new)))
             accepted = np.isfinite(abs_new) and abs_new <= s.reject_factor * norm_abs
-        except LinearSolverError:
-            pass
+            if dbg is not None:
+                dbg["new"] = r_new
+        except LinearSolverError as error:
+            if dbg is not None:
+                dbg["error"] = str(error)
+        if dbg is not None:
+            dbg.update(accepted=accepted, step=step, reference_rms=norm_abs)
+            debug(dbg)
         hist["iteration"].append(it)
         hist["cfl"].append(cfl)
         hist["accepted"].append(accepted)
         hist["newton_krylov"].append(use_nk)
         hist["linear_iterations"].append(lin_its)
+        hist["step_factor"].append(step)
         if accepted:
             ser = s.cfl_control == "ser"
             if ser:
@@ -543,6 +627,7 @@ def solve_steady(
                 info["newton_krylov"] = use_nk
                 info["linear_iterations"] = lin_its
                 info["measure"] = norm
+                info["step_factor"] = step
             state["it"] = it
             callback(it, u, hist["residuals"][-1], hist["cfl"][-1], accepted)
             if info is not None and info.get("converged"):
@@ -557,6 +642,31 @@ def solve_steady(
         state["it"] = it
     history = {k: np.asarray(v) for k, v in hist.items()}
     return SteadyResult(u, bool(converged), history, snapshot())
+
+
+def _variable_scaling(operator, precondition, u):
+    """Newton-Krylov system in the unknowns du_j / s_j (``nk_variable_scaling``).
+
+    s_j = 1 for the first three variables (p, u, v, non-dimensional) and the
+    RMS of the field for the others. Returns the scaled operator v -> A (S v),
+    the preconditioner r -> S^-1 M^-1 r and the map back y -> S y.
+    """
+    scale = np.ones(u.shape[1])
+    if u.shape[1] > 3:
+        rms_tail = rms_per_variable(u[:, 3:])
+        scale[3:] = np.where(rms_tail > 0.0, rms_tail, 1.0)
+    full = np.tile(scale, u.shape[0])
+
+    def apply(v):
+        return operator(full * v)
+
+    def pre(r):
+        return precondition(r) / full
+
+    def unscale(y):
+        return full * y
+
+    return apply, pre, unscale
 
 
 def _newton_operator(t_matrix, product, shape):
@@ -627,6 +737,7 @@ def solve_explicit(
         "accepted": [True],
         "newton_krylov": [False],
         "linear_iterations": [0],
+        "step_factor": [1.0],
     }
     converged = norm <= target
     if callback is not None:
@@ -651,6 +762,7 @@ def solve_explicit(
         hist["accepted"].append(True)
         hist["newton_krylov"].append(False)
         hist["linear_iterations"].append(0)
+        hist["step_factor"].append(1.0)
         if callback is not None:
             callback(it, u, hist["residuals"][-1], cfl, True)
             if getattr(callback, "info", {}).get("stop"):

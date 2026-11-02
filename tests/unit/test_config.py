@@ -191,3 +191,48 @@ def test_nk_cfl_adapt_iterations_reaches_the_solver_settings():
     )
     raw = {**MINIMAL, "solver": {"newton_krylov": {"cfl_adapt_iterations": 200}}}
     assert _pseudo_time_settings(resolve(raw, "c.toml")).nk_cfl_adapt_iterations == 200
+
+
+def test_lm_solver_defaults():
+    """Langtry-Menter cases get the solver defaults of the converged SD7003
+    320k polar; explicit values win and other models keep the schema."""
+    from pyaeroflow.run import _pseudo_time_settings
+
+    def lm(solver=None):
+        raw = {
+            **MINIMAL,
+            "physics": {
+                "model": "rans",
+                "turbulence": "sst",
+                "transition": {"model": "lm"},
+            },
+        }
+        if solver:
+            raw["solver"] = solver
+        return resolve(raw, "c.toml")
+
+    cfg = lm()
+    s = cfg["solver"]
+    assert s["cfl"]["max"] == 2000.0
+    assert s["newton_krylov"]["cfl_adapt_iterations"] == 150
+    assert s["newton_krylov"]["variable_scaling"] is True
+    assert s["line_search_merit"] == "no_transition"
+    assert s["whole_cell_relaxation"] is False
+    assert cfg["physics"]["transition"]["positive_jacobian"] is True
+    assert any("Langtry-Menter defaults" in n for n in cfg.notices)
+    settings = _pseudo_time_settings(cfg)
+    assert settings.cfl_max == 2000.0
+    assert settings.nk_cfl_adapt_iterations == 150
+    assert settings.nk_variable_scaling is True
+    again = resolve(tomllib.loads(cfg.to_toml()), "c.toml")
+    assert again["solver"] == cfg["solver"]
+
+    cfg = lm({"cfl": {"max": 500.0}, "line_search_merit": "all"})
+    assert cfg["solver"]["cfl"]["max"] == 500.0
+    assert cfg["solver"]["line_search_merit"] == "all"
+    assert cfg["solver"]["newton_krylov"]["variable_scaling"] is True
+
+    base = resolve(MINIMAL, "c.toml")["solver"]
+    assert base["cfl"]["max"] == 1.0e10
+    assert base["newton_krylov"]["variable_scaling"] is False
+    assert base["line_search_merit"] == "all"

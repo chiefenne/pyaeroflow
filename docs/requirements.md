@@ -8,7 +8,7 @@ Living document, updated after each requirement step.
 - **X** – not planned
 - **O** – open requirement step, with the current proposal
 
-Status: requirements complete since 2026-10-13 (steps 1–13); stages 0–6 and L2, L3, L4, L6, L7 are implemented (1.1.0, 2026-10-31); open: L1, L5 and the "possible later" items.
+Status: requirements complete since 2026-10-13 (steps 1–13); stages 0–6 and L2, L3, L4, L6, L7 are implemented (1.2.0, 2026-11-02); open: L1, L5 and the "possible later" items.
 
 
 ## 1. Purpose and scope

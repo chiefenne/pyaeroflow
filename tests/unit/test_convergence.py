@@ -46,6 +46,45 @@ def test_cauchy_element_is_relative():
     assert not d.update(2, (0.0, 1.05, 0.0))
 
 
+def test_cauchy_guard_needs_the_residual_drop_over_the_whole_window():
+    c = CauchyCriterion(["cd"], elements=3, eps=1e-3, min_drop=0.1)
+    c.update(1, (0.0, 1.0, 0.0), drop=0.0)
+    # Frozen forces at the residual peak: the plain criterion is met ...
+    for it in range(2, 8):
+        assert not c.update(it, (0.0, 1.0, 0.0), drop=0.0)
+    assert c.steady and c.held_back and not c.converged
+    # ... but only a full window of iterations with a drop counts.
+    assert not c.update(8, (0.0, 1.0, 0.0), drop=0.5)
+    assert not c.update(9, (0.0, 1.0, 0.0), drop=0.5)
+    assert c.held_back
+    assert c.update(10, (0.0, 1.0, 0.0), drop=0.5)
+    assert c.converged and not c.held_back
+    # One iteration below the threshold starts the count again.
+    assert not c.update(11, (0.0, 1.0, 0.0), drop=0.05)
+    assert c.held_back
+    assert not c.update(12, (0.0, 1.0, 0.0), drop=0.5)
+    assert not c.update(13, (0.0, 1.0, 0.0), drop=0.5)
+    assert c.update(14, (0.0, 1.0, 0.0), drop=0.5)
+
+
+def test_cauchy_guard_is_off_without_min_drop_or_without_a_drop():
+    plain = CauchyCriterion(["cd"], elements=2, eps=1e-3)  # min_drop = 0
+    plain.update(1, (0.0, 1.0, 0.0), drop=0.0)
+    plain.update(2, (0.0, 1.0, 0.0), drop=0.0)
+    assert plain.update(3, (0.0, 1.0, 0.0), drop=0.0)
+    unknown = CauchyCriterion(["cd"], elements=2, eps=1e-3, min_drop=1.0)
+    unknown.update(1, (0.0, 1.0, 0.0))
+    unknown.update(2, (0.0, 1.0, 0.0))
+    assert unknown.update(3, (0.0, 1.0, 0.0))  # drop not given: counts
+
+
+def test_cauchy_guard_does_not_loosen_the_force_criterion():
+    c = CauchyCriterion(["cd"], elements=2, eps=1e-3, min_drop=0.1)
+    for it, cd in enumerate((1.0, 1.1, 1.2, 1.3), start=1):
+        assert not c.update(it, (0.0, cd, 0.0), drop=2.0)
+    assert not c.steady and not c.held_back
+
+
 def test_window_weights():
     assert window_weight("square", 3, 10) == 1.0
     for f in ("hann", "hann_square", "bump"):
@@ -106,6 +145,26 @@ def test_cauchy_stops_a_run_before_the_residual_drop(case_dir):
     log = (case_dir / "out" / "couette_test.log").read_text()
     assert "Cauchy criterion met on cm" in log
     assert "convergence criterion" in log.split("Summary")[1]
+
+
+def test_cauchy_guard_holds_a_run_that_has_not_dropped_enough(case_dir):
+    """Standing forces are reported, not obeyed, while the residual has not fallen."""
+    text = COUETTE.replace(
+        "residual_drop = 9.0",
+        "residual_drop = 40.0\nmax_iterations = 9\n[solver.convergence]\n"
+        'fields = ["cm"]\ncauchy_elements = 2\ncauchy_eps = 1e-2\n'
+        "min_residual_drop = 50.0",
+    )
+    (case_dir / "couette.toml").write_text(text)
+    result = run_case(case_dir / "couette.toml", console=False)
+    assert not result.converged
+    log = (case_dir / "out" / "couette_test.log").read_text()
+    before, summary = log.split("Summary")
+    assert "Cauchy criterion met on" not in log
+    assert before.count("Cauchy criterion on cm is met") == 1  # said once
+    assert "but not applied" in before
+    assert "met on cm but not applied" in summary
+    assert "convergence criterion" not in summary
 
 
 def test_convergence_field_must_be_a_coefficient(case_dir):

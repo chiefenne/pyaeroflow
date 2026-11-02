@@ -36,6 +36,10 @@ SST_DEFAULT_VISCOSITY_RATIO = 1.0
 # SU2's MAX_UPDATE_SST: an update may lower k or omega by at most this
 # fraction of the current value (the cell's turbulence update is scaled).
 SST_MAX_UPDATE = 0.99
+# SU2's limits of k and omega (CTurbSSTSolver lowerlimit/upperlimit, applied
+# with AddClippedSolution after every update), non-dimensional here.
+SST_K_LIMITS = (1.0e-10, 1.0e10)
+SST_OMEGA_LIMITS = (1.0e-4, 1.0e15)
 
 
 def sst_default_values(nu, speed):
@@ -539,13 +543,25 @@ class IncompressibleProblem:
         )
         return JacobianPattern(self.geom, self.model.n_var, masks)
 
-    def time_term(self, w, beta2, cfl):
-        """Block-diagonal pseudo-time matrix Gamma_i Lambda_i / CFL."""
-        return block_diagonal(
-            np.asarray(
-                self.physics.time_term_blocks(self.model, self.geom, w, beta2, cfl)
-            )
+    def time_term(self, w, beta2, cfl, transition_cfl_max=None):
+        """Block-diagonal pseudo-time matrix Gamma_i Lambda_i / CFL.
+
+        With ``transition_cfl_max`` (Langtry-Menter) the gamma and Re_thetat
+        rows use min(CFL, transition_cfl_max): a separate, lower pseudo-time
+        step for the transition equations, as their own solver has in SU2.
+        """
+        blocks = np.asarray(
+            self.physics.time_term_blocks(self.model, self.geom, w, beta2, cfl)
         )
+        if (
+            transition_cfl_max is not None
+            and self.model.transition == "lm"
+            and cfl > transition_cfl_max
+        ):
+            rows = [rans_sst.NGL, rans_sst.NRT]
+            blocks = blocks.copy()
+            blocks[:, rows, :] *= cfl / transition_cfl_max
+        return block_diagonal(blocks)
 
     def explicit_update(self, w, r, beta2, cfl):
         """Explicit increment CFL / Lambda_i * Gamma_i^-1 R_i."""
@@ -764,6 +780,9 @@ class IncompressibleProblem:
         transition_clip=True,
         gamma_guard=False,
         resume=None,
+        debug=None,
+        transition_cfl_max=None,
+        whole_cell_relaxation=False,
     ):
         """Implicit pseudo-time solution (D25, D35).
 
@@ -786,6 +805,15 @@ class IncompressibleProblem:
         that of the unrelaxed model. ``gamma_diagnostics`` stores per-iteration
         intermittency statistics (:data:`GAMMA_DIAGNOSTICS`) in the callback's
         ``info["transition_diagnostics"]``.
+
+        ``debug`` is passed to :func:`solve_steady` (numerics record of every
+        iteration, see :mod:`pyaeroflow.io.debug_log`).
+
+        ``transition_cfl_max`` caps the pseudo-time CFL of the Langtry-Menter
+        gamma and Re_thetat rows (:meth:`time_term`); None = solver CFL.
+        ``whole_cell_relaxation`` (SST): a cell whose k-omega update the
+        positivity limiter scales gets the same scale on all its variables
+        (:meth:`_sst_limiter`).
 
         With ``nu_tilde_step_limit`` = f every update of nu_tilde is capped
         to f max(|nu_tilde|, nu) per cell before the line search (the
@@ -863,6 +891,13 @@ class IncompressibleProblem:
         def on_iteration(it, w, residuals, cfl, accepted):
             if vortex is not None and accepted:
                 self.apply_farfield_vortex(vortex, w)
+                # The farfield values changed: the residual operator did, so
+                # solve_steady must judge the next step against the residual
+                # of the current state under the new farfield. Without this the
+                # reference is the old operator's residual: every trial step
+                # looks worse, the line search cuts it to a quarter, and with
+                # a small reject_factor even a vanishing step is rejected.
+                on_iteration.info["residual_changed"] = True
             if track and accepted:
                 transition_step(it, w)
             if uses_limiter and state["psi"] is None and accepted:
@@ -916,7 +951,7 @@ class IncompressibleProblem:
         result = solve_steady(
             residual,
             lambda w: self.jacobian(w, beta2_at(w)),
-            lambda w, cfl: self.time_term(w, beta2_at(w), cfl),
+            lambda w, cfl: self.time_term(w, beta2_at(w), cfl, transition_cfl_max),
             w0,
             settings or PseudoTimeSettings(),
             residual_startup=residual_startup,
@@ -928,13 +963,20 @@ class IncompressibleProblem:
                 w, beta2_at(w), state["psi"], state["gamma"]
             ),
             limit_step=self._step_limiter(
-                nu_tilde_step_limit, transition_clip, gamma_guard, guard_stats
+                nu_tilde_step_limit,
+                transition_clip,
+                gamma_guard,
+                guard_stats,
+                whole_cell_relaxation,
             ),
             resume=resume,
+            debug=debug,
         )
         return result._replace(state={**result.state, **driver_state()})
 
-    def _step_limiter(self, factor, clip=True, gamma_guard=False, guard_stats=None):
+    def _step_limiter(
+        self, factor, clip=True, gamma_guard=False, guard_stats=None, whole_cell=False
+    ):
         """Step limiter of the turbulence variables, or None.
 
         SST always gets SU2's under-relaxation (:meth:`_sst_limiter`, with the
@@ -943,13 +985,28 @@ class IncompressibleProblem:
         nu_tilde cap of ``factor`` (None = no cap).
         """
         if self.model.turbulence == "sst":
-            return self._sst_limiter(clip=clip, guard=gamma_guard, stats=guard_stats)
+            return self._sst_limiter(
+                clip=clip, guard=gamma_guard, stats=guard_stats, whole_cell=whole_cell
+            )
         return self._nu_tilde_limiter(factor)
 
     def _sst_limiter(
-        self, max_update=SST_MAX_UPDATE, clip=True, guard=False, stats=None
+        self,
+        max_update=SST_MAX_UPDATE,
+        clip=True,
+        guard=False,
+        stats=None,
+        whole_cell=False,
     ):
         """SU2's SST under-relaxation: k and omega stay positive.
+
+        After the update k and omega are clipped to SU2's limits
+        (:data:`SST_K_LIMITS`, :data:`SST_OMEGA_LIMITS`). Without the floor
+        the 99 % cut lets k fall by a factor 100 per iteration in a cell where
+        Newton keeps asking for a negative k: on the 320k SD7003 LM alpha 0 a
+        wake cell reached k = 3e-73 with u = -0.23 among neighbours at u =
+        0.93, its Jacobian (sqrt(k) terms) was useless, and the cell held 99 %
+        of the u residual and cut every later step.
 
         Per cell the (k, omega) update is scaled by min(1, max_update /
         ratio) with ratio the larger of |dk| / k and |domega| / omega, only
@@ -977,16 +1034,23 @@ class IncompressibleProblem:
         passes them); with ``r=None`` the guard is skipped. ``stats`` (dict)
         counts the updates seen, those where the guard fired, the largest and
         the last number of cells.
+
+        ``whole_cell``: the scale of the k-omega group also multiplies the
+        flow (and transition) update of that cell. Scaling only k and omega
+        leaves a flow update that was computed for the full k-omega change, so
+        in a cell where Newton keeps asking for a negative k or omega the
+        coupled update no longer fits together and can raise the residual
+        at any step length.
         """
         groups = [[rans_sst.NK, rans_sst.NW]]
-        clips = []
+        clips = [(rans_sst.NK, SST_K_LIMITS), (rans_sst.NW, SST_OMEGA_LIMITS)]
         guard = guard and self.model.transition == "lm"
         if self.model.transition == "lm":
             groups.append(
                 [rans_sst.NGL, rans_sst.NRT]
             )  # scaled apart (own solver in SU2)
             if clip:
-                clips = [
+                clips += [
                     (rans_sst.NGL, lm.GAMMA_LIMITS),
                     (rans_sst.NRT, lm.RE_THETA_LIMITS),
                 ]
@@ -1005,12 +1069,15 @@ class IncompressibleProblem:
                     stats["fired"] += n_wrong > 0
                     stats["cells_max"] = max(stats["cells_max"], n_wrong)
                     stats["cells_last"] = n_wrong
-            for cols in groups:
+            for i, cols in enumerate(groups):
                 val = np.maximum(u[:, cols], 1e-300)
                 drop = np.maximum(-du[:, cols], 0.0) / val
                 ratio = drop.max(axis=1)
                 scale = np.minimum(1.0, max_update / np.maximum(ratio, 1e-300))
-                du[:, cols] *= scale[:, None]
+                if whole_cell and i == 0:
+                    du *= scale[:, None]  # k-omega group: the whole cell
+                else:
+                    du[:, cols] *= scale[:, None]
             for col, (low, high) in clips:
                 du[:, col] = np.clip(u[:, col] + du[:, col], low, high) - u[:, col]
             return du

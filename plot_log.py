@@ -12,7 +12,9 @@ Writes (prefix defaults to the log file name without extension):
   <prefix>_residuals.png  R_p, R_u, R_v (left axis) + R_nu (right axis);
                           with SA-AFT also R_gam and R_n, with SST R_k and
                           R_om instead of R_nu (right axis)
-  <prefix>_solver.png     drop / CFL / GMRES / wall[s] as stacked subplots
+  <prefix>_solver.png     drop / CFL / GMRES / line-search step / wall[s] as
+                          stacked subplots (the step panel only if the line
+                          search cut a step: log notes "step 1/2", "step 1/4")
   <prefix>_coeffs.png     CL / CD / CM as stacked subplots
   <prefix>_diffs.png      consecutive differences of drop / CFL / GMRES
 The input file name is printed in the title of every figure.
@@ -47,6 +49,7 @@ Targets (optional TOML file, every entry optional, see targets.toml):
 """
 import argparse
 import os
+import re
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -62,6 +65,7 @@ except ModuleNotFoundError:             # pragma: no cover
         tomllib = None
 
 LIMITER_TAG = "limiter released"
+STEP_NOTE = re.compile(r",?\s*\bstep 1/(\d+)")  # "step 1/4": line search cut the step
 ZOOM_LEAD = 20       # iterations before limiter release used for coeff scaling
 CFL_MAX = 1e5
 DCFL_MAX = 8e3       # +- limit for the delta CFL panel
@@ -175,7 +179,10 @@ def parse_log(path):
     laminar (3), SA (4), SA-AFT (6: also R_gam, R_n) and SST (5: R_k, R_om
     instead of R_nu) logs all work.
     Steady: iter, log(R_*), drop, CFL, [NK], GMRES, CL, CD, CM, wall, note.
-            NK is optional per row; GMRES is 0 when no NK step ran.
+            NK is optional per row; GMRES is 0 when no NK step ran. A note
+            "step 1/N" (the line search kept 1/N of the Newton step) is not
+            a note for the plots: it becomes the "step" column (fraction of the
+            step kept, 1 = full), which is dropped if the log has no cut step.
     Transient: step, time, inner, drop, log(R_*), GMRES, CL, CD, CM, wall, note.
             Mapped onto the same keys; 'iter' holds the step number.
     """
@@ -206,8 +213,11 @@ def parse_log(path):
                         gmres = int(rest[1])
                         rest = rest[2:]
                     cl, cd, cm, wall = map(float, rest[:4])
-                    rows.append([it, *res, drop, cfl, gmres, cl, cd, cm, wall])
-                    notes.append(" ".join(rest[4:]))
+                    note = " ".join(rest[4:])
+                    cut = STEP_NOTE.search(note)
+                    step = 1.0 / int(cut.group(1)) if cut else 1.0
+                    rows.append([it, *res, drop, cfl, gmres, cl, cd, cm, wall, step])
+                    notes.append(STEP_NOTE.sub("", note).strip())
                 else:
                     n = 4 + nr + 5
                     rows.append([float(v) for v in tok[:n]])
@@ -216,12 +226,15 @@ def parse_log(path):
                 continue  # incomplete row (e.g. still being written)
 
     if mode == "steady":
-        cols = ["iter", *res_keys, "drop", "CFL", "GMRES", "CL", "CD", "CM", "wall"]
+        cols = ["iter", *res_keys, "drop", "CFL", "GMRES", "CL", "CD", "CM", "wall",
+                "step"]
     else:
         cols = ["iter", "time", "inner", "drop", *res_keys,
                 "GMRES", "CL", "CD", "CM", "wall"]
     data = np.array(rows, dtype=float).reshape(-1, len(cols))
     d = {c: data[:, i] for i, c in enumerate(cols)}
+    if "step" in d and np.all(d["step"] == 1.0):
+        del d["step"]  # no cut step (or a log from before the note): no panel
     return d, notes, mode or "steady"
 
 
@@ -320,11 +333,18 @@ def plot_stack(d, x, notes, xlabel, specs, title, path, targets=None, height=2.4
     if ylim_window is not None:
         mask = (x >= ylim_window[0]) & (x <= ylim_window[1])
     for k, (a, (key, lab, logy)) in enumerate(zip(axes, specs)):
-        if key == "GMRES":
+        if key in ("GMRES", "step"):
             a.step(x, d[key], where="mid", color=f"C{k}", lw=1)
             a.plot(x, d[key], ".", ms=4, color=f"C{k}")
         else:
             a.plot(x, d[key], marker=".", ms=4, lw=1, color=f"C{k}")
+        if key == "step":  # 1, 1/2, 1/4 ... on a log2 axis
+            n = int(round(-np.log2(d[key].min())))
+            a.set_yscale("log", base=2)
+            a.set_ylim(2.0 ** -(n + 0.5), 1.4)
+            a.set_yticks([2.0 ** -j for j in range(n + 1)])
+            a.set_yticklabels(["1"] + [f"1/{2 ** j}" for j in range(1, n + 1)])
+            a.minorticks_off()
         if logy:
             a.set_yscale("log")
         t = draw_target(a, key, targets, f"C{k}", logy=logy)
@@ -410,7 +430,9 @@ def main():
                    f"{prefix}_residuals.png")
     plot_stack(d, x, notes, xlabel,
                [("drop", "drop", False), ("CFL", "CFL", True),
-                ("GMRES", "GMRES its (0 = none)", False), ("wall", "wall [s]", False)],
+                ("GMRES", "GMRES its (0 = none)", False),
+                ("step", "line-search step (1 = full)", False),
+                ("wall", "wall [s]", False)],
                f"Solver control: {name}", f"{prefix}_solver.png",
                targets=targets, ymax=CFL_MAX)
     plot_stack(d, x, notes, xlabel,

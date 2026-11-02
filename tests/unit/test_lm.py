@@ -383,3 +383,35 @@ def test_step_limiter_without_clip_leaves_gamma_unclipped():
     free = w + p._step_limiter(None, False)(w, du)
     assert clipped[:, rans_sst.NGL].min() == pytest.approx(lm.GAMMA_LIMITS[0])
     assert free[:, rans_sst.NGL].max() < 1e-142  # the 99 % limit only
+
+
+def test_transition_cfl_max_caps_only_the_gamma_and_re_theta_rows():
+    p, k_omega = _lm_plate()
+    w = p.initial_state((1.0, 0.0), k_omega=k_omega)
+    b2 = p.beta2(w)
+    n = p.model.n_var
+    plain = p.time_term(w, b2, 1e4).diagonal().reshape(-1, n)
+    capped = p.time_term(w, b2, 1e4, transition_cfl_max=1e3).diagonal().reshape(-1, n)
+    rows = [rans_sst.NGL, rans_sst.NRT]
+    other = [c for c in range(n) if c not in rows]
+    np.testing.assert_allclose(capped[:, rows], 10.0 * plain[:, rows])
+    np.testing.assert_allclose(capped[:, other], plain[:, other])
+    # The cap only lowers: below it the time term is the plain one.
+    low = p.time_term(w, b2, 500.0, transition_cfl_max=1e3).diagonal()
+    np.testing.assert_allclose(low, p.time_term(w, b2, 500.0).diagonal())
+
+
+def test_whole_cell_relaxation_scales_the_flow_update_of_a_limited_cell():
+    p, k_omega = _lm_plate()
+    w = p.initial_state((1.0, 0.0), k_omega=k_omega)
+    du = np.full_like(w, 1e-3)
+    du[:, rans_sst.NGL] = 0.0
+    du[:, rans_sst.NRT] = 0.0
+    du[0, rans_sst.NK] = -2.0 * w[0, rans_sst.NK]  # asks for a negative k
+    plain = p._step_limiter(None)(w, du)
+    whole = p._step_limiter(None, whole_cell=True)(w, du)
+    scale = 0.99 / 2.0
+    np.testing.assert_allclose(plain[0, :3], du[0, :3])  # flow untouched
+    np.testing.assert_allclose(whole[0, :3], scale * du[0, :3])
+    np.testing.assert_allclose(whole[0, rans_sst.NK], plain[0, rans_sst.NK])
+    np.testing.assert_allclose(whole[1:], plain[1:])  # other cells unchanged

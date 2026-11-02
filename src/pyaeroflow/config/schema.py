@@ -78,6 +78,18 @@ SCHEMA = {
                 "plain Newton and positive_jacobian alone was better, so it is off "
                 "by default",
             ),
+            "cfl_max": Opt(
+                "float",
+                None,
+                "model = lm: largest pseudo-time CFL number of the gamma and "
+                "Re_thetat equations (implicit modes); the flow and k-omega rows "
+                "keep the solver CFL. Like a segregated transition solver with "
+                "its own CFL in SU2: at a high CFL the Newton update of gamma "
+                "overshoots (the full step raised the gamma residual 10-50x on "
+                "the 320k SD7003 at CFL >= 2560) and the line search then cuts "
+                "the good flow update to a quarter as well. Default: no cap",
+                minimum=0.0,
+            ),
             "positive_jacobian": Opt(
                 "bool",
                 True,
@@ -310,6 +322,26 @@ SCHEMA = {
         "max_iterations": Opt(
             "int", 10000, "Maximum pseudo-time iterations", minimum=1
         ),
+        "whole_cell_relaxation": Opt(
+            "bool",
+            False,
+            "SST: a cell whose k-omega update the positivity limiter scales "
+            "(update would lower k or omega by more than 99 %) gets the same "
+            "scale on all its variables, so that its coupled update stays "
+            "consistent; false scales k and omega only",
+        ),
+        "line_search_merit": Opt(
+            "string",
+            "all",
+            "Residuals whose RMS the line search, the step acceptance "
+            "(cfl.reject_factor) and the SER CFL control judge: all, or "
+            "no_transition (leaves out the Langtry-Menter gamma and Re_thetat "
+            "rows; their raw residual is largest in the big outlet and "
+            "farfield cells and vetoes good flow steps). The convergence "
+            "measure (residual_drop) always covers all equations. Default "
+            "no_transition with physics.transition.model = lm",
+            choices=("all", "no_transition"),
+        ),
         "refactor_interval": Opt(
             "int",
             3,
@@ -354,10 +386,25 @@ SCHEMA = {
                 "Cauchy values count only from this iteration (SU2 CONV_STARTITER)",
                 minimum=0,
             ),
+            "min_residual_drop": Opt(
+                "float",
+                0.1,
+                "Guard of the Cauchy criterion: an iteration counts in the "
+                "window only if its residual drop (the drop column of the log: "
+                "the worst equation relative to its own peak, in orders) is at "
+                "least this; forces that stand still while the residual sits at "
+                "its peak do not stop the run. 0 = SU2's plain criterion",
+                minimum=0.0,
+            ),
         },
         "cfl": {
             "start": Opt("float", 10.0, "Initial CFL number", minimum=0.0),
-            "max": Opt("float", 1.0e10, "Maximum CFL number", minimum=0.0),
+            "max": Opt(
+                "float",
+                1.0e10,
+                "Maximum CFL number (Langtry-Menter: default 2000)",
+                minimum=0.0,
+            ),
             "max_approximate": Opt(
                 "float",
                 1.0e3,
@@ -454,6 +501,17 @@ SCHEMA = {
             "max_iterations": Opt(
                 "int", 200, "Maximum GMRES iterations per Newton step", minimum=1
             ),
+            "variable_scaling": Opt(
+                "bool",
+                False,
+                "Measure the GMRES error of each variable relative to its size "
+                "(unknowns du_j / s_j: s = 1 for p, u, v, the field RMS for the "
+                "turbulence and transition variables). The left-preconditioned "
+                "GMRES otherwise minimizes the error in raw units and leaves the "
+                "small variables unsolved: on the 320k SD7003 LM case 95 % of the "
+                "gamma residual stayed in the linear model while Re_thetat (~1e3) "
+                "was solved. Default true with physics.transition.model = lm",
+            ),
             "linearize": Opt(
                 "bool",
                 True,
@@ -473,7 +531,7 @@ SCHEMA = {
                 "(x4, up to cfl.max); in between the cap is held. A larger "
                 "value allows a higher CFL where GMRES works moderately hard "
                 "(stalled steps of 20-50 iterations hold the CFL near 1e3 with "
-                "the default)",
+                "the default). Default 150 with physics.transition.model = lm",
                 minimum=4,
             ),
         },
@@ -676,6 +734,15 @@ SCHEMA = {
         ),
         "verbosity": Opt(
             "string", "normal", "Log detail", choices=("normal", "detailed")
+        ),
+        "debug_log": Opt(
+            "bool",
+            False,
+            "Steady implicit runs: write <name>.debug.log with one numerics "
+            "block per iteration (GMRES tolerance and true linear residual, "
+            "step-limiter counts, largest updates, every line-search trial per "
+            "variable, reference re-evaluations, cells with the largest "
+            "residuals); costs one Jacobian product per Newton step",
         ),
     },
 }

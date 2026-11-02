@@ -98,6 +98,40 @@ def test_line_search_accepts_a_shortened_step():
     np.testing.assert_allclose(result.u, 1.0, rtol=1e-12)
 
 
+def test_line_search_factor_is_recorded_and_reported():
+    """The fraction of the Newton step kept is in the history and the callback."""
+    residual, jacobian, time_term, u0 = scalar_problem(9.0)
+    settings = PseudoTimeSettings(cfl_start=1.0e8, residual_drop=12.0)
+    seen = []
+
+    def callback(it, u, residuals, cfl, accepted):
+        seen.append((it, callback.info.get("step_factor")))
+
+    callback.info = {}
+    with np.errstate(invalid="ignore"):
+        result = solve_steady(
+            residual, jacobian, time_term, u0, settings, callback=callback
+        )
+    h = result.history
+    factors = h["step_factor"]
+    assert factors.size == h["iteration"].size
+    assert factors[0] == 1.0  # the start is not a step
+    assert factors[1] == 0.5  # the full step lands at u < 0
+    assert set(factors) <= {1.0, 0.5, 0.25}
+    assert factors[-1] == 1.0  # Newton needs no cut near the root
+    assert seen[0] == (0, None) and seen[1] == (1, 0.5)
+    assert [f for _, f in seen[1:]] == list(factors[1:])
+
+    # Without backtracking the factor stays 1, rejected or not.
+    settings = PseudoTimeSettings(
+        cfl_start=1.0e8, residual_drop=12.0, line_search_steps=0
+    )
+    with np.errstate(invalid="ignore"):
+        result = solve_steady(residual, jacobian, time_term, u0, settings)
+    assert not result.history["accepted"][1]
+    assert np.all(result.history["step_factor"] == 1.0)
+
+
 def test_newton_krylov_waits_for_the_measured_drop():
     """A small absolute residual must not trigger the NK switch (per-equation
     measure, D54): u0 = 1.0001 gives |R| ~ 5e-5 from the start."""
@@ -269,3 +303,73 @@ def test_beta2_tracker_follows_the_accepted_state():
     stub.beta2(trial)
     assert at(accepted) == 2.0  # still the accepted state's value
     assert at(trial.copy()) != 2.0 or np.isnan(at(trial.copy()))
+
+
+class _RecordingInfo(dict):
+    """callback.info that remembers which keys were set."""
+
+    def __init__(self):
+        super().__init__()
+        self.set_keys = []
+
+    def __setitem__(self, key, value):
+        self.set_keys.append(key)
+        super().__setitem__(key, value)
+
+
+def test_farfield_vortex_update_marks_the_residual_changed():
+    """The vortex changes the farfield after every accepted iteration, so the
+    next step must be judged against the residual under the new farfield."""
+    from pyaeroflow.driver import IncompressibleProblem
+    from pyaeroflow.physics import incompressible as inc
+
+    mesh = rectangle(8, 6, x=(-1.0, 1.0), y=(0.0, 1.0))
+    a = np.radians(5.0)
+    farfield = {"type": "farfield", "velocity": (np.cos(a), np.sin(a)), "pressure": 0.0}
+    conditions = {"bottom": {"type": "wall"}}
+    conditions.update({n: dict(farfield) for n in ("left", "right", "top")})
+    model = inc.IncompressibleModel(density=1.0, viscosity=0.05)
+    problem = IncompressibleProblem(mesh, model, conditions)
+    vortex = problem.farfield_vortex((0.0, 0.0), ["bottom"])
+    changed = []
+
+    def callback(it, w, residuals, cfl, accepted):
+        changed.append((it, accepted, "residual_changed" in callback.info.set_keys))
+        callback.info.set_keys.clear()
+
+    callback.info = _RecordingInfo()
+    problem.solve(
+        problem.initial_state((np.cos(a), np.sin(a))),
+        PseudoTimeSettings(max_iterations=4, residual_drop=12.0),
+        callback=callback,
+        vortex=vortex,
+    )
+    assert vortex.gamma != 0.0
+    assert all(flag for it, ok, flag in changed if ok and it > 0)
+
+
+def test_variable_scaling_is_a_change_of_units():
+    """nk_variable_scaling: unknowns du_j / s_j, s = 1 for p, u, v and the
+    field RMS for the others; the scaled, preconditioned operator is the
+    original one in the new units and the map back restores du."""
+    from pyaeroflow.solver.pseudo_time import _variable_scaling
+
+    rng = np.random.default_rng(1)
+    u = np.column_stack(
+        [
+            rng.normal(size=5),
+            1 + rng.random(5),
+            rng.random(5),
+            1e-3 * rng.random(5),
+            1e3 * (1 + rng.random(5)),
+        ]
+    )
+    a = 1.0 + rng.random(u.size)
+    operator = lambda v: a * v  # noqa: E731
+    precondition = lambda r: r / a  # noqa: E731
+    apply, pre, unscale = _variable_scaling(operator, precondition, u)
+    y = rng.normal(size=u.size)
+    np.testing.assert_allclose(pre(apply(y)), y)
+    s = unscale(np.ones(u.size)).reshape(u.shape)[0]
+    np.testing.assert_allclose(s[:3], 1.0)
+    np.testing.assert_allclose(s[3:], np.sqrt(np.mean(u[:, 3:] ** 2, axis=0)))

@@ -262,7 +262,11 @@ The log (also readable with `tail -f`) has these parts:
   physical time), `NK` marks Newton–Krylov iterations with the GMRES count
   next to it, then `CL CD CM`, and `wall[s]` is the wall-clock time since
   the start of the run. The note column shows `limiter released`
-  (or `frozen`) and `rejected` updates. Expected pattern on a 100k-cell
+  (or `frozen`), `rejected` updates and `step 1/2` or `step 1/4` where the
+  line search cut the Newton step to that fraction because the full step
+  raised the residual. An occasional cut is normal; a cut at every iteration
+  means the iteration makes little progress, whatever the forces do (the
+  Summary counts them). Expected pattern on a 100k-cell
   mesh: 40 start-up iterations that bring the flow residuals down about
   three orders while the turbulence field develops, then 4–10 Newton steps
   with quadratic convergence (residuals drop one to two orders per step).
