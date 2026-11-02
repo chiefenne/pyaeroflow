@@ -1700,6 +1700,39 @@ def _mode_rows(cfg):
                 "(physics.transition.positive_jacobian = false)",
             )
         )
+        if tr.get("cfl_max") is not None:
+            rows.append(
+                (
+                    "gamma, Re_thetat CFL",
+                    f"time-term rows capped at CFL {tr['cfl_max']:g} "
+                    "(physics.transition.cfl_max)",
+                )
+            )
+    if solver["line_search_merit"] != "all":
+        rows.append(
+            (
+                "line-search merit",
+                f"{solver['line_search_merit']} (solver.line_search_merit; "
+                "residual_drop still covers all equations)",
+            )
+        )
+    if solver["whole_cell_relaxation"]:
+        rows.append(
+            (
+                "step limiter",
+                "whole-cell relaxation: a cell scaled in k-omega is scaled in "
+                "all variables (solver.whole_cell_relaxation)",
+            )
+        )
+    nk_cfg = solver["newton_krylov"]
+    if nk_cfg["enabled"] and nk_cfg["variable_scaling"]:
+        rows.append(
+            (
+                "GMRES scaling",
+                "per-variable (turbulence/transition unknowns measured relative "
+                "to their field RMS; newton_krylov.variable_scaling)",
+            )
+        )
     if (
         solver["nu_tilde_step_limit"] is not None
         and cfg["physics"]["turbulence"] != "sst"
