@@ -98,6 +98,40 @@ def test_line_search_accepts_a_shortened_step():
     np.testing.assert_allclose(result.u, 1.0, rtol=1e-12)
 
 
+def test_line_search_factor_is_recorded_and_reported():
+    """The fraction of the Newton step kept is in the history and the callback."""
+    residual, jacobian, time_term, u0 = scalar_problem(9.0)
+    settings = PseudoTimeSettings(cfl_start=1.0e8, residual_drop=12.0)
+    seen = []
+
+    def callback(it, u, residuals, cfl, accepted):
+        seen.append((it, callback.info.get("step_factor")))
+
+    callback.info = {}
+    with np.errstate(invalid="ignore"):
+        result = solve_steady(
+            residual, jacobian, time_term, u0, settings, callback=callback
+        )
+    h = result.history
+    factors = h["step_factor"]
+    assert factors.size == h["iteration"].size
+    assert factors[0] == 1.0  # the start is not a step
+    assert factors[1] == 0.5  # the full step lands at u < 0
+    assert set(factors) <= {1.0, 0.5, 0.25}
+    assert factors[-1] == 1.0  # Newton needs no cut near the root
+    assert seen[0] == (0, None) and seen[1] == (1, 0.5)
+    assert [f for _, f in seen[1:]] == list(factors[1:])
+
+    # Without backtracking the factor stays 1, rejected or not.
+    settings = PseudoTimeSettings(
+        cfl_start=1.0e8, residual_drop=12.0, line_search_steps=0
+    )
+    with np.errstate(invalid="ignore"):
+        result = solve_steady(residual, jacobian, time_term, u0, settings)
+    assert not result.history["accepted"][1]
+    assert np.all(result.history["step_factor"] == 1.0)
+
+
 def test_newton_krylov_waits_for_the_measured_drop():
     """A small absolute residual must not trigger the NK switch (per-equation
     measure, D54): u0 = 1.0001 gives |R| ~ 5e-5 from the start."""

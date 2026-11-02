@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Log: the line search is visible. An iteration whose Newton step was cut back
+  (halved up to twice, `line_search_steps`) carries the note `step 1/2` or
+  `step 1/4` (`rejected step 1/4` if it was rejected nevertheless, `limiter
+  released, step 1/2` next to another note). The Summary has a `line search`
+  row with the number of cut iterations (`step cut in 164 of 164 iterations
+  (1/4: 164)`). The history
+  returned by `solve_steady` has `step_factor`; the history CSV is unchanged.
+  `plot_log.py` reads the note into a line-search panel of `*_solver.png` (if
+  any step was cut) and draws no marker line for it.
+- Steady Cauchy criterion: guard against false convergence. Forces that stand
+  still do not prove convergence: SD7003 LM at α = 4° (restart from α = 2°) met
+  the criterion on five frozen digits of C_L and C_D after 164 iterations, with
+  every Newton step cut by the line search and `drop` 0.00 (R_u above its start).
+  New `solver.convergence.min_residual_drop` (default 0.1 orders): an iteration
+  enters the Cauchy window only if its `drop` is at least that, an iteration
+  below it empties the window. When the forces are steady but the guard holds
+  the stop back, the log says so once and the Summary has a `Cauchy criterion`
+  row if the run ends that way. `min_residual_drop = 0` is the plain
+  (SU2) criterion of before. Existing cases that stop on Cauchy at a residual
+  drop above 0.1 orders are not affected; a case that stops on Cauchy with the
+  residual at its peak (such as the α = 4° run above) now continues.
 - Performance (C2): the first-order Jacobian is assembled in one pass on its
   structurally non-zero entries: the sources and the pressure pin are written
   into the same bincount (no `block_diagonal` / `replace_rows` sparse adds, no

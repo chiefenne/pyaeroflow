@@ -7,7 +7,7 @@ import pytest
 
 from pyaeroflow.cli import main
 from pyaeroflow.mesh import rectangle, write_su2
-from pyaeroflow.run import run_case
+from pyaeroflow.run import _iteration_note, _line_search_rows, run_case
 
 COUETTE = """
 [case]
@@ -395,3 +395,22 @@ def test_restart_without_state_is_a_new_run(case_dir):
     second = run_case(case_dir / "old.toml", console=False)
     assert second.converged and second.history["iteration"][0] == 0
     assert "no solver state" in (second.output_dir / "couette_old.log").read_text()
+
+
+def test_iteration_note_names_the_line_search_cut():
+    assert _iteration_note("", 1.0) == ""
+    assert _iteration_note("limiter released", 1.0) == "limiter released"
+    assert _iteration_note("", 0.5) == "step 1/2"
+    assert _iteration_note("", 0.25) == "step 1/4"
+    assert _iteration_note("limiter released", 0.25) == "limiter released, step 1/4"
+
+
+def test_summary_counts_the_cut_steps():
+    none = {"step_factor": np.array([1.0, 1.0, 1.0])}
+    assert _line_search_rows(none) == []
+    assert _line_search_rows({}) == []  # a history without the entry
+    # The first entry is the start of the run, not an iteration.
+    h = {"step_factor": np.array([1.0, 1.0, 0.5, 0.25, 0.25, 1.0])}
+    ((key, text),) = _line_search_rows(h)
+    assert key == "line search"
+    assert text == "step cut in 3 of 5 iterations (1/2: 1, 1/4: 2)"

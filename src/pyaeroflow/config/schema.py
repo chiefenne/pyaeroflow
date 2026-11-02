@@ -354,6 +354,16 @@ SCHEMA = {
                 "Cauchy values count only from this iteration (SU2 CONV_STARTITER)",
                 minimum=0,
             ),
+            "min_residual_drop": Opt(
+                "float",
+                0.1,
+                "Guard of the Cauchy criterion: an iteration counts in the "
+                "window only if its residual drop (the drop column of the log: "
+                "the worst equation relative to its own peak, in orders) is at "
+                "least this; forces that stand still while the residual sits at "
+                "its peak do not stop the run. 0 = SU2's plain criterion",
+                minimum=0.0,
+            ),
         },
         "cfl": {
             "start": Opt("float", 10.0, "Initial CFL number", minimum=0.0),

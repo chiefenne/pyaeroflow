@@ -23,6 +23,13 @@ class CauchyCriterion:
     of every monitored coefficient is below ``eps`` and the window is full,
     from iteration ``start`` on.
 
+    Forces that stand still do not prove convergence: a run whose updates are
+    cut back by the line search at every iteration can freeze its forces while
+    its residual sits at the peak. With ``min_drop`` the window must also be
+    made of iterations whose residual drop (the worst equation relative to its
+    own peak, in orders) is at least ``min_drop``; an iteration below it
+    starts the count again. ``min_drop = 0`` is SU2's plain criterion.
+
     Parameters
     ----------
     names : sequence of str
@@ -33,21 +40,28 @@ class CauchyCriterion:
         Tolerance of the mean absolute change per iteration (CONV_CAUCHY_EPS).
     start : int
         Iteration the criterion counts from (CONV_STARTITER).
+    min_drop : float
+        Residual drop in orders that every iteration of the window needs;
+        ``update`` is given the drop of each iteration (None = not known, the
+        iteration counts).
     """
 
     ORDER = ("cl", "cd", "cm")
 
-    def __init__(self, names, elements=100, eps=1.0e-10, start=0):
+    def __init__(self, names, elements=100, eps=1.0e-10, start=0, min_drop=0.0):
         self.names = tuple(names)
         self.index = [self.ORDER.index(n) for n in self.names]
         self.elements, self.eps, self.start = elements, eps, start
+        self.min_drop = min_drop
         self.last = None
         self.changes = []
+        self.settled = 0  # trailing window elements with a residual drop >= min_drop
 
-    def update(self, iteration, coefficients):
+    def update(self, iteration, coefficients, drop=None):
         """Add the coefficients ``(CL, CD, CM)`` of an accepted iteration.
 
-        Returns True once the criterion is met.
+        ``drop`` is the residual drop of the iteration in orders (the ``drop``
+        column of the log). Returns True once the criterion is met.
         """
         values = np.array([coefficients[i] for i in self.index], dtype=float)
         if self.last is not None and iteration >= self.start:
@@ -55,6 +69,10 @@ class CauchyCriterion:
                 np.abs(values - self.last) / np.maximum(np.abs(values), TINY)
             )
             del self.changes[: -self.elements]
+            if drop is None or drop >= self.min_drop:
+                self.settled = min(self.settled + 1, self.elements)
+            else:
+                self.settled = 0
         self.last = values
         return self.converged
 
@@ -66,11 +84,27 @@ class CauchyCriterion:
         return np.mean(self.changes, axis=0)
 
     @property
-    def converged(self):
-        """True if the window is full and every mean change is below ``eps``."""
+    def steady(self):
+        """True if the window is full and every mean change is below ``eps``.
+
+        This is SU2's criterion, whatever the residual does.
+        """
         return len(self.changes) >= self.elements and bool(
             np.all(self.value < self.eps)
         )
+
+    @property
+    def held_back(self):
+        """True if the forces are steady but the residual drop is too small."""
+        return self.steady and self.settled < self.elements
+
+    @property
+    def converged(self):
+        """True if the forces are steady and the residual has dropped enough.
+
+        The drop must be ``min_drop`` orders or more over the whole window.
+        """
+        return self.steady and self.settled >= self.elements
 
 
 WINDOW_FUNCTIONS = ("square", "hann", "hann_square", "bump")

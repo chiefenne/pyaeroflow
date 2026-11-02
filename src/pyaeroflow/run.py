@@ -937,7 +937,8 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
         coeffs = monitor.coefficients(w) if monitor else ()
         extra += tuple(f"{c:.5f}" for c in coeffs)
         drop = max(0.0, -np.log10(max(info.get("measure", 1.0), np.finfo(float).tiny)))
-        log.iteration(it, residuals, cfl, accepted, extra, info.pop("note", ""), drop)
+        note = _iteration_note(info.pop("note", ""), info.get("step_factor", 1.0))
+        log.iteration(it, residuals, cfl, accepted, extra, note, drop)
         history.row(
             it,
             residuals,
@@ -979,12 +980,28 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
                 f"control file .result_{n}: fields written for iteration {n}{extra}"
             )
         restarts(it, w, good=bool(accepted), state=restart_state)
-        if cauchy and accepted and cauchy.update(it, coeffs):
-            log.write(
-                f"Cauchy criterion met on {', '.join(cauchy.names)}: mean relative "
-                f"change below {cauchy.eps:g} over {cauchy.elements} iterations"
-            )
-            info["converged"] = True
+        if cauchy and accepted:
+            if cauchy.update(it, coeffs, drop):
+                log.write(
+                    f"Cauchy criterion met on {', '.join(cauchy.names)}: mean "
+                    f"relative change below {cauchy.eps:g} over {cauchy.elements} "
+                    "iterations"
+                )
+                info["converged"] = True
+            elif not cauchy.held_back:
+                held["noted"] = False
+            elif not held["noted"]:
+                # Say once why a run with standing forces does not stop.
+                held["noted"] = True
+                log.write(
+                    f"Cauchy criterion on {', '.join(cauchy.names)} is met (mean "
+                    f"relative change below {cauchy.eps:g} over {cauchy.elements} "
+                    "iterations) but not applied: within these iterations the "
+                    f"residual drop was below {cauchy.min_drop:g} orders "
+                    f"(solver.convergence.min_residual_drop), now {drop:.2f}. "
+                    "Forces that stand still while the residual has not fallen "
+                    "are not a converged flow; the run goes on."
+                )
         if control.stop_requested():
             log.write(
                 f"control file .stop found: stopping after iteration {it}, "
@@ -996,17 +1013,20 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
 
     solver = cfg["solver"]
     cauchy = None
+    held = {"noted": False}  # the guard of the Cauchy criterion has been reported
 
     def make_cauchy():
         """(Re)build the Cauchy criterion from ``solver.convergence``."""
         nonlocal cauchy
         conv = solver["convergence"]
+        held["noted"] = False
         cauchy = (
             CauchyCriterion(
                 conv["fields"],
                 conv["cauchy_elements"],
                 conv["cauchy_eps"],
                 conv["start_iteration"],
+                conv["min_residual_drop"],
             )
             if conv["fields"] and monitor and implicit
             else None
@@ -1115,11 +1135,60 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
             path = out_dir / f"{name}.wall_{bname}.csv"
             monitor.write_wall(result.u, bname, path)
             rows.append((f"wall '{bname}'", str(path)))
+    notes = _line_search_rows(h) + _cauchy_guard_rows(cauchy, result.converged)
+    if notes:  # right after the iteration counts
+        at = [key for key, _ in rows].index("rejected updates") + 1
+        rows[at:at] = notes
     if stopped:
         rows.insert(1, ("stopped", "by the .stop file"))
     log.table(rows)
     _log_timing(log, log.elapsed - offset)
     return result, coefficients
+
+
+def _iteration_note(note, step_factor):
+    """Log note of an iteration: the driver's note and the line-search cut.
+
+    ``step_factor`` is the fraction of the Newton step the line search kept
+    (1, 1/2, 1/4 ...); a cut step reads ``step 1/2``, ``step 1/4``.
+    """
+    if step_factor >= 1.0:
+        return note
+    cut = f"step 1/{round(1.0 / step_factor)}"
+    return f"{note}, {cut}" if note else cut
+
+
+def _line_search_rows(history):
+    """Summary row with the iterations whose Newton step the line search cut."""
+    factors = np.asarray(history.get("step_factor", ()), dtype=float)[1:]
+    cut = factors[factors < 1.0]
+    if not cut.size:
+        return []
+    values, counts = np.unique(cut, return_counts=True)
+    detail = ", ".join(
+        f"1/{round(1.0 / v)}: {n}"
+        for v, n in zip(values[::-1], counts[::-1], strict=True)
+    )
+    return [
+        (
+            "line search",
+            f"step cut in {cut.size} of {factors.size} iterations ({detail})",
+        )
+    ]
+
+
+def _cauchy_guard_rows(cauchy, converged):
+    """Summary row if the guard of the Cauchy criterion ended up holding the run."""
+    if converged or not (cauchy and cauchy.held_back):
+        return []
+    return [
+        (
+            "Cauchy criterion",
+            f"met on {', '.join(cauchy.names)} but not applied: the residual drop "
+            f"was below {cauchy.min_drop:g} orders within the last "
+            f"{cauchy.elements} iterations",
+        )
+    ]
 
 
 def _transition_rows(monitor, w):
@@ -1548,7 +1617,13 @@ def _mode_rows(cfg):
                 "Cauchy convergence",
                 f"{', '.join(conv['fields'])}: mean relative change < "
                 f"{conv['cauchy_eps']:g} over {conv['cauchy_elements']} "
-                f"iterations from iteration {conv['start_iteration']}",
+                f"iterations from iteration {conv['start_iteration']}"
+                + (
+                    f", only while the residual drop is at least "
+                    f"{conv['min_residual_drop']:g} orders"
+                    if conv["min_residual_drop"] > 0.0
+                    else ""
+                ),
             )
         )
     tconv = cfg["time"]["convergence"]

@@ -209,7 +209,9 @@ class SteadyResult(NamedTuple):
         iteration), ``measure`` (per-equation convergence measure, D54),
         ``residuals`` (RMS norm per variable), ``cfl``,
         ``accepted``, ``newton_krylov`` (phase flag), ``linear_iterations``
-        (GMRES iterations of the step, 0 for a direct solve).
+        (GMRES iterations of the step, 0 for a direct solve),
+        ``step_factor`` (the fraction of the Newton step the line search kept:
+        1, 1/2, 1/4 ...; 1 for the start entry and for a failed linear solve).
     state : dict or None
         Solver state at the end (``cfl``, ``cfl_cap``, ``scale``, ``nk_on``,
         ``iteration``), the ``resume`` argument of a continuation.
@@ -362,6 +364,7 @@ def solve_steady(
         "accepted": [True],
         "newton_krylov": [False],
         "linear_iterations": [0],
+        "step_factor": [1.0],
     }
     converged = done(norm, norm_abs)
     # CFL cap of the Newton-Krylov phase, adapted to the GMRES effort: the
@@ -430,7 +433,7 @@ def solve_steady(
         use_nk = s.newton_krylov and has_jvp and not startup and nk_on
         with timers.section("time term"):
             t_matrix = time_term(u, cfl)
-        accepted, lin_its = False, 0
+        accepted, lin_its, step = False, 0, 1.0
         try:
             reuse = (
                 lin is not None
@@ -474,8 +477,9 @@ def solve_steady(
             r_new = res(u_new, it + 1)
             abs_new = rms(r_new)
             # Backtracking line search (D54): halve a step that raises the
-            # residual norm before giving up on it.
-            step = 1.0
+            # residual norm before giving up on it. The fraction kept is
+            # logged (``step 1/2``, ``step 1/4``): an iteration that needs it
+            # every time makes little progress however the forces look.
             for _ in range(s.line_search_steps):
                 if np.isfinite(abs_new) and abs_new <= norm_abs:
                     break
@@ -491,6 +495,7 @@ def solve_steady(
         hist["accepted"].append(accepted)
         hist["newton_krylov"].append(use_nk)
         hist["linear_iterations"].append(lin_its)
+        hist["step_factor"].append(step)
         if accepted:
             ser = s.cfl_control == "ser"
             if ser:
@@ -543,6 +548,7 @@ def solve_steady(
                 info["newton_krylov"] = use_nk
                 info["linear_iterations"] = lin_its
                 info["measure"] = norm
+                info["step_factor"] = step
             state["it"] = it
             callback(it, u, hist["residuals"][-1], hist["cfl"][-1], accepted)
             if info is not None and info.get("converged"):
@@ -627,6 +633,7 @@ def solve_explicit(
         "accepted": [True],
         "newton_krylov": [False],
         "linear_iterations": [0],
+        "step_factor": [1.0],
     }
     converged = norm <= target
     if callback is not None:
@@ -651,6 +658,7 @@ def solve_explicit(
         hist["accepted"].append(True)
         hist["newton_krylov"].append(False)
         hist["linear_iterations"].append(0)
+        hist["step_factor"].append(1.0)
         if callback is not None:
             callback(it, u, hist["residuals"][-1], cfl, True)
             if getattr(callback, "info", {}).get("stop"):
