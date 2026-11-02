@@ -248,6 +248,7 @@ def solve_steady(
     reference_norm=None,
     limit_step=None,
     resume=None,
+    debug=None,
 ):
     """Drive ``residual(u)`` to zero by implicit pseudo-time stepping.
 
@@ -302,6 +303,17 @@ def solve_steady(
         ``cfl_cap`` and ``nk_on`` are taken over (a new problem, e.g. the next
         angle of attack, that starts from the earlier solution). The initial
         callback (iteration 0) is not called on a continuation.
+    debug : callable, optional
+        ``debug(record)`` after every iteration with a dict of the numerics:
+        ``it``, ``cfl``, ``nk``, ``gmres``, ``factorized``, ``tolerance`` and
+        ``linear_residual`` (Newton-Krylov: the true relative residual of the
+        linear solve, one extra Jacobian product), ``re_evaluated`` (RMS
+        before and after a change of the operator), ``reference`` (residual
+        array the step is judged against), ``reference_rms``, ``du`` (update
+        after ``limit_step``), ``limited`` (cells per variable changed by
+        ``limit_step``), ``trials`` ((factor, RMS, RMS per variable) of every
+        line-search evaluation), ``new`` (residual of the last trial),
+        ``accepted``, ``step``, ``error`` (failed linear solve).
 
     Convergence is measured per equation (D54): every variable's RMS
     residual is divided by the largest value it has had so far (or by
@@ -408,13 +420,17 @@ def solve_steady(
         if converged or cfl < s.cfl_min:
             break
         info = getattr(callback, "info", None)
+        dbg = {"it": it, "cfl": cfl} if debug is not None else None
         if info is not None and info.pop("residual_changed", False):
             # The callback changed the residual operator (limiter frozen or
             # released): the reference for acceptance and convergence is the
             # residual of the current state under the new operator, not the
             # one the previous step produced.
+            before = norm_abs
             r = res(u, it)
             norm_abs = rms(r)
+            if dbg is not None:
+                dbg["re_evaluated"] = (before, norm_abs)
             scale = np.maximum(scale, rms_per_variable(r))
             norm = measure(r)
         startup = residual_startup is not None and it <= s.first_order_iterations
@@ -455,14 +471,24 @@ def solve_steady(
                         product = linearize(u)
                 else:
                     product = partial(jvp, u)
+                tolerance = eta if s.nk_forcing else s.nk_linear_tolerance
                 with timers.section("nk solve (GMRES)"):
                     du, lin_its = solve_matrix_free(
                         _newton_operator(t_matrix, product, u.shape),
                         -r.ravel(),
                         _timed("preconditioner", lin.precondition),
-                        tolerance=eta if s.nk_forcing else s.nk_linear_tolerance,
+                        tolerance=tolerance,
                         restart=s.nk_restart,
                         max_iterations=s.nk_max_krylov,
+                    )
+                if dbg is not None:
+                    # True linear residual |(T + J) du + R| / |R| (one more
+                    # Jacobian product): GMRES only knows its own estimate.
+                    dbg["tolerance"] = tolerance
+                    a_du = _newton_operator(t_matrix, product, u.shape)(du)
+                    dbg["linear_residual"] = float(
+                        np.linalg.norm(a_du + r.ravel())
+                        / max(np.linalg.norm(r.ravel()), tiny)
                     )
                 product = None  # frees the stored linearization
             else:
@@ -470,12 +496,22 @@ def solve_steady(
                     du = lin.solve(-r.ravel())
                 lin_its = lin.iterations
             du = du.reshape(u.shape)
+            if dbg is not None:
+                dbg.update(nk=use_nk, gmres=lin_its, factorized=not reuse)
+                dbg["reference"] = r
+                du_raw = du
             if limit_step is not None:
                 tau = (t_matrix.diagonal() * cfl).reshape(u.shape)
                 du = limit_step(u, du, r, tau)
+            if dbg is not None:
+                dbg["limited"] = np.count_nonzero(du != du_raw, axis=0)
+                dbg["du"] = du
+                dbg["trials"] = []
             u_new = u + du
             r_new = res(u_new, it + 1)
             abs_new = rms(r_new)
+            if dbg is not None:
+                dbg["trials"].append((1.0, abs_new, rms_per_variable(r_new)))
             # Backtracking line search (D54): halve a step that raises the
             # residual norm before giving up on it. The fraction kept is
             # logged (``step 1/2``, ``step 1/4``): an iteration that needs it
@@ -487,9 +523,17 @@ def solve_steady(
                 u_new = u + step * du
                 r_new = res(u_new, it + 1)
                 abs_new = rms(r_new)
+                if dbg is not None:
+                    dbg["trials"].append((step, abs_new, rms_per_variable(r_new)))
             accepted = np.isfinite(abs_new) and abs_new <= s.reject_factor * norm_abs
-        except LinearSolverError:
-            pass
+            if dbg is not None:
+                dbg["new"] = r_new
+        except LinearSolverError as error:
+            if dbg is not None:
+                dbg["error"] = str(error)
+        if dbg is not None:
+            dbg.update(accepted=accepted, step=step, reference_rms=norm_abs)
+            debug(dbg)
         hist["iteration"].append(it)
         hist["cfl"].append(cfl)
         hist["accepted"].append(accepted)

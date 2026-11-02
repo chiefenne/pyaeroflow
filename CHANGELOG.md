@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- New `output.debug_log = true` (steady implicit runs): `<name>.debug.log`
+  with one numerics block per iteration: GMRES tolerance and true linear
+  residual, reference re-evaluations with RMS before/after, each variable's
+  share of the RMS^2 that the line search judges, step-limiter counts, largest
+  updates with location, every line-search trial per variable, and the cells
+  with the largest residuals. One extra Jacobian product per Newton step.
+  `solve_steady(debug=...)` is the hook behind it.
 - Fix: with the farfield vortex correction (`reference.vortex_correction`) the
   farfield values change after every accepted iteration, but the solver kept
   the residual of the old farfield as the reference for the next step. Every

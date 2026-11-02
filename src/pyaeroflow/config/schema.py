@@ -687,6 +687,15 @@ SCHEMA = {
         "verbosity": Opt(
             "string", "normal", "Log detail", choices=("normal", "detailed")
         ),
+        "debug_log": Opt(
+            "bool",
+            False,
+            "Steady implicit runs: write <name>.debug.log with one numerics "
+            "block per iteration (GMRES tolerance and true linear residual, "
+            "step-limiter counts, largest updates, every line-search trial per "
+            "variable, reference re-evaluations, cells with the largest "
+            "residuals); costs one Jacobian product per Newton step",
+        ),
     },
 }
 

@@ -764,6 +764,7 @@ class IncompressibleProblem:
         transition_clip=True,
         gamma_guard=False,
         resume=None,
+        debug=None,
     ):
         """Implicit pseudo-time solution (D25, D35).
 
@@ -786,6 +787,9 @@ class IncompressibleProblem:
         that of the unrelaxed model. ``gamma_diagnostics`` stores per-iteration
         intermittency statistics (:data:`GAMMA_DIAGNOSTICS`) in the callback's
         ``info["transition_diagnostics"]``.
+
+        ``debug`` is passed to :func:`solve_steady` (numerics record of every
+        iteration, see :mod:`pyaeroflow.io.debug_log`).
 
         With ``nu_tilde_step_limit`` = f every update of nu_tilde is capped
         to f max(|nu_tilde|, nu) per cell before the line search (the
@@ -938,6 +942,7 @@ class IncompressibleProblem:
                 nu_tilde_step_limit, transition_clip, gamma_guard, guard_stats
             ),
             resume=resume,
+            debug=debug,
         )
         return result._replace(state={**result.state, **driver_state()})
 

@@ -38,6 +38,7 @@ from pyaeroflow.io import (
     write_pvd,
     write_vtu,
 )
+from pyaeroflow.io.debug_log import NumericsDebugLog
 from pyaeroflow.io.fields import (
     FIELDS,
     Capabilities,
@@ -888,6 +889,17 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
         GAMMA_DIAGNOSTICS if diagnose else (),
         resume_after=after,
     )
+    debug_log = (
+        NumericsDebugLog(
+            out_dir / f"{name}.debug.log",
+            names,
+            problem.mesh.cell_centroid,
+            scaling.length,
+            append=bool(after),
+        )
+        if cfg["output"]["debug_log"] and implicit
+        else None
+    )
     extra_names = (("NK", "GMRES") if implicit else ()) + tuple(
         (c, 11) for c in coeff_names
     )
@@ -1056,6 +1068,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
             transition_clip=tr_cfg["clip"],
             gamma_guard=tr_cfg["newton_guard"],
             resume=resume,
+            debug=debug_log,
         )
     else:
         result = problem.solve_explicit(
@@ -1066,6 +1079,8 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
             callback=callback,
         )
     history.close()
+    if debug_log is not None:
+        debug_log.close()
     if timing["setup"] is None:  # a restart that is converged already
         timing["setup"] = log.elapsed - offset
 
@@ -1114,6 +1129,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
         *([("fields", str(out_dir / f"{name}.vtu"))] if write_final else []),
         *([("field series", str(out_dir / f"{name}.pvd"))] if fields.last else []),
         ("history", str(history.path)),
+        *([("numerics debug log", str(debug_log.path))] if debug_log else []),
     ]
     coefficients = None
     if monitor:
