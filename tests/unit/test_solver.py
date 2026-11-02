@@ -303,3 +303,46 @@ def test_beta2_tracker_follows_the_accepted_state():
     stub.beta2(trial)
     assert at(accepted) == 2.0  # still the accepted state's value
     assert at(trial.copy()) != 2.0 or np.isnan(at(trial.copy()))
+
+
+class _RecordingInfo(dict):
+    """callback.info that remembers which keys were set."""
+
+    def __init__(self):
+        super().__init__()
+        self.set_keys = []
+
+    def __setitem__(self, key, value):
+        self.set_keys.append(key)
+        super().__setitem__(key, value)
+
+
+def test_farfield_vortex_update_marks_the_residual_changed():
+    """The vortex changes the farfield after every accepted iteration, so the
+    next step must be judged against the residual under the new farfield."""
+    from pyaeroflow.driver import IncompressibleProblem
+    from pyaeroflow.physics import incompressible as inc
+
+    mesh = rectangle(8, 6, x=(-1.0, 1.0), y=(0.0, 1.0))
+    a = np.radians(5.0)
+    farfield = {"type": "farfield", "velocity": (np.cos(a), np.sin(a)), "pressure": 0.0}
+    conditions = {"bottom": {"type": "wall"}}
+    conditions.update({n: dict(farfield) for n in ("left", "right", "top")})
+    model = inc.IncompressibleModel(density=1.0, viscosity=0.05)
+    problem = IncompressibleProblem(mesh, model, conditions)
+    vortex = problem.farfield_vortex((0.0, 0.0), ["bottom"])
+    changed = []
+
+    def callback(it, w, residuals, cfl, accepted):
+        changed.append((it, accepted, "residual_changed" in callback.info.set_keys))
+        callback.info.set_keys.clear()
+
+    callback.info = _RecordingInfo()
+    problem.solve(
+        problem.initial_state((np.cos(a), np.sin(a))),
+        PseudoTimeSettings(max_iterations=4, residual_drop=12.0),
+        callback=callback,
+        vortex=vortex,
+    )
+    assert vortex.gamma != 0.0
+    assert all(flag for it, ok, flag in changed if ok and it > 0)

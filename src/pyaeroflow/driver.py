@@ -863,6 +863,13 @@ class IncompressibleProblem:
         def on_iteration(it, w, residuals, cfl, accepted):
             if vortex is not None and accepted:
                 self.apply_farfield_vortex(vortex, w)
+                # The farfield values changed: the residual operator did, so
+                # solve_steady must judge the next step against the residual
+                # of the current state under the new farfield. Without this the
+                # reference is the old operator's residual: every trial step
+                # looks worse, the line search cuts it to a quarter, and with
+                # a small reject_factor even a vanishing step is rejected.
+                on_iteration.info["residual_changed"] = True
             if track and accepted:
                 transition_step(it, w)
             if uses_limiter and state["psi"] is None and accepted:

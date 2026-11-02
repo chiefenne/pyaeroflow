@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Fix: with the farfield vortex correction (`reference.vortex_correction`) the
+  farfield values change after every accepted iteration, but the solver kept
+  the residual of the old farfield as the reference for the next step. Every
+  trial step then looked worse than it was: the line search cut it to a
+  quarter, and with a small `reject_factor` even a vanishing step was rejected
+  until the CFL fell below its minimum. The update now marks the residual as
+  changed, as the limiter release does (one extra residual evaluation per
+  iteration). SD7003 O-grid (39k cells, SA-neg, alpha 4, reject_factor 1.5):
+  before, 25 of 43 iterations cut, 11 rejected in a row, stopped at 2.1
+  orders; after, converged to 7.06 orders in 43 iterations, no cut and no
+  rejection in the Newton-Krylov phase. The SD7003 LM polar chain at alpha 2
+  stopped the same way (64 of 73 steps cut, 11 rejections in a row).
 - Log: the line search is visible. An iteration whose Newton step was cut back
   (halved up to twice, `line_search_steps`) carries the note `step 1/2` or
   `step 1/4` (`rejected step 1/4` if it was rejected nevertheless, `limiter
