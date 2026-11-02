@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- New `solver.newton_krylov.variable_scaling` (default false): the GMRES
+  unknowns are du_j / s_j (s = 1 for p, u, v, the field RMS for the turbulence
+  and transition variables). The left-preconditioned GMRES minimized the
+  error in raw units and left the gamma rows unsolved on the 320k SD7003 LM
+  case (95 % of the gamma residual left), whose gamma updates then raised the
+  gamma residual 25x. With it, alpha 2 from the alpha 0 state went from CL
+  0.045 to 0.24 in 12 iterations at mostly full steps.
+- Fix: SST k and omega are clipped to SU2's limits after every update
+  (k in [1e-10, 1e10], omega in [1e-4, 1e15], CTurbSSTSolver). Without the
+  floor the 99 % under-relaxation let k collapse in a cell where Newton kept
+  asking for a negative k (320k SD7003 LM alpha 0: one wake cell at k = 3e-73,
+  u = -0.23 among neighbours at 0.93); the cell held 99 % of the u residual
+  and the line search cut every following step.
+- New `solver.whole_cell_relaxation` (default false): the k-omega positivity
+  scale of a cell also scales its flow update. Debug log: per-variable linear
+  residual, the cells the limiter cut most, the linear misfit at the
+  largest-residual cells.
 - New `solver.line_search_merit = "no_transition"`: the line search, step
   acceptance and SER CFL control judge the RMS without the Langtry-Menter
   gamma and Re_thetat rows, whose raw residual sits in the big outer cells and

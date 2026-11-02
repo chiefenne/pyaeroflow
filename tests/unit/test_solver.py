@@ -346,3 +346,30 @@ def test_farfield_vortex_update_marks_the_residual_changed():
     )
     assert vortex.gamma != 0.0
     assert all(flag for it, ok, flag in changed if ok and it > 0)
+
+
+def test_variable_scaling_is_a_change_of_units():
+    """nk_variable_scaling: unknowns du_j / s_j, s = 1 for p, u, v and the
+    field RMS for the others; the scaled, preconditioned operator is the
+    original one in the new units and the map back restores du."""
+    from pyaeroflow.solver.pseudo_time import _variable_scaling
+
+    rng = np.random.default_rng(1)
+    u = np.column_stack(
+        [
+            rng.normal(size=5),
+            1 + rng.random(5),
+            rng.random(5),
+            1e-3 * rng.random(5),
+            1e3 * (1 + rng.random(5)),
+        ]
+    )
+    a = 1.0 + rng.random(u.size)
+    operator = lambda v: a * v  # noqa: E731
+    precondition = lambda r: r / a  # noqa: E731
+    apply, pre, unscale = _variable_scaling(operator, precondition, u)
+    y = rng.normal(size=u.size)
+    np.testing.assert_allclose(pre(apply(y)), y)
+    s = unscale(np.ones(u.size)).reshape(u.shape)[0]
+    np.testing.assert_allclose(s[:3], 1.0)
+    np.testing.assert_allclose(s[3:], np.sqrt(np.mean(u[:, 3:] ** 2, axis=0)))

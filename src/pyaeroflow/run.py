@@ -813,6 +813,7 @@ def _pseudo_time_settings(cfg):
         nk_max_krylov=solver["newton_krylov"]["max_iterations"],
         nk_cfl_adapt_iterations=solver["newton_krylov"]["cfl_adapt_iterations"],
         nk_linearize=solver["newton_krylov"]["linearize"],
+        nk_variable_scaling=solver["newton_krylov"]["variable_scaling"],
         refactor_interval=solver["refactor_interval"],
         linear=LinearSettings(**solver["linear_solver"]),
     )
@@ -1082,6 +1083,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
             resume=resume,
             debug=debug_log,
             transition_cfl_max=tr_cfg["cfl_max"],
+            whole_cell_relaxation=solver["whole_cell_relaxation"],
         )
     else:
         result = problem.solve_explicit(

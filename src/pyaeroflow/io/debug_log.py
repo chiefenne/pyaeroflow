@@ -52,6 +52,7 @@ class NumericsDebugLog:
         self.path = Path(path)
         self.names = list(names)
         self.xy = np.asarray(centroids, dtype=float) * float(length)
+        self._misfit = None
         self._file = open(self.path, "a" if append else "w")  # noqa: SIM115
         self._file.write(
             "# PyAeroFlow numerics debug log: one block per iteration. RMS is the "
@@ -82,14 +83,41 @@ class NumericsDebugLog:
         top = np.argpartition(a, -k)[-k:]
         top = top[np.argsort(-a[top])]
         share = float(np.sum(a[top] ** 2)) / total
+        mis = self._misfit
         cells = ", ".join(
             f"cell {c} ({self.xy[c, 0]:.4f}, {self.xy[c, 1]:.4f}) |R| {a[c]:.2e}"
+            + (
+                ""
+                if mis is None
+                else f" (linear misfit before the step {abs(mis[c, j]):.2e})"
+            )
             for c in top[:TOP_CELLS]
         )
         return (
             f"    {self.names[j]}: top {k} cells hold {100 * share:.0f} % of its "
             f"RMS^2; {cells}"
         )
+
+    def _limited_cells(self, rec):
+        """Cells whose update the limiter cut most (kept fraction per variable)."""
+        raw = np.asarray(rec["du_raw"], dtype=float)
+        du = np.asarray(rec["du"], dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            kept = np.where(np.abs(raw) > 0.0, du / raw, 1.0)
+        cut = np.min(np.where(np.isfinite(kept), kept, 1.0), axis=1)
+        order = np.argsort(cut)[:TOP_CELLS]
+        order = [c for c in order if cut[c] < 1.0 - 1e-9]
+        if not order:
+            return "    limiter: every update kept in full"
+        parts = []
+        for c in order:
+            vars_ = ", ".join(
+                f"{n} {raw[c, j]:+.2e}->{du[c, j]:+.2e}"
+                for j, n in enumerate(self.names)
+                if abs(kept[c, j] - 1.0) > 1e-9 and np.isfinite(kept[c, j])
+            )
+            parts.append(f"cell {c} ({self.xy[c, 0]:.4f}, {self.xy[c, 1]:.4f}) {vars_}")
+        return "    limiter cut most: " + "; ".join(parts)
 
     def _rise(self, r_ref, r_full):
         """Where the full step raised the residual of the variables that grew most."""
@@ -120,6 +148,7 @@ class NumericsDebugLog:
     def __call__(self, rec):
         """Write the block of one iteration."""
         w = self._write
+        self._misfit = rec.get("linear_misfit")
         head = f"it {rec['it']}  CFL {rec['cfl']:.3e}"
         if "nk" in rec:
             if rec["nk"]:
@@ -134,6 +163,14 @@ class NumericsDebugLog:
             if rec.get("factorized"):
                 head += "  [preconditioner rebuilt]"
         w(head)
+        if "linear_misfit" in rec and "reference" in rec:
+            ratio = rms_per_variable(rec["linear_misfit"]) / np.maximum(
+                rms_per_variable(rec["reference"]), 1e-300
+            )
+            w(
+                "  linear residual per variable |(T+J)du+R|/|R|  "
+                + self._per_variable(ratio, ".3f")
+            )
         if "re_evaluated" in rec:
             before, after = rec["re_evaluated"]
             w(
@@ -155,6 +192,8 @@ class NumericsDebugLog:
                 "  update: cells changed by the step limiter  "
                 + self._per_variable(rec["limited"], "d")
             )
+            if "du_raw" in rec:
+                w(self._limited_cells(rec))
             w(
                 "    largest |du|  "
                 + "  ".join(

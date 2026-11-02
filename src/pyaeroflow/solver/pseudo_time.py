@@ -123,6 +123,15 @@ class PseudoTimeSettings:
     line_search_steps : int
         Backtracking: an update that raises the residual measure is halved
         up to this many times before it is rejected (D54).
+    nk_variable_scaling : bool
+        Measure the GMRES error of every variable relative to its size: the
+        unknowns of the Newton-Krylov solve are du_j / s_j with s_j = 1 for
+        p, u, v (non-dimensional) and the RMS of the field for the turbulence
+        and transition variables. SciPy's GMRES is left-preconditioned, so it
+        minimizes about the error of du in raw units: with Re_thetat ~ 1e3 and
+        k ~ 1e-3 it solves the Re_thetat rows and leaves the gamma rows
+        unsolved (320k SD7003 LM: 95 % of the gamma residual left in the
+        linear model at tolerance 0.5).
     merit_columns : tuple of int or None
         Residual columns of the RMS norm that the line search, the step
         acceptance and the SER CFL control judge; None = all. Langtry-Menter
@@ -192,6 +201,7 @@ class PseudoTimeSettings:
     nk_linearize: bool = True
     line_search_steps: int = 2
     merit_columns: tuple = None
+    nk_variable_scaling: bool = False
     cfl_control: str = "growth"
     ser_exponent: float = 1.0
     ser_growth_min: float = 1.2
@@ -484,15 +494,23 @@ def solve_steady(
                 else:
                     product = partial(jvp, u)
                 tolerance = eta if s.nk_forcing else s.nk_linear_tolerance
+                operator = _newton_operator(t_matrix, product, u.shape)
+                precondition = _timed("preconditioner", lin.precondition)
+                if s.nk_variable_scaling:
+                    operator, precondition, unscale = _variable_scaling(
+                        operator, precondition, u
+                    )
                 with timers.section("nk solve (GMRES)"):
                     du, lin_its = solve_matrix_free(
-                        _newton_operator(t_matrix, product, u.shape),
+                        operator,
                         -r.ravel(),
-                        _timed("preconditioner", lin.precondition),
+                        precondition,
                         tolerance=tolerance,
                         restart=s.nk_restart,
                         max_iterations=s.nk_max_krylov,
                     )
+                if s.nk_variable_scaling:
+                    du = unscale(du)
                 if dbg is not None:
                     # True linear residual |(T + J) du + R| / |R| (one more
                     # Jacobian product): GMRES only knows its own estimate.
@@ -502,6 +520,7 @@ def solve_steady(
                         np.linalg.norm(a_du + r.ravel())
                         / max(np.linalg.norm(r.ravel()), tiny)
                     )
+                    dbg["linear_misfit"] = (a_du + r.ravel()).reshape(u.shape)
                 product = None  # frees the stored linearization
             else:
                 with timers.section("direct solve"):
@@ -517,10 +536,9 @@ def solve_steady(
                 du = limit_step(u, du, r, tau)
             if dbg is not None:
                 # changed beyond round-off: a clip returns (u + du) - u
-                dbg["limited"] = np.count_nonzero(
-                    np.abs(du - du_raw) > 1e-10 * (np.abs(u) + np.abs(du_raw)),
-                    axis=0,
-                )
+                changed = np.abs(du - du_raw) > 1e-10 * (np.abs(u) + np.abs(du_raw))
+                dbg["limited"] = np.count_nonzero(changed, axis=0)
+                dbg["du_raw"] = du_raw
                 dbg["du"] = du
                 dbg["trials"] = []
             u_new = u + du
@@ -624,6 +642,31 @@ def solve_steady(
         state["it"] = it
     history = {k: np.asarray(v) for k, v in hist.items()}
     return SteadyResult(u, bool(converged), history, snapshot())
+
+
+def _variable_scaling(operator, precondition, u):
+    """Newton-Krylov system in the unknowns du_j / s_j (``nk_variable_scaling``).
+
+    s_j = 1 for the first three variables (p, u, v, non-dimensional) and the
+    RMS of the field for the others. Returns the scaled operator v -> A (S v),
+    the preconditioner r -> S^-1 M^-1 r and the map back y -> S y.
+    """
+    scale = np.ones(u.shape[1])
+    if u.shape[1] > 3:
+        rms_tail = rms_per_variable(u[:, 3:])
+        scale[3:] = np.where(rms_tail > 0.0, rms_tail, 1.0)
+    full = np.tile(scale, u.shape[0])
+
+    def apply(v):
+        return operator(full * v)
+
+    def pre(r):
+        return precondition(r) / full
+
+    def unscale(y):
+        return full * y
+
+    return apply, pre, unscale
 
 
 def _newton_operator(t_matrix, product, shape):

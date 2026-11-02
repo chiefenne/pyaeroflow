@@ -322,6 +322,14 @@ SCHEMA = {
         "max_iterations": Opt(
             "int", 10000, "Maximum pseudo-time iterations", minimum=1
         ),
+        "whole_cell_relaxation": Opt(
+            "bool",
+            False,
+            "SST: a cell whose k-omega update the positivity limiter scales "
+            "(update would lower k or omega by more than 99 %) gets the same "
+            "scale on all its variables, so that its coupled update stays "
+            "consistent; false scales k and omega only",
+        ),
         "line_search_merit": Opt(
             "string",
             "all",
@@ -486,6 +494,17 @@ SCHEMA = {
             "restart": Opt("int", 50, "GMRES restart length", minimum=1),
             "max_iterations": Opt(
                 "int", 200, "Maximum GMRES iterations per Newton step", minimum=1
+            ),
+            "variable_scaling": Opt(
+                "bool",
+                False,
+                "Measure the GMRES error of each variable relative to its size "
+                "(unknowns du_j / s_j: s = 1 for p, u, v, the field RMS for the "
+                "turbulence and transition variables). The left-preconditioned "
+                "GMRES otherwise minimizes the error in raw units and leaves the "
+                "small variables unsolved: on the 320k SD7003 LM case 95 % of the "
+                "gamma residual stayed in the linear model while Re_thetat (~1e3) "
+                "was solved",
             ),
             "linearize": Opt(
                 "bool",
