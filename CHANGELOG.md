@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Langtry-Menter runs (`physics.transition.model = "lm"`) get new solver
+  defaults: `solver.cfl.max = 2000`, `solver.newton_krylov.cfl_adapt_iterations
+  = 150`, `solver.newton_krylov.variable_scaling = true` and
+  `solver.line_search_merit = "no_transition"`. Values set in the case file
+  win; a log notice lists the defaults applied. With them the fresh SD7003
+  320k polar (alpha 0, 2, 4 from the freestream) converged 7 orders at every
+  angle: CL 0.045248 / 0.389514 / 0.593069. `positive_jacobian` (true) and
+  `whole_cell_relaxation` (false) keep their defaults, as in that run.
+  Other models are unchanged.
 - New `solver.newton_krylov.variable_scaling` (default false): the GMRES
   unknowns are du_j / s_j (s = 1 for p, u, v, the field RMS for the turbulence
   and transition variables). The left-preconditioned GMRES minimized the

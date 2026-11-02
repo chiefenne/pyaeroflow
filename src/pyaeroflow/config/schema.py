@@ -338,7 +338,8 @@ SCHEMA = {
             "no_transition (leaves out the Langtry-Menter gamma and Re_thetat "
             "rows; their raw residual is largest in the big outlet and "
             "farfield cells and vetoes good flow steps). The convergence "
-            "measure (residual_drop) always covers all equations",
+            "measure (residual_drop) always covers all equations. Default "
+            "no_transition with physics.transition.model = lm",
             choices=("all", "no_transition"),
         ),
         "refactor_interval": Opt(
@@ -398,7 +399,12 @@ SCHEMA = {
         },
         "cfl": {
             "start": Opt("float", 10.0, "Initial CFL number", minimum=0.0),
-            "max": Opt("float", 1.0e10, "Maximum CFL number", minimum=0.0),
+            "max": Opt(
+                "float",
+                1.0e10,
+                "Maximum CFL number (Langtry-Menter: default 2000)",
+                minimum=0.0,
+            ),
             "max_approximate": Opt(
                 "float",
                 1.0e3,
@@ -504,7 +510,7 @@ SCHEMA = {
                 "GMRES otherwise minimizes the error in raw units and leaves the "
                 "small variables unsolved: on the 320k SD7003 LM case 95 % of the "
                 "gamma residual stayed in the linear model while Re_thetat (~1e3) "
-                "was solved",
+                "was solved. Default true with physics.transition.model = lm",
             ),
             "linearize": Opt(
                 "bool",
@@ -525,7 +531,7 @@ SCHEMA = {
                 "(x4, up to cfl.max); in between the cap is held. A larger "
                 "value allows a higher CFL where GMRES works moderately hard "
                 "(stalled steps of 20-50 iterations hold the CFL near 1e3 with "
-                "the default)",
+                "the default). Default 150 with physics.transition.model = lm",
                 minimum=4,
             ),
         },
