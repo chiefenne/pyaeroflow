@@ -30,3 +30,43 @@ def test_no_debug_log_by_default(tmp_path):
     (tmp_path / "couette.toml").write_text(COUETTE)
     run_case(tmp_path / "couette.toml", console=False)
     assert not (tmp_path / "out" / "couette_test.debug.log").exists()
+
+
+def test_full_step_rise_names_the_cells():
+    import numpy as np
+
+    from pyaeroflow.io.debug_log import NumericsDebugLog
+
+    xy = np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.5]])
+    ref = np.array([[1e-3, 1e-3], [1e-3, 1e-3], [1e-3, 1e-3]])
+    full = ref.copy()
+    full[2, 1] = 5e-2  # the second variable rises in the third cell
+    rec = {
+        "it": 3,
+        "cfl": 1e4,
+        "nk": True,
+        "gmres": 5,
+        "tolerance": 0.5,
+        "linear_residual": 0.1,
+        "factorized": False,
+        "reference": ref,
+        "reference_rms": 1e-3,
+        "du": np.zeros((3, 2)),
+        "limited": [0, 0],
+        "trials": [(1.0, 3e-2, np.array([1e-3, 3e-2]))],
+        "full_step": full,
+        "accepted": True,
+        "step": 0.25,
+        "new": ref,
+    }
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as d:
+        log = NumericsDebugLog(Path(d) / "x.log", ["a", "b"], xy)
+        log(rec)
+        log.close()
+        text = (Path(d) / "x.log").read_text()
+    assert "full step: where it raised the residual" in text
+    assert "b: top 3 cells hold 100 % of the rise" in text
+    assert "cell 2 (2.0000, 0.5000) |R| 1.00e-03 -> 5.00e-02" in text

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- New `solver.line_search_merit = "no_transition"`: the line search, step
+  acceptance and SER CFL control judge the RMS without the Langtry-Menter
+  gamma and Re_thetat rows, whose raw residual sits in the big outer cells and
+  vetoed good flow steps (39k SD7003 O-grid LM alpha 2: 6.3 orders and CL
+  0.3907 instead of a stall at CL 0.30). Default `all` (unchanged).
+- New `physics.transition.cfl_max` (Langtry-Menter): caps the pseudo-time
+  CFL of the gamma and Re_thetat rows while the flow and k-omega keep the
+  solver CFL. Debug log: when the full step raises the RMS it names the cells
+  where the two most-grown variables rose; the step-limiter count ignores
+  round-off of the gamma/Re_thetat clip (it reported ~320k cells).
 - New `output.debug_log = true` (steady implicit runs): `<name>.debug.log`
   with one numerics block per iteration: GMRES tolerance and true linear
   residual, reference re-evaluations with RMS before/after, each variable's

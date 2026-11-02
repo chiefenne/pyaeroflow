@@ -13,6 +13,8 @@ that :func:`pyaeroflow.solver.solve_steady` passes to its ``debug`` hook:
 - the update: cells changed by the step limiter (clip, under-relaxation) per
   variable, the largest |du| per variable and where;
 - every line-search trial: RMS and the ratio new / reference per variable;
+  when the full step raised the RMS, the cells where it raised the residual
+  of the two variables that grew most;
 - the outcome, and the cells with the largest |R| after the step for the
   variables that dominate the RMS, with their share of that variable's RMS².
 
@@ -53,8 +55,9 @@ class NumericsDebugLog:
         self._file = open(self.path, "a" if append else "w")  # noqa: SIM115
         self._file.write(
             "# PyAeroFlow numerics debug log: one block per iteration. RMS is the "
-            "plain norm of the whole residual that the line search and the step "
-            "acceptance use; 'share' is each variable's part of RMS^2.\n"
+            "norm that the line search and the step acceptance use (all "
+            "residuals, or those of solver.line_search_merit); 'share' is each "
+            "variable's part of the sum of squares of all residuals.\n"
         )
 
     def close(self):
@@ -87,6 +90,32 @@ class NumericsDebugLog:
             f"    {self.names[j]}: top {k} cells hold {100 * share:.0f} % of its "
             f"RMS^2; {cells}"
         )
+
+    def _rise(self, r_ref, r_full):
+        """Where the full step raised the residual of the variables that grew most."""
+        ref = np.square(np.asarray(r_ref, dtype=float))
+        with np.errstate(over="ignore", invalid="ignore"):
+            rise = np.square(np.asarray(r_full, dtype=float)) - ref
+        total = np.nansum(np.maximum(rise, 0.0), axis=0)
+        lines = ["  full step: where it raised the residual"]
+        for j in np.argsort(-total)[:2]:
+            if not total[j] > 0.0 or not np.isfinite(total[j]):
+                continue
+            a = np.nan_to_num(rise[:, j], nan=np.inf)
+            k = min(TOP_SHARE, a.size)
+            top = np.argpartition(a, -k)[-k:]
+            top = top[np.argsort(-a[top])]
+            share = float(np.sum(np.maximum(a[top], 0.0))) / total[j]
+            cells = ", ".join(
+                f"cell {c} ({self.xy[c, 0]:.4f}, {self.xy[c, 1]:.4f}) "
+                f"|R| {np.sqrt(ref[c, j]):.2e} -> {abs(float(r_full[c, j])):.2e}"
+                for c in top[:TOP_CELLS]
+            )
+            lines.append(
+                f"    {self.names[j]}: top {k} cells hold {100 * min(share, 1.0):.0f} "
+                f"% of the rise of its RMS^2; {cells}"
+            )
+        return "\n".join(lines)
 
     def __call__(self, rec):
         """Write the block of one iteration."""
@@ -148,6 +177,10 @@ class NumericsDebugLog:
                     f"(x{total / max(rec['reference_rms'], 1e-300):.4f}, {verdict}); "
                     f"new/ref  {self._per_variable(ratio, '.3f')}"
                 )
+        if "full_step" in rec and rec.get("trials"):
+            full = rec["trials"][0]
+            if not (np.isfinite(full[1]) and full[1] <= rec["reference_rms"]):
+                w(self._rise(rec["reference"], rec["full_step"]))
         if "error" in rec:
             w(f"  linear solver failed: {rec['error']}")
         step = rec.get("step", 1.0)

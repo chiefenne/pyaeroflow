@@ -539,13 +539,25 @@ class IncompressibleProblem:
         )
         return JacobianPattern(self.geom, self.model.n_var, masks)
 
-    def time_term(self, w, beta2, cfl):
-        """Block-diagonal pseudo-time matrix Gamma_i Lambda_i / CFL."""
-        return block_diagonal(
-            np.asarray(
-                self.physics.time_term_blocks(self.model, self.geom, w, beta2, cfl)
-            )
+    def time_term(self, w, beta2, cfl, transition_cfl_max=None):
+        """Block-diagonal pseudo-time matrix Gamma_i Lambda_i / CFL.
+
+        With ``transition_cfl_max`` (Langtry-Menter) the gamma and Re_thetat
+        rows use min(CFL, transition_cfl_max): a separate, lower pseudo-time
+        step for the transition equations, as their own solver has in SU2.
+        """
+        blocks = np.asarray(
+            self.physics.time_term_blocks(self.model, self.geom, w, beta2, cfl)
         )
+        if (
+            transition_cfl_max is not None
+            and self.model.transition == "lm"
+            and cfl > transition_cfl_max
+        ):
+            rows = [rans_sst.NGL, rans_sst.NRT]
+            blocks = blocks.copy()
+            blocks[:, rows, :] *= cfl / transition_cfl_max
+        return block_diagonal(blocks)
 
     def explicit_update(self, w, r, beta2, cfl):
         """Explicit increment CFL / Lambda_i * Gamma_i^-1 R_i."""
@@ -765,6 +777,7 @@ class IncompressibleProblem:
         gamma_guard=False,
         resume=None,
         debug=None,
+        transition_cfl_max=None,
     ):
         """Implicit pseudo-time solution (D25, D35).
 
@@ -790,6 +803,9 @@ class IncompressibleProblem:
 
         ``debug`` is passed to :func:`solve_steady` (numerics record of every
         iteration, see :mod:`pyaeroflow.io.debug_log`).
+
+        ``transition_cfl_max`` caps the pseudo-time CFL of the Langtry-Menter
+        gamma and Re_thetat rows (:meth:`time_term`); None = solver CFL.
 
         With ``nu_tilde_step_limit`` = f every update of nu_tilde is capped
         to f max(|nu_tilde|, nu) per cell before the line search (the
@@ -927,7 +943,7 @@ class IncompressibleProblem:
         result = solve_steady(
             residual,
             lambda w: self.jacobian(w, beta2_at(w)),
-            lambda w, cfl: self.time_term(w, beta2_at(w), cfl),
+            lambda w, cfl: self.time_term(w, beta2_at(w), cfl, transition_cfl_max),
             w0,
             settings or PseudoTimeSettings(),
             residual_startup=residual_startup,

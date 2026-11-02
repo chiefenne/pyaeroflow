@@ -78,6 +78,18 @@ SCHEMA = {
                 "plain Newton and positive_jacobian alone was better, so it is off "
                 "by default",
             ),
+            "cfl_max": Opt(
+                "float",
+                None,
+                "model = lm: largest pseudo-time CFL number of the gamma and "
+                "Re_thetat equations (implicit modes); the flow and k-omega rows "
+                "keep the solver CFL. Like a segregated transition solver with "
+                "its own CFL in SU2: at a high CFL the Newton update of gamma "
+                "overshoots (the full step raised the gamma residual 10-50x on "
+                "the 320k SD7003 at CFL >= 2560) and the line search then cuts "
+                "the good flow update to a quarter as well. Default: no cap",
+                minimum=0.0,
+            ),
             "positive_jacobian": Opt(
                 "bool",
                 True,
@@ -309,6 +321,17 @@ SCHEMA = {
         ),
         "max_iterations": Opt(
             "int", 10000, "Maximum pseudo-time iterations", minimum=1
+        ),
+        "line_search_merit": Opt(
+            "string",
+            "all",
+            "Residuals whose RMS the line search, the step acceptance "
+            "(cfl.reject_factor) and the SER CFL control judge: all, or "
+            "no_transition (leaves out the Langtry-Menter gamma and Re_thetat "
+            "rows; their raw residual is largest in the big outlet and "
+            "farfield cells and vetoes good flow steps). The convergence "
+            "measure (residual_drop) always covers all equations",
+            choices=("all", "no_transition"),
         ),
         "refactor_interval": Opt(
             "int",

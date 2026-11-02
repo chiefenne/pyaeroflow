@@ -123,6 +123,12 @@ class PseudoTimeSettings:
     line_search_steps : int
         Backtracking: an update that raises the residual measure is halved
         up to this many times before it is rejected (D54).
+    merit_columns : tuple of int or None
+        Residual columns of the RMS norm that the line search, the step
+        acceptance and the SER CFL control judge; None = all. Langtry-Menter
+        runs can leave out gamma and Re_thetat: their raw residual is largest
+        in the big outer cells (outlet, farfield), where Re_thetat^eq follows
+        tiny velocity gradients, and would otherwise veto good flow steps.
     nk_cfl_adapt_iterations : int
         GMRES iteration count above which the CFL of the Newton-Krylov phase
         is capped (quartered) for the following steps, and a quarter of
@@ -185,6 +191,7 @@ class PseudoTimeSettings:
     nk_forcing: bool = True
     nk_linearize: bool = True
     line_search_steps: int = 2
+    merit_columns: tuple = None
     cfl_control: str = "growth"
     ser_exponent: float = 1.0
     ser_growth_min: float = 1.2
@@ -354,7 +361,12 @@ def solve_steady(
         active = scale >= 1e-12 * scale.max()
         return float(np.max(np.where(active, rms_per_variable(r) / scale, 0.0)))
 
-    norm_abs = rms(r)
+    cols = None if s.merit_columns is None else list(s.merit_columns)
+
+    def merit(r):
+        return rms(r if cols is None else np.asarray(r)[:, cols])
+
+    norm_abs = merit(r)
     norm = measure(r)
     target = 10.0 ** (-s.residual_drop)
 
@@ -428,7 +440,7 @@ def solve_steady(
             # one the previous step produced.
             before = norm_abs
             r = res(u, it)
-            norm_abs = rms(r)
+            norm_abs = merit(r)
             if dbg is not None:
                 dbg["re_evaluated"] = (before, norm_abs)
             scale = np.maximum(scale, rms_per_variable(r))
@@ -440,7 +452,7 @@ def solve_steady(
             and residual_startup is not None
         ):
             r = res(u, it)  # switch to the full residual
-            norm_abs = rms(r)
+            norm_abs = merit(r)
             scale = np.maximum(scale, rms_per_variable(r))
             norm = measure(r)
         by_iteration = s.nk_switch_iteration is not None and it > s.nk_switch_iteration
@@ -504,14 +516,19 @@ def solve_steady(
                 tau = (t_matrix.diagonal() * cfl).reshape(u.shape)
                 du = limit_step(u, du, r, tau)
             if dbg is not None:
-                dbg["limited"] = np.count_nonzero(du != du_raw, axis=0)
+                # changed beyond round-off: a clip returns (u + du) - u
+                dbg["limited"] = np.count_nonzero(
+                    np.abs(du - du_raw) > 1e-10 * (np.abs(u) + np.abs(du_raw)),
+                    axis=0,
+                )
                 dbg["du"] = du
                 dbg["trials"] = []
             u_new = u + du
             r_new = res(u_new, it + 1)
-            abs_new = rms(r_new)
+            abs_new = merit(r_new)
             if dbg is not None:
                 dbg["trials"].append((1.0, abs_new, rms_per_variable(r_new)))
+                dbg["full_step"] = r_new
             # Backtracking line search (D54): halve a step that raises the
             # residual norm before giving up on it. The fraction kept is
             # logged (``step 1/2``, ``step 1/4``): an iteration that needs it
@@ -522,7 +539,7 @@ def solve_steady(
                 step *= 0.5
                 u_new = u + step * du
                 r_new = res(u_new, it + 1)
-                abs_new = rms(r_new)
+                abs_new = merit(r_new)
                 if dbg is not None:
                     dbg["trials"].append((step, abs_new, rms_per_variable(r_new)))
             accepted = np.isfinite(abs_new) and abs_new <= s.reject_factor * norm_abs

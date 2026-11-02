@@ -51,7 +51,7 @@ from pyaeroflow.mesh import Mesh, read_mesh
 from pyaeroflow.mesh.ordering import order_boundary_faces
 from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
-from pyaeroflow.physics import lm, rans
+from pyaeroflow.physics import lm, rans, rans_sst
 from pyaeroflow.physics import spalart_allmaras as sa
 from pyaeroflow.reload import LIVE_STEADY, LIVE_UNSTEADY, reload_case
 from pyaeroflow.solver import DualTimeSettings, LinearSettings, PseudoTimeSettings
@@ -1048,6 +1048,18 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     vortex = None
     if solver["method"] == "implicit":
         settings = _pseudo_time_settings(cfg)
+        if (
+            solver["line_search_merit"] == "no_transition"
+            and problem.model.transition == "lm"
+        ):
+            settings = dataclasses.replace(
+                settings,
+                merit_columns=tuple(
+                    c
+                    for c in range(problem.model.n_var)
+                    if c not in (rans_sst.NGL, rans_sst.NRT)
+                ),
+            )
         freeze = cfg["numerics"]["limiter_freeze"]
         if cfg["reference"]["vortex_correction"]:
             vortex = problem.farfield_vortex(
@@ -1069,6 +1081,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
             gamma_guard=tr_cfg["newton_guard"],
             resume=resume,
             debug=debug_log,
+            transition_cfl_max=tr_cfg["cfl_max"],
         )
     else:
         result = problem.solve_explicit(
