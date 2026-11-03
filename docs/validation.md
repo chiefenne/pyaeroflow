@@ -784,9 +784,9 @@ converged 10–11 orders (machine zero).
 
 | case | quantity | 192 × 64 (12k) | 384 × 128 (49k) | reference (range of the codes) |
 |---|---|---|---|---|
-| M 0.5, α 1.25° | C_L | 0.1760 | – | 0.17978–0.18035 |
-| | C_D | 0.00089 | – | 0.00000–0.00001 |
-| | C_M | 0.0016 | – | 0.00226–0.00228 |
+| M 0.5, α 1.25° | C_L | 0.1760 | 0.1770 | 0.17978–0.18035 |
+| | C_D | 0.00089 | 0.00068 | 0.00000–0.00001 |
+| | C_M | 0.0016 | 0.0018 | 0.00226–0.00228 |
 | M 0.8, α 1.25° | C_L | 0.3415 | 0.3436 | 0.3482–0.3562 |
 | | C_D | 0.02249 | 0.02251 | 0.02245–0.02268 |
 | | C_M | 0.0350 | 0.0355 | 0.0374–0.0388 |
@@ -800,9 +800,8 @@ lower end) with first-order grid convergence, as Vassberg & Jameson find for
 all their codes in the lifting transonic case (FLO82 needs 512² cells for
 the asymptotic range; on 128² it gives C_L 0.3735). At M 0.5 the drag is the
 spurious entropy drag of the coarse grids. For scale, FLO82 on its own
-128² grid has C_D 0.000298. The 49k M 0.5 run ran out of memory in the
-sandbox (SuperLU, 14 GB); with PARDISO it fits a desktop
-(`examples/l1_compressible.py --fine`).
+128² grid has C_D 0.000298. The 49k M 0.5 case (C_D 0.00068, down from 0.00089)
+shows the drag converging towards zero with grid refinement.
 
 ![Wall Cp](figures/l1_naca0012_cp.png)
 

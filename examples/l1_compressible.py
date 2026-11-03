@@ -1,7 +1,7 @@
 """L1 (C1) example: compressible Euler verification and validation.
 
-Run from the repository root (about 15 minutes with PARDISO on 4 cores for
-the coarse level; ``--fine`` adds the 384 x 128 O-grids):
+Run from the repository root (a few minutes with PARDISO, SuperLU is hours
+at 49k cells; ``--fine`` adds the 384 x 128 O-grids):
 
     python examples/l1_compressible.py [--fine]
 
