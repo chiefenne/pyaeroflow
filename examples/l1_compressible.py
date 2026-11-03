@@ -19,6 +19,7 @@ and ``l1_naca0012_cp.png`` (wall Cp at M 0.5 and 0.8).
 """
 
 import argparse
+import importlib.util
 import tomllib
 from pathlib import Path
 
@@ -30,6 +31,8 @@ from pyaeroflow.mesh.airfoil import airfoil_ogrid, airfoil_points
 from pyaeroflow.run import run_case
 
 OUT = Path(__file__).parent / "output" / "l1"
+# PARDISO is much faster than SuperLU at this size; fall back if not installed
+LINEAR = "pardiso" if importlib.util.find_spec("pypardiso") else "direct"
 COLORS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100")
 
 CASE = """
@@ -45,6 +48,7 @@ limiter = "venkatakrishnan-wang"
 [solver]
 max_iterations = 200
 residual_drop = 10
+linear_solver = {{ type = "{linear}" }}
 [output]
 directory = "{directory}"
 [boundary.airfoil]
@@ -66,7 +70,9 @@ def naca(mach, n_surface, n_radial):
         farfield_radius=100.0,
         max_growth=1.3,
     )
-    raw = tomllib.loads(CASE.format(name=name, directory=OUT / name, mach=mach))
+    raw = tomllib.loads(
+        CASE.format(name=name, directory=OUT / name, mach=mach, linear=LINEAR)
+    )
     result = run_case(resolve(raw, OUT / f"{name}.toml"), console=False, mesh=mesh)
     return name, mesh.n_cells, result.coefficients, result.output_dir
 

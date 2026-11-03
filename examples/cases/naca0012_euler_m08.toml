@@ -20,6 +20,7 @@ limiter = "venkatakrishnan-wang"
 [solver]
 max_iterations = 200
 residual_drop = 10.0
+linear_solver = { type = "pardiso" }   # remove or use "direct" without pypardiso
 
 [boundary.airfoil]
 type = "wall"                     # slip wall in Euler mode
