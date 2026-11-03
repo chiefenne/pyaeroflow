@@ -155,6 +155,13 @@ def _vorticity(c):
 
 
 def _kinematic_viscosity(c):
+    if c.problem.compressible:  # mu(T) / rho per cell
+        from pyaeroflow.physics import compressible as comp
+
+        m = c.problem.model
+        mu = np.asarray(comp.laminar_viscosity(m, c.w[:, 3]))
+        rho = c.w[:, 0] / (m.gas_constant * c.w[:, 3])
+        return mu / rho * c.scaling.viscosity / c.scaling.density
     return np.full(c.w.shape[0], c.nu_si)
 
 
@@ -173,7 +180,7 @@ def _eddy_viscosity_ratio(c):
 
 def _effective_viscosity(c):
     nu_t = _eddy_viscosity(c) if c.problem.turbulent else 0.0
-    return c.nu_si + nu_t
+    return _kinematic_viscosity(c) + nu_t
 
 
 def _dynamic_eddy_viscosity(c):
@@ -355,7 +362,7 @@ FIELDS = (
     Field(
         "kinematic_viscosity",
         "m^2/s",
-        "Laminar kinematic viscosity (constant)",
+        "Laminar kinematic viscosity (constant; compressible: mu(T) / rho)",
         "laminar, rans",
         _viscous,
         _kinematic_viscosity,
@@ -710,6 +717,10 @@ def catalogue_table():
             Capabilities("euler", "none", True, True, True, "none", "compressible"),
         ),
         ("laminar", Capabilities("laminar", "none", True, True, True)),
+        (
+            "compressible laminar",
+            Capabilities("laminar", "none", True, True, True, "none", "compressible"),
+        ),
         ("SA", Capabilities("rans", "none", True, True, True)),
         ("SA + BCM", Capabilities("rans", "bcm", True, True, True)),
         ("SA + AFT", Capabilities("rans", "aft", True, True, True)),

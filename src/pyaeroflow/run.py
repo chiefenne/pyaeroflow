@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
+import jax.numpy as jnp
 import numpy as np
 
 from pyaeroflow import __version__
@@ -363,12 +364,24 @@ def setup(config, mesh=None):
     return problem, scaling, w0, mesh
 
 
+# Sutherland's law of air (SU2 MU_REF, MU_T_REF): used when a compressible
+# laminar case gives neither fluid.viscosity nor fluid.reynolds_number.
+SUTHERLAND_MU_REF = 1.716e-5  # Pa s
+SUTHERLAND_T_REF = 273.15  # K
+
+
+def sutherland_viscosity(t, s=110.4, mu_ref=SUTHERLAND_MU_REF, t_ref=SUTHERLAND_T_REF):
+    """Dynamic viscosity of air (Pa s) at temperature t (K), Sutherland's law."""
+    return mu_ref * (t / t_ref) ** 1.5 * (t_ref + s) / (t + s)
+
+
 def _setup_compressible(config, mesh):
-    """:func:`setup` of a compressible case (L1: Euler).
+    """:func:`setup` of a compressible case (L1: Euler, laminar).
 
     References: rho, U and T of the farfield stream (or the reference
     section); pressures are absolute and scaled by rho_ref U_ref^2,
-    temperatures by T_ref.
+    temperatures by T_ref, the viscosity by rho_ref U_ref L_ref (mu at
+    T_ref = 1 / Re).
     """
     cfg = config.data
     fluid, ref, num = cfg["fluid"], cfg["reference"], cfg["numerics"]
@@ -380,12 +393,26 @@ def _setup_compressible(config, mesh):
         float(ref["temperature"]),
     )
     r_nd = r_si * scaling.temperature / scaling.velocity**2
+    euler = cfg["physics"]["model"] == "euler"
+    if euler:
+        mu_nd = 0.0
+    elif fluid["reynolds_number"] is not None:
+        mu_nd = 1.0 / fluid["reynolds_number"]
+    elif fluid["viscosity"] is not None:
+        mu_nd = fluid["viscosity"] / scaling.viscosity
+    else:
+        mu_nd = (
+            sutherland_viscosity(scaling.temperature, fluid["sutherland_temperature"])
+            / scaling.viscosity
+        )
     conditions = {}
     for name, b in cfg["boundary"].items():
         kind = b["type"]
-        if kind == "wall":
+        if kind == "wall" and euler:
             kind = "slip-wall"  # Euler (D39 R5)
         entry = {"type": kind}
+        if kind == "wall" and b.get("temperature") is not None:
+            entry["temperature"] = b["temperature"] / scaling.temperature
         if kind == "periodic":
             entry["partner"] = b["partner"]
             entry["translation"] = tuple(t / scaling.length for t in b["translation"])
@@ -409,6 +436,10 @@ def _setup_compressible(config, mesh):
     model = comp.CompressibleModel(
         gamma=gamma,
         gas_constant=r_nd,
+        viscosity=mu_nd,
+        viscosity_law=fluid["viscosity_model"],
+        sutherland_temperature=fluid["sutherland_temperature"] / scaling.temperature,
+        prandtl=fluid["prandtl"],
         spatial_order=num["spatial_order"],
         limiter=num["limiter"],
         limiter_threshold=num["limiter_threshold"],
@@ -1659,7 +1690,10 @@ class Monitor:
         return out
 
     def write_wall(self, w, boundary, path):
-        """Write x, y, p, Cp, tau_x, tau_y, Cf of one boundary (SI units)."""
+        """Write x, y, p, Cp, tau_x, tau_y, Cf (compressible laminar: T, q_w).
+
+        SI units; q_w is the heat flux from the wall into the fluid.
+        """
         loads = self.problem.wall_loads(w)
         faces = self.problem.boundary_faces([boundary])
         d = fz.wall_distribution(loads, self.problem.geom, faces, self.q, self.p_ref)
@@ -1673,6 +1707,20 @@ class Monitor:
             "tau_y": d["tau_y"] * s.pressure,
             "cf": d["cf"],
         }
+        m = self.problem.model
+        if self.problem.compressible and m.viscosity > 0.0:
+            # Wall temperature (boundary state) and heat flux into the fluid.
+            w_b = np.asarray(
+                self.problem.physics.boundary_state(
+                    self.problem.bc,
+                    self.problem.geom.b_normal,
+                    jnp.asarray(w)[self.problem.geom.b_owner],
+                )
+            )
+            columns["T"] = w_b[faces, comp.T] * s.temperature
+            columns["q_w"] = (
+                self.problem.wall_heat_flux(w)[faces] * s.pressure * s.velocity
+            )
         if self.problem.turbulent:
             # y+ of the first cell centre: d sqrt(|tau_w| / rho) / nu (non-dim.).
             m = self.problem.model
@@ -1890,10 +1938,10 @@ def _mode_rows(cfg):
 
 def _log_setup(log, config, problem, scaling, mesh):
     cfg = config.data
-    log.section("Configuration")
     if problem.compressible:
         _log_setup_compressible(log, config, problem, scaling, mesh)
         return
+    log.section("Configuration")
     rows = [
         ("model", cfg["physics"]["model"]),
         ("density", f"{cfg['fluid']['density']} kg/m^3"),
@@ -2051,6 +2099,24 @@ def _log_setup_compressible(log, config, problem, scaling, mesh):
             "non-dimensional",
             f"R = {m.gas_constant:.6g} (= 1 / (gamma M^2) for the freestream)",
         ),
+    ]
+    if m.viscosity > 0.0:
+        law = m.viscosity_law
+        if law == "sutherland":
+            law += f", S = {fluid['sutherland_temperature']:g} K"
+        rows += [
+            (
+                "viscosity",
+                f"{m.viscosity * scaling.viscosity:.6g} Pa s at "
+                f"{scaling.temperature:.6g} K ({law})",
+            ),
+            (
+                "Reynolds number",
+                f"{1.0 / m.viscosity:.6g} (rho U L / mu of the reference state)",
+            ),
+            ("Prandtl number", f"{m.prandtl:g}"),
+        ]
+    rows += [
         (
             "convective flux",
             f"{num['convective_flux']}, entropy fix {num['entropy_fix']:g}, order "

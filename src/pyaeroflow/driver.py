@@ -6,7 +6,8 @@ provides the residual, Jacobian and pseudo-time term for the solvers in
 :class:`~pyaeroflow.physics.incompressible.IncompressibleModel` (SU2 INC,
 with the turbulence and transition models) or
 :class:`~pyaeroflow.physics.compressible.CompressibleModel` (density-based,
-Euler). A flow family is a physics module with the same interface:
+Euler and laminar Navier-Stokes). A flow family is a physics module with the
+same interface:
 ``build_boundary_data``, ``lsq_include``, ``scheme_parameters`` (the
 per-evaluation constants of the scheme that the residual, Jacobian and
 pseudo-time term take frozen; beta^2 of the artificial compressibility for
@@ -207,8 +208,6 @@ class FlowProblem:
         if self.compressible:
             if self.turbulent:
                 raise ValueError("compressible flow: turbulence models are planned")
-            if model.viscosity > 0.0:
-                raise ValueError("compressible flow: only the Euler equations so far")
         if self.turbulent:
             if model.turbulence not in TURBULENCE_MODELS:
                 raise ValueError(f"unknown turbulence model '{model.turbulence}'")
@@ -617,7 +616,18 @@ class FlowProblem:
     def wall_loads(self, w):
         """Pressure and viscous traction on every boundary face."""
         return fz.wall_loads(
-            self.model, self.geom, self.bc, jnp.asarray(w), self.physics.boundary_state
+            self.model,
+            self.geom,
+            self.bc,
+            jnp.asarray(w),
+            self.physics.boundary_state,
+            getattr(self.physics, "wall_traction", None),
+        )
+
+    def wall_heat_flux(self, w):
+        """Wall heat flux into the fluid per boundary face (compressible only)."""
+        return np.asarray(
+            comp.wall_heat_flux(self.model, self.geom, self.bc, jnp.asarray(w))
         )
 
     def vorticity(self, w):

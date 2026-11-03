@@ -35,6 +35,7 @@ Click a case to jump to its section; each section ends with a link back here.
 | L3 step 4 (0.9) | [SST-LM γ-Re_θ: T3A, T3B, T3A−, SD7003](#sec-10) | validation | ERCOFTAC T3 (Roach & Brierley), LES/DNS, SA-AFT | `pyaeroflow run examples/cases/lm_t3a.toml` (mesh: `examples/cases/make_plate_lm.py`), `pyaeroflow run examples/cases/lm_sd7003.toml`, `pyaeroflow polar examples/cases/lm_sd7003_polar.toml --alpha 4 6 8 9 10 2 0` |
 | – | [Known limits of the transition models](#sec-11) | summary | sections 8–10 | – |
 | L1 C1 | [Compressible Euler: ramp, NACA 0012](#sec-12) | verification/validation | oblique-shock relations, Vassberg & Jameson 2010, Vassberg et al. 2011 | `python examples/l1_compressible.py [--fine]` |
+| L1 C2 | [Compressible laminar: flat plate, NACA 0012 Re 5000](#sec-13) | verification/validation | compressible similarity solution, Swanson & Langer 2016 | `python examples/l1_laminar.py` |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
 the scripts write) is not tracked.
@@ -807,6 +808,67 @@ shows the drag converging towards zero with grid refinement.
 
 [↑ back to table](#stage-table)
 
+<a id="sec-13"></a>
+
+## 13. Compressible laminar Navier–Stokes (L1 stage C2)
+
+`physics.model = "laminar"` with `physics.flow = "compressible"`: viscous
+stress with Sutherland's μ(T), heat flux with Pr = 0.72, no-slip adiabatic
+or isothermal walls (see [Compressible flow](configuration.md#compressible-flow)).
+Runs of 2026-11-03 in the cloud sandbox (4 cores, PARDISO), all converged
+to machine zero (10–11 orders).
+
+**Flat plate, M 0.5, Re_L 10⁵ (verification).**
+`pyaeroflow.cases.flat_plate_compressible`, the B1 domain and mesh
+(160 × 80 quadrilaterals, plate from x = 0 to 1, symmetry ahead of it),
+velocity inlet with T∞, pressure outlet, farfield on top. Reference: the
+compressible similarity solution (Howarth–Dorodnitsyn variables, White,
+*Viscous Fluid Flow*, sec. 7-3, Sutherland and constant Pr, computed in the
+module with `solve_bvp`). Means over 0.2 < x < 0.95, 24–26 iterations,
+about 20 s each:
+
+| wall | quantity | PyAeroFlow | similarity |
+|---|---|---|---|
+| adiabatic | C_f √Re_x | 0.6642 (+0.35 %) | 0.6619 |
+| | T_w / T∞ | 1.04218 | 1.04238 (recovery factor 0.848 ≈ √Pr) |
+| isothermal, T_w = T∞ | C_f √Re_x | 0.6657 (+0.33 %) | 0.6635 |
+| | q_w √Re_x / (ρ∞ U∞ c_p T∞) | −0.01722 (−1.0 %) | −0.01739 |
+
+The incompressible solver on the same mesh is +0.38 % above Blasius (the
+leading-edge displacement effect of section 3), so the compressible to
+incompressible ratio of C_f is 0.9964 against 0.9967 from the similarity
+solutions. The unit test runs 48 × 32 cells.
+
+**NACA 0012, M 0.5, α 0°, Re 5000 (validation).**
+`examples/cases/naca0012_laminar_m05.toml` on the PyAero C-mesh
+`examples/meshes/naca0012_pyaero_100k_y1.su2` (100k cells, sharp trailing
+edge), all outer boundaries farfield, adiabatic wall, unlimited second order
+(`numerics.limiter = "none"`, shock-free). Reference: Swanson & Langer
+(2016), case 1, structured and unstructured codes on C-grids to 4096 × 2048
+cells with the outer boundary at 10 chords.
+
+| | PyAeroFlow (100k C-mesh) | Swanson & Langer, finest grids |
+|---|---|---|
+| C_D | 0.05592 (+0.6 %) | 0.05557–0.05565 |
+| C_D pressure | 0.02303 (+1.0 %) | 0.02279–0.02284 |
+| C_D friction | 0.03290 (+0.3 %) | 0.03278–0.03281 |
+| x_sep / c (C_f = 0, interpolated) | 0.808 | 0.808 |
+| iterations, wall time | 30 (10 Newton–Krylov), 170 s | – |
+
+The trailing-edge separation is the sensitive quantity: a too dissipative
+scheme moves it downstream (Swanson & Langer). On an O-grid
+(`airfoil_ogrid`, 256 × 128, farfield 50 chords, wall spacing 2.5·10⁻⁴ c)
+the same case gives C_D = 0.0605 and no separation at all; the
+incompressible solver on that O-grid behaves the same (C_D 0.0577 on
+128 × 64, attached), while on the C-mesh it separates at x/c = 0.90 (the
+incompressible flow separates later). The O-grid resolves the wake and its
+recirculation behind the sharp trailing edge with fanned, skewed cells: use
+a C-mesh for viscous airfoil cases with trailing-edge separation.
+
+![Compressible laminar: flat plate and NACA 0012](figures/l1_laminar.png)
+
+[↑ back to table](#stage-table)
+
 ## References
 
 - Ghia, U., Ghia, K. N., Shin, C. T. (1982): High-Re solutions for
@@ -819,6 +881,10 @@ shows the drag converging towards zero with grid refinement.
   zero-pressure-gradient flat plate and 2D NACA 0012 airfoil cases,
   https://tmbwg.github.io/turbmodels/ (source repository
   github.com/TMBWG/turbmodels).
+- Swanson, R. C., Langer, S. (2016): Comparison of NACA 0012 laminar flow
+  solutions: structured and unstructured grid methods. NASA/TM-2016-219003
+  (also Computers & Fluids 126, 102–128).
+- White, F. M. (2006): Viscous Fluid Flow, 3rd ed. McGraw-Hill.
 - Vassberg, J. C., Jameson, A. (2010): In pursuit of grid convergence for
   two-dimensional Euler solutions. J. Aircraft 47(4), 1152–1166.
 - Vassberg, J. C., Harrison, N. A., Roman, D. L., Jameson, A. (2011): A
