@@ -1,0 +1,612 @@
+"""Compressible Euler equations, density-based as SU2's compressible solver (L1).
+
+Working variables per cell: V = (p, u, v, T), the primitive variables SU2
+reconstructs (``MUSCL_FLOW``), with the density from the ideal-gas law
+rho = p / (R T). The residual R(V) is the net outflow of the conservative
+fluxes
+
+    F.n = (rho v_n, rho u v_n + p n_x, rho v v_n + p n_y, rho H v_n),
+
+with v_n = v.n, the total energy rho E = p / (gamma - 1) + rho |v|^2 / 2 and
+the total enthalpy H = E + p / rho. The rows of R are the continuity, x- and
+y-momentum and energy equations; the unknowns are V. Pseudo-time stepping
+uses the conservative time derivative,
+
+    (dU/dV) dV/dtau + R(V) = 0,
+
+so that the pseudo-time blocks are dU/dV Lambda_i / CFL with the spectral
+radius Lambda_i = sum over faces of (|v_n| + c) L.
+
+Non-dimensionalisation (as SU2's ``FREESTREAM_VEL_EQ_ONE``): rho, |v| and T
+of the freestream are 1, the reference length is the chord. Then
+p_inf = 1 / (gamma M_inf^2) and the non-dimensional gas constant is
+R = p_inf / (rho_inf T_inf) = 1 / (gamma M_inf^2) (see
+:func:`gas_constant_for_mach`).
+
+Convective flux (D21 for this solver): Roe's approximate Riemann solver
+(SU2 ``ROE``) with Harten's entropy fix in its smooth form,
+|lambda| -> (lambda^2 + delta^2) / (2 delta) for |lambda| < delta,
+delta = ``entropy_fix`` (|v_n| + c) of the Roe-averaged state. Second order
+by MUSCL reconstruction of V with the Venkatakrishnan(-Wang) limiter. A face
+whose reconstructed state has p <= 0 or T <= 0 falls back to first order
+(SU2's non-physical reconstruction check).
+
+Boundary conditions: farfield (freestream state outside, Roe flux between the
+interior and that state: the upwinding picks the incoming characteristics,
+as SU2's ``MARKER_FAR``), slip wall and symmetry (pressure flux only; SU2's
+``MARKER_EULER``), static-pressure outlet (prescribed p, entropy and
+velocity from the interior; supersonic outflow extrapolates everything),
+total-conditions inlet (p_0, T_0 and flow direction; p from the interior)
+and velocity inlet (u, v, T prescribed, p from the interior).
+"""
+
+from functools import partial
+from typing import NamedTuple
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+from pyaeroflow.numerics import (
+    lsq_gradient,
+    reconstruct,
+    venkatakrishnan_wang,
+)
+from pyaeroflow.physics.incompressible import (
+    FARFIELD,
+    KIND_NAMES,
+    PRESSURE_OUTLET,
+    SYMMETRY,
+    TOTAL_PRESSURE_INLET,
+    VELOCITY_INLET,
+    WALL,
+)
+from pyaeroflow.solver import divergence
+
+FLOW = "compressible"
+P, U, V, T = 0, 1, 2, 3
+# Columns that must stay positive (step limiter, structural Jacobian samples).
+POSITIVE_COLUMNS = (P, T)
+# Names of the residual rows (log and history), as SU2's conservative rows.
+RESIDUAL_NAMES = ("rho", "rhou", "rhov", "rhoE")
+
+__all__ = [
+    "FARFIELD",
+    "KIND_NAMES",
+    "PRESSURE_OUTLET",
+    "SYMMETRY",
+    "TOTAL_PRESSURE_INLET",
+    "VELOCITY_INLET",
+    "WALL",
+]
+
+
+class CompressibleModel(NamedTuple):
+    """Model parameters (hashable; a static jit argument).
+
+    Attributes
+    ----------
+    gamma : float
+        Ratio of specific heats.
+    gas_constant : float
+        Non-dimensional gas constant R = p_inf / (rho_inf T_inf); with the
+        freestream as reference 1 / (gamma M_inf^2).
+    viscosity : float
+        Dynamic viscosity; only 0 (Euler) is available.
+    spatial_order : int
+        1 or 2 (MUSCL reconstruction of p, u, v, T).
+    limiter : {"none", "venkatakrishnan-wang", "venkatakrishnan"}
+    limiter_threshold : float
+    entropy_fix : float
+        Harten's coefficient: delta = entropy_fix (|v_n| + c); 0 = off.
+    viscous_gradient : str
+        Face-gradient scheme (used by the wall loads; viscous flux later).
+    alpha : float
+    density : float
+        Reference density of the force coefficients (freestream, 1).
+    pin, turbulence, transition, coupling :
+        Interface of the problem class: no pin, no turbulence model.
+    """
+
+    gamma: float = 1.4
+    gas_constant: float = 1.0 / 1.4
+    viscosity: float = 0.0
+    spatial_order: int = 2
+    limiter: str = "venkatakrishnan-wang"
+    limiter_threshold: float = 0.05
+    entropy_fix: float = 0.001
+    viscous_gradient: str = "alpha-damping"
+    alpha: float = 4.0 / 3.0
+    density: float = 1.0
+    pin: tuple = None
+    turbulence: str = "none"
+    transition: str = "none"
+    coupling: str = "segregated"
+
+    @property
+    def n_var(self):
+        """Number of variables: p, u, v, T."""
+        return 4
+
+
+def gas_constant_for_mach(mach, gamma=1.4):
+    """Non-dimensional R = 1 / (gamma M^2) of the freestream reference."""
+    return 1.0 / (gamma * mach**2)
+
+
+class BoundaryData(NamedTuple):
+    """Per-boundary-face condition (a JAX pytree).
+
+    Attributes
+    ----------
+    kind : int array, shape (n_bfaces,)
+    value : float array, shape (n_bfaces, 4)
+        Prescribed (p, u, v, T) where the kind uses them; the total-conditions
+        inlet stores (p_0, d_x, d_y, T_0) with the unit flow direction d.
+    gamma, gas_constant : float
+    """
+
+    kind: jnp.ndarray
+    value: jnp.ndarray
+    gamma: float = 1.4
+    gas_constant: float = 1.0 / 1.4
+
+
+def _evaluate(spec, x, y):
+    return np.asarray(spec(x, y) if callable(spec) else spec, dtype=float)
+
+
+def build_boundary_data(disc, conditions, model):
+    """Return :func:`boundary_data` (flow-family interface)."""
+    return boundary_data(disc, conditions, model)
+
+
+def boundary_data(disc, conditions, model):
+    """Build :class:`BoundaryData` from a dict of boundary conditions.
+
+    Parameters
+    ----------
+    disc : Discretization
+    conditions : dict of str to dict
+        Non-dimensional values: ``farfield`` takes ``velocity`` (u, v),
+        ``pressure`` and ``temperature``; ``velocity-inlet`` ``velocity``
+        and ``temperature``; ``pressure-outlet`` ``pressure``;
+        ``total-pressure-inlet`` ``total_pressure``, ``total_temperature``
+        and ``flow_direction``; ``wall`` an optional ``velocity``;
+        ``slip-wall`` and ``symmetry`` nothing. Constants or callables of
+        the boundary-face centres.
+    model : CompressibleModel
+    """
+    nb = disc.boundary_face_ids.size
+    kind = np.zeros(nb, dtype=np.int64)
+    value = np.zeros((nb, 4))
+    missing = set(disc.boundary_slices) - set(conditions)
+    extra = set(conditions) - set(disc.boundary_slices)
+    if missing or extra:
+        raise ValueError(
+            f"boundary conditions missing for {sorted(missing)}, "
+            f"unknown boundaries {sorted(extra)}"
+        )
+    centres = np.asarray(disc.geom.b_centre)
+    for name, sl in disc.boundary_slices.items():
+        bc = conditions[name]
+        if bc["type"] == "transpiration-wall":
+            raise ValueError("transpiration-wall: not available for compressible flow")
+        kind[sl] = KIND_NAMES[bc["type"]]
+        x, y = centres[sl, 0], centres[sl, 1]
+        if bc["type"] == "total-pressure-inlet":
+            d = np.asarray(_evaluate(bc["flow_direction"], x, y), dtype=float)
+            d = np.broadcast_to(
+                d.reshape(2, -1) if d.ndim > 1 else d[:, None], (2, x.size)
+            )
+            norm = np.hypot(d[0], d[1])
+            cols = (
+                bc["total_pressure"],
+                d[0] / norm,
+                d[1] / norm,
+                bc["total_temperature"],
+            )
+        else:
+            vel = bc.get("velocity", (0.0, 0.0))
+            if callable(vel):
+                vel = vel(x, y)
+            cols = (
+                bc.get("pressure", 0.0),
+                vel[0],
+                vel[1],
+                bc.get("temperature", 0.0),
+            )
+        for col, spec in enumerate(cols):
+            value[sl, col] = np.broadcast_to(_evaluate(spec, x, y), x.shape)
+    return BoundaryData(
+        jnp.asarray(kind),
+        jnp.asarray(value),
+        float(model.gamma),
+        float(model.gas_constant),
+    )
+
+
+def lsq_include(conditions, n_var=4):
+    """``lsq_include`` callback: boundary values enter a gradient where known.
+
+    Farfield and symmetry faces: all variables. Walls: the velocity (the
+    adiabatic wall leaves p and T to the interior). Velocity inlets: u, v, T.
+    Total-conditions inlets: u, v, T (computed from p_0, T_0). Outlets: p.
+    """
+
+    def include(slices, n_bfaces):
+        mask = np.ones((n_bfaces, n_var), dtype=bool)
+        for name, sl in slices.items():
+            k = KIND_NAMES[conditions[name]["type"]]
+            if k == WALL:
+                mask[sl, P] = False
+                mask[sl, T] = False
+            elif k in (VELOCITY_INLET, TOTAL_PRESSURE_INLET):
+                mask[sl, P] = False
+            elif k == PRESSURE_OUTLET:
+                mask[sl, U:] = False
+        return mask
+
+    return include
+
+
+# -- thermodynamics --------------------------------------------------------------
+
+
+def density(gas_constant, w):
+    """Return the density p / (R T) of states w (..., 4)."""
+    return w[..., P] / (gas_constant * w[..., T])
+
+
+def sound_speed(gamma, gas_constant, w):
+    """Return the speed of sound sqrt(gamma R T)."""
+    return jnp.sqrt(gamma * gas_constant * w[..., T])
+
+
+def conservative(gamma, gas_constant, w):
+    """U = (rho, rho u, rho v, rho E) of primitive states w (n, 4)."""
+    rho = density(gas_constant, w)
+    q2 = w[:, U] ** 2 + w[:, V] ** 2
+    return jnp.stack(
+        (
+            rho,
+            rho * w[:, U],
+            rho * w[:, V],
+            w[:, P] / (gamma - 1.0) + 0.5 * rho * q2,
+        ),
+        axis=1,
+    )
+
+
+def mach_number(gamma, gas_constant, w):
+    """|v| / c per state."""
+    return jnp.hypot(w[..., U], w[..., V]) / sound_speed(gamma, gas_constant, w)
+
+
+def physical_flux(gamma, gas_constant, w, normal):
+    """F.n for states w (n, 4) and unit normals (n, 2)."""
+    rho = density(gas_constant, w)
+    vn = w[:, U] * normal[:, 0] + w[:, V] * normal[:, 1]
+    h = gamma / (gamma - 1.0) * w[:, P] / rho + 0.5 * (w[:, U] ** 2 + w[:, V] ** 2)
+    return jnp.stack(
+        (
+            rho * vn,
+            rho * w[:, U] * vn + w[:, P] * normal[:, 0],
+            rho * w[:, V] * vn + w[:, P] * normal[:, 1],
+            rho * h * vn,
+        ),
+        axis=1,
+    )
+
+
+def _harten(lam, delta):
+    """|lam| with Harten's smooth entropy fix below ``delta``."""
+    a = jnp.abs(lam)
+    return jnp.where(a < delta, 0.5 * (lam**2 + delta**2) / delta, a)
+
+
+def roe_flux(gamma, gas_constant, entropy_fix, w_l, w_r, normal):
+    """Roe flux per unit length between primitive states (n, 4).
+
+    F = (F_L + F_R) / 2 - sum_k |lambda_k| alpha_k r_k / 2 with the
+    Roe-averaged state (Blazek, Computational Fluid Dynamics, 3rd ed.,
+    sec. 4.3.3; SU2 ``CUpwRoe_Flow``).
+    """
+    nx, ny = normal[:, 0], normal[:, 1]
+    r_l, r_r = density(gas_constant, w_l), density(gas_constant, w_r)
+    g1 = gamma / (gamma - 1.0)
+    h_l = g1 * w_l[:, P] / r_l + 0.5 * (w_l[:, U] ** 2 + w_l[:, V] ** 2)
+    h_r = g1 * w_r[:, P] / r_r + 0.5 * (w_r[:, U] ** 2 + w_r[:, V] ** 2)
+    s_l, s_r = jnp.sqrt(r_l), jnp.sqrt(r_r)
+    wt = 1.0 / (s_l + s_r)
+    u = (s_l * w_l[:, U] + s_r * w_r[:, U]) * wt
+    v = (s_l * w_l[:, V] + s_r * w_r[:, V]) * wt
+    h = (s_l * h_l + s_r * h_r) * wt
+    rho = s_l * s_r
+    q2 = u**2 + v**2
+    c2 = jnp.maximum((gamma - 1.0) * (h - 0.5 * q2), 1e-12)
+    c = jnp.sqrt(c2)
+    vn = u * nx + v * ny
+
+    dp = w_r[:, P] - w_l[:, P]
+    dr = r_r - r_l
+    du = w_r[:, U] - w_l[:, U]
+    dv = w_r[:, V] - w_l[:, V]
+    dvn = du * nx + dv * ny
+
+    if entropy_fix > 0.0:
+        delta = entropy_fix * (jnp.abs(vn) + c)
+        l1, l2, l3 = (
+            _harten(vn - c, delta),
+            _harten(vn, delta),
+            _harten(vn + c, delta),
+        )
+    else:
+        l1, l2, l3 = jnp.abs(vn - c), jnp.abs(vn), jnp.abs(vn + c)
+
+    a1 = l1 * (dp - rho * c * dvn) / (2.0 * c2)
+    a3 = l3 * (dp + rho * c * dvn) / (2.0 * c2)
+    a2 = l2 * (dr - dp / c2)
+    a4 = l2 * rho
+    ones = jnp.ones_like(u)
+    zeros = jnp.zeros_like(u)
+    diss = (
+        a1[:, None] * jnp.stack((ones, u - c * nx, v - c * ny, h - c * vn), axis=1)
+        + a2[:, None] * jnp.stack((ones, u, v, 0.5 * q2), axis=1)
+        + a4[:, None]
+        * jnp.stack(
+            (zeros, du - dvn * nx, dv - dvn * ny, u * du + v * dv - vn * dvn), axis=1
+        )
+        + a3[:, None] * jnp.stack((ones, u + c * nx, v + c * ny, h + c * vn), axis=1)
+    )
+    f_l = physical_flux(gamma, gas_constant, w_l, normal)
+    f_r = physical_flux(gamma, gas_constant, w_r, normal)
+    return 0.5 * (f_l + f_r - diss)
+
+
+def _flux(model, w_l, w_r, normal):
+    return roe_flux(
+        model.gamma, model.gas_constant, model.entropy_fix, w_l, w_r, normal
+    )
+
+
+# -- boundary conditions ---------------------------------------------------------
+
+
+def boundary_state(bc, normal, w_in):
+    """Boundary-face state (p, u, v, T) from the interior state ``w_in``.
+
+    Farfield: the freestream. Slip wall / symmetry: interior p and T, the
+    interior velocity without its normal component. Wall: interior p and T,
+    the wall velocity. Velocity inlet: interior p, prescribed u, v, T.
+    Pressure outlet: prescribed p, interior velocity, T on the interior
+    isentrope (T_in (p_b / p_in)^((gamma - 1) / gamma)); a supersonic
+    outflow (v_n >= c) takes the interior state. Total-conditions inlet:
+    p = min(p_in, p_0), the Mach number from p_0 / p, T = T_0 / (1 + (gamma
+    - 1) M^2 / 2) and the velocity along the prescribed direction.
+    """
+    gamma, r_gas = bc.gamma, bc.gas_constant
+    vn = w_in[:, U] * normal[:, 0] + w_in[:, V] * normal[:, 1]
+    mirrored = w_in.at[:, U].add(-vn * normal[:, 0]).at[:, V].add(-vn * normal[:, 1])
+    kind = bc.kind[:, None]
+    val = bc.value
+    out = jnp.where(kind == SYMMETRY, mirrored, w_in)
+    out = jnp.where(kind == FARFIELD, val, out)
+    wall = w_in.at[:, U].set(val[:, U]).at[:, V].set(val[:, V])
+    out = jnp.where(kind == WALL, wall, out)
+    inlet_v = wall.at[:, T].set(val[:, T])
+    out = jnp.where(kind == VELOCITY_INLET, inlet_v, out)
+
+    # Static-pressure outlet (subsonic): p prescribed, isentropic T.
+    p_in = w_in[:, P]
+    ratio = jnp.maximum(val[:, P], 1e-300) / p_in
+    t_out = w_in[:, T] * ratio ** ((gamma - 1.0) / gamma)
+    outlet = w_in.at[:, P].set(val[:, P]).at[:, T].set(t_out)
+    supersonic = vn >= sound_speed(gamma, r_gas, w_in)
+    outlet = jnp.where(supersonic[:, None], w_in, outlet)
+    out = jnp.where(kind == PRESSURE_OUTLET, outlet, out)
+
+    # Total-conditions inlet.
+    p0, t0 = val[:, P], val[:, T]
+    p_b = jnp.minimum(p_in, p0)
+    m2 = 2.0 / (gamma - 1.0) * ((p0 / p_b) ** ((gamma - 1.0) / gamma) - 1.0)
+    t_b = t0 / (1.0 + 0.5 * (gamma - 1.0) * m2)
+    speed = jnp.sqrt(m2 * gamma * r_gas * t_b + 1e-300)
+    inlet_t = jnp.stack((p_b, speed * val[:, U], speed * val[:, V], t_b), axis=1)
+    return jnp.where(kind == TOTAL_PRESSURE_INLET, inlet_t, out)
+
+
+def boundary_convective_flux(model, bc, normal, w_in):
+    """Convective flux through boundary faces from the interior state w_in.
+
+    Walls and symmetry faces carry the pressure flux of the interior
+    pressure (zero mass and energy flux); all other kinds the Roe flux
+    between the interior and the boundary state.
+    """
+    w_out = boundary_state(bc, normal, w_in)
+    upwind = _flux(model, w_in, w_out, normal)
+    p = w_in[:, P]
+    zero = jnp.zeros_like(p)
+    wall_flux = jnp.stack((zero, p * normal[:, 0], p * normal[:, 1], zero), axis=1)
+    kind = bc.kind[:, None]
+    return jnp.where((kind == WALL) | (kind == SYMMETRY), wall_flux, upwind)
+
+
+# -- residual ---------------------------------------------------------------------
+
+
+def _physical(w):
+    """Return True where p > 0 and T > 0."""
+    return (w[:, P] > 0.0) & (w[:, T] > 0.0)
+
+
+def _limiter(model, geom, w, w_b, grad):
+    if model.limiter == "venkatakrishnan-wang":
+        return venkatakrishnan_wang(geom, w, w_b, grad, model.limiter_threshold)
+    if model.limiter == "venkatakrishnan":
+        return venkatakrishnan_wang(
+            geom, w, w_b, grad, model.limiter_threshold, local=True
+        )
+    if model.limiter == "none":
+        return jnp.ones_like(w)
+    raise ValueError(f"unknown limiter '{model.limiter}'")
+
+
+@partial(jax.jit, static_argnums=0)
+def limiter(model, geom, bc, w):
+    """Limiter values psi of the current state, shape (n_cells, 4)."""
+    w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
+    return _limiter(model, geom, w, w_b, lsq_gradient(geom, w, w_b))
+
+
+def face_states(model, geom, bc, w, order, psi=None):
+    """Convective face states (left, right, boundary-inner) of order 1 or 2.
+
+    Second order: MUSCL with the limiter (or the frozen ``psi``); faces with
+    a non-physical reconstructed state (p <= 0 or T <= 0 on either side) use
+    the cell values.
+    """
+    o, n, b = geom.f_owner, geom.f_neigh, geom.b_owner
+    if order != 2:
+        return w[o], w[n], w[b]
+    w_b = boundary_state(bc, geom.b_normal, w[b])
+    grad = lsq_gradient(geom, w, w_b)
+    if psi is None:
+        psi = _limiter(model, geom, w, w_b, grad)
+    w_l, w_r, w_in = reconstruct(geom, w, grad, psi)
+    ok = (_physical(w_l) & _physical(w_r))[:, None]
+    w_l = jnp.where(ok, w_l, w[o])
+    w_r = jnp.where(ok, w_r, w[n])
+    w_in = jnp.where(_physical(w_in)[:, None], w_in, w[b])
+    return w_l, w_r, w_in
+
+
+@partial(jax.jit, static_argnums=(0, 4))
+def residual(model, geom, bc, w, order, params=None, psi=None):
+    """Residual R(V), shape (n_cells, 4): net outflow of mass, momentum, energy.
+
+    ``params`` (the scheme parameters of the problem interface) is unused.
+    """
+    w_l, w_r, w_in = face_states(model, geom, bc, w, order, psi)
+    f_flux = _flux(model, w_l, w_r, geom.f_normal)
+    b_flux = boundary_convective_flux(model, bc, geom.b_normal, w_in)
+    return divergence(geom, f_flux, b_flux)
+
+
+@partial(jax.jit, static_argnums=(0, 5))
+def residual_jvp(model, geom, bc, w, dw, order, params=None, psi=None):
+    """Exact Jacobian-vector product dR/dw(w) @ dw by forward-mode AD."""
+
+    def f(x):
+        return residual(model, geom, bc, x, order, params, psi)
+
+    return jax.jvp(f, (w,), (dw,))[1]
+
+
+@partial(jax.jit, static_argnums=(0, 4))
+def residual_linearize(model, geom, bc, w, order, params=None, psi=None):
+    """Residual and its linearization at ``w`` (``jax.linearize``)."""
+
+    def f(x):
+        return residual(model, geom, bc, x, order, params, psi)
+
+    return jax.linearize(f, w)
+
+
+@partial(jax.jit, static_argnums=(0, 4))
+def non_physical_faces(model, geom, bc, w, order=2, psi=None):
+    """Count the faces whose reconstruction falls back to first order."""
+    if order != 2:
+        return 0
+    w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
+    grad = lsq_gradient(geom, w, w_b)
+    if psi is None:
+        psi = _limiter(model, geom, w, w_b, grad)
+    w_l, w_r, w_in = reconstruct(geom, w, grad, psi)
+    bad = ~(_physical(w_l) & _physical(w_r))
+    return jnp.sum(bad) + jnp.sum(~_physical(w_in))
+
+
+# -- first-order Jacobian (compact fluxes) --------------------------------------
+
+
+def interior_flux(model, params, w_o, w_n, normal, delta):
+    """Compact first-order flux through an interior face (for the Jacobian)."""
+    return _flux(model, w_o[None], w_n[None], normal[None])[0]
+
+
+def boundary_flux(model, params, w_o, bc_kind, bc_value, normal, delta):
+    """Compact first-order flux through a boundary face (for the Jacobian)."""
+    bc = BoundaryData(bc_kind[None], bc_value[None], model.gamma, model.gas_constant)
+    return boundary_convective_flux(model, bc, normal[None], w_o[None])[0]
+
+
+# -- pseudo time --------------------------------------------------------------------
+
+
+def scheme_parameters(model, w, bc):
+    """Frozen per-evaluation scheme parameters: none for this solver."""
+    return 0.0
+
+
+@partial(jax.jit, static_argnums=0)
+def spectral_radius(model, geom, w, params=None):
+    """Sum over faces of (|v_n| + c) * length, per cell."""
+    n = w.shape[0]
+    o, nb, b = geom.f_owner, geom.f_neigh, geom.b_owner
+    w_f = 0.5 * (w[o] + w[nb])
+    c_f = sound_speed(model.gamma, model.gas_constant, w_f)
+    lam_f = (
+        jnp.abs(jnp.einsum("fk,fk->f", w_f[:, U:T], geom.f_normal)) + c_f
+    ) * geom.f_length
+    w_b = w[b]
+    c_b = sound_speed(model.gamma, model.gas_constant, w_b)
+    lam_b = (
+        jnp.abs(jnp.einsum("fk,fk->f", w_b[:, U:T], geom.b_normal)) + c_b
+    ) * geom.b_length
+    return (
+        jax.ops.segment_sum(lam_f, o, num_segments=n)
+        + jax.ops.segment_sum(lam_f, nb, num_segments=n)
+        + jax.ops.segment_sum(lam_b, b, num_segments=n)
+    )
+
+
+@partial(jax.jit, static_argnums=0)
+def transformation(model, w):
+    """dU/dV per cell, shape (n_cells, 4, 4)."""
+
+    def cons(x):
+        return conservative(model.gamma, model.gas_constant, x[None])[0]
+
+    return jax.vmap(jax.jacfwd(cons))(w)
+
+
+def time_term_blocks(model, geom, w, params, cfl):
+    """Pseudo-time blocks dU/dV Lambda_i / CFL, shape (n_cells, 4, 4)."""
+    w = jnp.asarray(w)
+    m = np.asarray(transformation(model, w))
+    lam = np.asarray(spectral_radius(model, geom, w))
+    return m * (lam / cfl)[:, None, None]
+
+
+@partial(jax.jit, static_argnums=0)
+def explicit_update(model, geom, w, r, params, cfl):
+    """Explicit increment CFL / Lambda_i (dU/dV)^-1 R_i, shape (n_cells, 4)."""
+    lam = spectral_radius(model, geom, w)
+    du = jnp.linalg.solve(transformation(model, w), r[:, :, None])[:, :, 0]
+    return du * (cfl / lam)[:, None]
+
+
+def freestream_conditions(mach, angle_of_attack=0.0, gamma=1.4):
+    """Non-dimensional freestream: (gas constant, farfield condition dict).
+
+    rho = |v| = T = 1, p = 1 / (gamma M^2); the angle in degrees.
+    """
+    r_gas = gas_constant_for_mach(mach, gamma)
+    a = np.radians(angle_of_attack)
+    return r_gas, {
+        "type": "farfield",
+        "velocity": (float(np.cos(a)), float(np.sin(a))),
+        "pressure": r_gas,
+        "temperature": 1.0,
+    }

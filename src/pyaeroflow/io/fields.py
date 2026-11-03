@@ -24,6 +24,7 @@ class Capabilities(NamedTuple):
     implicit: bool  # steady with the implicit solver
     walls: bool  # output.force_boundaries is not empty
     turbulence: str = "sa-neg"  # "sa-neg" or "sst" (only meaningful with rans)
+    flow: str = "incompressible"  # or "compressible" (L1)
 
     @classmethod
     def from_config(cls, data):
@@ -38,6 +39,7 @@ class Capabilities(NamedTuple):
             steady and data["solver"]["method"] == "implicit",
             bool(data["output"]["force_boundaries"]),
             physics["turbulence"] if rans else "none",
+            physics.get("flow", "incompressible"),
         )
 
 
@@ -131,6 +133,21 @@ def _velocity(c):
 
 def _speed(c):
     return np.hypot(c.w[:, 1], c.w[:, 2]) * c.scaling.velocity
+
+
+def _density(c):
+    m = c.problem.model
+    return np.asarray(c.w[:, 0] / (m.gas_constant * c.w[:, 3])) * c.scaling.density
+
+
+def _temperature(c):
+    return c.w[:, 3] * c.scaling.temperature
+
+
+def _mach(c):
+    m = c.problem.model
+    speed = np.hypot(c.w[:, 1], c.w[:, 2])
+    return speed / np.sqrt(m.gamma * m.gas_constant * c.w[:, 3])
 
 
 def _vorticity(c):
@@ -263,6 +280,18 @@ def _implicit(caps):
     return caps.implicit
 
 
+def _compressible(caps):
+    return caps.flow == "compressible"
+
+
+def _implicit_incompressible(caps):
+    return caps.implicit and caps.flow != "compressible"
+
+
+def _implicit_compressible(caps):
+    return caps.implicit and caps.flow == "compressible"
+
+
 def _implicit_aft(caps):
     return caps.implicit and _aft(caps)
 
@@ -291,6 +320,30 @@ FIELDS = (
     Field("pressure", "Pa", "Static pressure", "always", _always, _pressure),
     Field("velocity", "m/s", "Velocity vector", "always", _always, _velocity),
     Field("velocity_magnitude", "m/s", "Speed", "always", _always, _speed),
+    Field(
+        "density",
+        "kg/m^3",
+        "Density p / (R T)",
+        "compressible",
+        _compressible,
+        _density,
+    ),
+    Field(
+        "temperature",
+        "K",
+        "Static temperature",
+        "compressible",
+        _compressible,
+        _temperature,
+    ),
+    Field(
+        "mach",
+        "1",
+        "Mach number |v| / c",
+        "compressible",
+        _compressible,
+        _mach,
+    ),
     Field(
         "vorticity",
         "1/s",
@@ -417,25 +470,57 @@ FIELDS = (
         "residual_p",
         "1",
         "Pressure (continuity) residual per cell volume",
-        "steady, implicit",
-        _implicit,
+        "steady, implicit, incompressible",
+        _implicit_incompressible,
         _residual(0),
     ),
     Field(
         "residual_u",
         "1",
         "x-momentum residual per cell volume",
-        "steady, implicit",
-        _implicit,
+        "steady, implicit, incompressible",
+        _implicit_incompressible,
         _residual(1),
     ),
     Field(
         "residual_v",
         "1",
         "y-momentum residual per cell volume",
-        "steady, implicit",
-        _implicit,
+        "steady, implicit, incompressible",
+        _implicit_incompressible,
         _residual(2),
+    ),
+    Field(
+        "residual_rho",
+        "1",
+        "Continuity residual per cell volume",
+        "steady, implicit, compressible",
+        _implicit_compressible,
+        _residual(0),
+    ),
+    Field(
+        "residual_rhou",
+        "1",
+        "x-momentum residual per cell volume",
+        "steady, implicit, compressible",
+        _implicit_compressible,
+        _residual(1),
+    ),
+    Field(
+        "residual_rhov",
+        "1",
+        "y-momentum residual per cell volume",
+        "steady, implicit, compressible",
+        _implicit_compressible,
+        _residual(2),
+    ),
+    Field(
+        "residual_rhoE",
+        "1",
+        "Energy residual per cell volume",
+        "steady, implicit, compressible",
+        _implicit_compressible,
+        _residual(3),
     ),
     Field(
         "residual_nu_tilde",
@@ -543,6 +628,8 @@ DEFAULT_NAMES = (
     "pressure",
     "velocity",
     "velocity_magnitude",
+    "density",
+    "mach",
     "nu_tilde",
     "k",
     "omega",
@@ -588,6 +675,7 @@ def resolve_fields(requested, caps):
             problems.append(
                 f"output.fields: '{name}' needs {field.needs} "
                 f"(this case: model {caps.model}"
+                + (", compressible" if caps.flow == "compressible" else "")
                 + (
                     f", turbulence {caps.turbulence}, transition {caps.transition}"
                     if caps.model == "rans"
@@ -617,6 +705,10 @@ def catalogue_table():
     """Markdown table of all fields for docs/configuration.md."""
     cases = (
         ("euler", Capabilities("euler", "none", True, True, True)),
+        (
+            "compressible euler",
+            Capabilities("euler", "none", True, True, True, "none", "compressible"),
+        ),
         ("laminar", Capabilities("laminar", "none", True, True, True)),
         ("SA", Capabilities("rans", "none", True, True, True)),
         ("SA + BCM", Capabilities("rans", "bcm", True, True, True)),

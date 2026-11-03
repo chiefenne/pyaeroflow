@@ -60,6 +60,11 @@ KIND_NAMES = {
     "total-pressure-inlet": TOTAL_PRESSURE_INLET,
 }
 P, U, V = 0, 1, 2
+FLOW = "incompressible"
+# Columns that must stay positive in the mean flow (none: gauge pressure).
+POSITIVE_COLUMNS = ()
+# Names of the mean-flow residual rows (log and history).
+RESIDUAL_NAMES = ("p", "u", "v")
 
 
 class IncompressibleModel(NamedTuple):
@@ -244,6 +249,11 @@ def boundary_data(disc, conditions, density=1.0):
     )
 
 
+def build_boundary_data(disc, conditions, model):
+    """Return :func:`boundary_data` with the model's density (flow-family interface)."""
+    return boundary_data(disc, conditions, model.density)
+
+
 def _evaluate(spec, x, y):
     """Evaluate a constant or a callable of the face centres as a float array."""
     return np.asarray(spec(x, y) if callable(spec) else spec, dtype=float)
@@ -312,6 +322,11 @@ def beta_squared(model, u, bc):
         )
     )
     return float(model.beta_factor * max(v2.max(), 1e-10))
+
+
+def scheme_parameters(model, w, bc):
+    """Frozen per-evaluation scheme parameters: beta^2 (flow-family interface)."""
+    return beta_squared(model, np.asarray(w)[:, :3], bc)
 
 
 def inviscid_flux(model, w, normal):

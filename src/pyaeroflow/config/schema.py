@@ -44,6 +44,14 @@ SCHEMA = {
         "scale": Opt("float", 1.0, "Factor applied to all coordinates", minimum=0.0),
     },
     "physics": {
+        "flow": Opt(
+            "string",
+            "incompressible",
+            "Flow family: incompressible (SU2 INC: artificial compressibility, "
+            "constant density) or compressible (density-based, ideal gas; "
+            "physics.model = euler only so far)",
+            choices=("incompressible", "compressible"),
+        ),
         "model": Opt(
             "string",
             REQUIRED,
@@ -177,7 +185,24 @@ SCHEMA = {
         ),
     },
     "fluid": {
-        "density": Opt("float", REQUIRED, "Density rho", "kg/m^3", minimum=0.0),
+        "density": Opt(
+            "float",
+            None,
+            "Density rho (incompressible: required; compressible: from the "
+            "farfield pressure and temperature)",
+            "kg/m^3",
+            minimum=0.0,
+        ),
+        "gamma": Opt(
+            "float", 1.4, "Ratio of specific heats (compressible)", minimum=1.0
+        ),
+        "gas_constant": Opt(
+            "float",
+            287.058,
+            "Specific gas constant R (compressible)",
+            "J/(kg K)",
+            minimum=0.0,
+        ),
         "viscosity": Opt("float", None, "Dynamic viscosity mu", "Pa s", minimum=0.0),
         "reynolds_number": Opt(
             "float",
@@ -214,7 +239,19 @@ SCHEMA = {
             minimum=0.0,
         ),
         "density": Opt(
-            "float", None, "Reference density; default fluid.density", "kg/m^3"
+            "float",
+            None,
+            "Reference density; default fluid.density (compressible: the "
+            "farfield density)",
+            "kg/m^3",
+        ),
+        "temperature": Opt(
+            "float",
+            None,
+            "Reference temperature (compressible); default: the farfield "
+            "temperature if exactly one farfield stream exists",
+            "K",
+            minimum=0.0,
         ),
         "angle_of_attack": Opt(
             "float",
@@ -242,7 +279,21 @@ SCHEMA = {
         ),
     },
     "numerics": {
-        "convective_flux": Opt("string", "fds", "Convective flux", choices=("fds",)),
+        "convective_flux": Opt(
+            "string",
+            None,
+            "Convective flux: fds (incompressible, flux-difference splitting "
+            "with low-speed preconditioning) or roe (compressible, Roe with "
+            "Harten's entropy fix); default by physics.flow",
+            choices=("fds", "roe"),
+        ),
+        "entropy_fix": Opt(
+            "float",
+            0.001,
+            "Roe flux: Harten's entropy fix, delta = entropy_fix (|v_n| + c) "
+            "(SU2 ENTROPY_FIX_COEFF); 0 = off",
+            minimum=0.0,
+        ),
         "spatial_order": Opt(
             "int", 2, "1: piecewise constant, 2: MUSCL", choices=(1, 2)
         ),
@@ -756,13 +807,30 @@ BOUNDARY_TYPES = {
     "slip-wall": {},
     "velocity-inlet": {
         "velocity": Opt("float2", REQUIRED, "Inlet velocity (u, v)", "m/s"),
+        "temperature": Opt(
+            "float", None, "Static temperature (compressible, required)", "K"
+        ),
         "turbulence": Opt("table", None, TURBULENCE_DESCRIPTION),
     },
     "pressure-outlet": {
-        "pressure": Opt("float", 0.0, "Static gauge pressure", "Pa"),
+        "pressure": Opt(
+            "float",
+            None,
+            "Static pressure: gauge (incompressible, default 0) or absolute "
+            "(compressible, required)",
+            "Pa",
+        ),
     },
     "total-pressure-inlet": {
-        "total_pressure": Opt("float", REQUIRED, "Total gauge pressure", "Pa"),
+        "total_pressure": Opt(
+            "float",
+            REQUIRED,
+            "Total pressure: gauge (incompressible) or absolute (compressible)",
+            "Pa",
+        ),
+        "total_temperature": Opt(
+            "float", None, "Total temperature (compressible, required)", "K"
+        ),
         "flow_direction": Opt(
             "float2", REQUIRED, "Flow direction (d_x, d_y), normalised internally"
         ),
@@ -779,9 +847,33 @@ BOUNDARY_TYPES = {
         "turbulence": Opt("table", None, TURBULENCE_DESCRIPTION),
     },
     "farfield": {
-        "velocity": Opt("float", REQUIRED, "Freestream velocity magnitude", "m/s"),
+        "velocity": Opt(
+            "float",
+            None,
+            "Freestream velocity magnitude (incompressible, required)",
+            "m/s",
+        ),
+        "mach": Opt(
+            "float",
+            None,
+            "Freestream Mach number (compressible, required)",
+            minimum=0.0,
+        ),
         "angle_of_attack": Opt("float", 0.0, "Angle of attack", "deg"),
-        "pressure": Opt("float", 0.0, "Freestream gauge pressure", "Pa"),
+        "pressure": Opt(
+            "float",
+            None,
+            "Freestream pressure: gauge (incompressible, default 0) or absolute "
+            "(compressible, default 101325)",
+            "Pa",
+        ),
+        "temperature": Opt(
+            "float",
+            None,
+            "Freestream static temperature (compressible, default 288.15)",
+            "K",
+            minimum=0.0,
+        ),
         "turbulence": Opt("table", None, TURBULENCE_DESCRIPTION),
     },
     "periodic": {

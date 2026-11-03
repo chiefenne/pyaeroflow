@@ -1,6 +1,7 @@
 """Reading, validating and resolving a TOML case file (D27-D33, D38, D39)."""
 
 import difflib
+import math
 import tomllib
 from pathlib import Path
 
@@ -389,14 +390,18 @@ def _consistency(data, explicit, problems, notices, path):
     streams = {
         (
             boundaries[n].get("velocity"),
+            boundaries[n].get("mach"),
             boundaries[n].get("angle_of_attack"),
             boundaries[n].get("pressure"),
+            boundaries[n].get("temperature"),
             repr(boundaries[n].get("turbulence")),
         )
         for n in farfields
     }
     if len(streams) == 1:
         farfields = farfields[:1]
+    compressible = physics["flow"] == "compressible"
+    _flow_rules(data, boundaries, farfields, compressible, problems, notices)
 
     # Periodic pairs: partner exists and has no own condition.
     for name, b in boundaries.items():
@@ -544,7 +549,7 @@ def _consistency(data, explicit, problems, notices, path):
         )
 
     # Reference velocity: from the farfield if there is exactly one.
-    if ref["velocity"] is None:
+    if ref["velocity"] is None and not compressible:
         if len(farfields) == 1:
             ref["velocity"] = boundaries[farfields[0]]["velocity"]
             notices.append(
@@ -557,7 +562,7 @@ def _consistency(data, explicit, problems, notices, path):
             )
     if has_re and "reference.length" not in explicit:
         problems.append("reference.length is required with fluid.reynolds_number")
-    if ref["density"] is None:
+    if ref["density"] is None and not compressible:
         ref["density"] = fluid["density"]
     if ref["angle_of_attack"] is None:
         ref["angle_of_attack"] = (
@@ -662,6 +667,11 @@ def _consistency(data, explicit, problems, notices, path):
             )
     if init["pressure"] is None:
         init["pressure"] = 0.0
+    if compressible and init["velocity"] is not None:
+        problems.append(
+            "initial.velocity: not available with physics.flow = compressible "
+            "(give from_boundary, default the farfield, or restart)"
+        )
 
     # Pressure level and periodic driving force.
     if not any(t in PRESSURE_FIXING for t in types.values()):
@@ -699,6 +709,128 @@ def _consistency(data, explicit, problems, notices, path):
         out["fields"], Capabilities.from_config(data)
     )
     problems += field_problems
+
+
+# Compressible defaults: sea-level standard atmosphere.
+STANDARD_PRESSURE = 101325.0
+STANDARD_TEMPERATURE = 288.15
+# Boundary types of the compressible solver (L1: Euler).
+COMPRESSIBLE_BOUNDARY_TYPES = (
+    "wall",
+    "slip-wall",
+    "symmetry",
+    "farfield",
+    "pressure-outlet",
+    "total-pressure-inlet",
+    "velocity-inlet",
+    "periodic",
+)
+
+
+def _flow_rules(data, boundaries, farfields, compressible, problems, notices):
+    """Rules and defaults that depend on physics.flow (L1).
+
+    Incompressible: fluid.density and farfield.velocity are required, the
+    pressures are gauge pressures (default 0) and the compressible keys are
+    rejected. Compressible: physics.model = euler, steady, farfield.mach is
+    required, the pressures are absolute (farfield default 101325 Pa,
+    temperature 288.15 K), outlets, inlets need their pressure and
+    temperature, and the reference density, velocity and temperature follow
+    from the single farfield stream: rho = p / (R T), U = M sqrt(gamma R T).
+    """
+    fluid, physics, ref = data["fluid"], data["physics"], data["reference"]
+    num = data["numerics"]
+    flux = num["convective_flux"]
+    if flux is None:
+        num["convective_flux"] = "roe" if compressible else "fds"
+    elif (flux == "roe") != compressible:
+        problems.append(
+            f"numerics.convective_flux = {flux}: needs physics.flow = "
+            + ("compressible" if flux == "roe" else "incompressible")
+        )
+    if not compressible:
+        if fluid["density"] is None:
+            problems.append("fluid.density is required")
+        if ref["temperature"] is not None:
+            notices.append("reference.temperature ignored: incompressible flow")
+        for name, b in boundaries.items():
+            kind = b["type"]
+            prefix = f"boundary.{name}"
+            for key in ("mach", "temperature", "total_temperature"):
+                if b.get(key) is not None:
+                    problems.append(
+                        f"{prefix}.{key}: needs physics.flow = compressible"
+                    )
+            if kind == "farfield" and b.get("velocity") is None:
+                problems.append(f"{prefix}.velocity is required")
+            if kind in ("farfield", "pressure-outlet") and b.get("pressure") is None:
+                b["pressure"] = 0.0
+        return
+
+    if physics["model"] != "euler":
+        problems.append(
+            "physics.flow = compressible: only physics.model = euler is available "
+            "so far (laminar and rans are planned)"
+        )
+    if data["time"]["mode"] == "unsteady":
+        problems.append("physics.flow = compressible: time.mode = unsteady is planned")
+    if ref["vortex_correction"]:
+        problems.append(
+            "reference.vortex_correction: not available with physics.flow = "
+            "compressible"
+        )
+    if fluid["density"] is not None:
+        notices.append(
+            "fluid.density ignored: compressible flow (density from p / (R T))"
+        )
+    gamma, r_gas = fluid["gamma"], fluid["gas_constant"]
+    for name, b in boundaries.items():
+        kind = b["type"]
+        prefix = f"boundary.{name}"
+        if kind not in COMPRESSIBLE_BOUNDARY_TYPES:
+            problems.append(
+                f"{prefix}.type = {kind!r}: not available with physics.flow = "
+                "compressible"
+            )
+            continue
+        if kind == "farfield":
+            if b.get("velocity") is not None:
+                problems.append(f"{prefix}.velocity: compressible farfields take mach")
+            if b.get("mach") is None:
+                problems.append(f"{prefix}.mach is required")
+            if b.get("pressure") is None:
+                b["pressure"] = STANDARD_PRESSURE
+            if b.get("temperature") is None:
+                b["temperature"] = STANDARD_TEMPERATURE
+        elif kind == "pressure-outlet" and b.get("pressure") is None:
+            problems.append(f"{prefix}.pressure is required (absolute)")
+        elif kind == "total-pressure-inlet" and b.get("total_temperature") is None:
+            problems.append(f"{prefix}.total_temperature is required")
+        elif kind == "velocity-inlet" and b.get("temperature") is None:
+            problems.append(f"{prefix}.temperature is required")
+        elif kind == "wall" and any(b.get("velocity") or ()):
+            problems.append(f"{prefix}.velocity: moving walls are incompressible only")
+    if len(farfields) == 1:
+        b = boundaries[farfields[0]]
+        if b.get("mach") is not None:
+            t_inf = b["temperature"]
+            if ref["temperature"] is None:
+                ref["temperature"] = t_inf
+            if ref["density"] is None:
+                ref["density"] = b["pressure"] / (r_gas * t_inf)
+            if ref["velocity"] is None:
+                ref["velocity"] = b["mach"] * math.sqrt(gamma * r_gas * t_inf)
+                notices.append(
+                    f"reference values from farfield boundary '{farfields[0]}': "
+                    f"rho {ref['density']:.6g} kg/m^3, U {ref['velocity']:.6g} m/s, "
+                    f"T {ref['temperature']:.6g} K"
+                )
+    for key in ("velocity", "density", "temperature"):
+        if ref[key] is None:
+            problems.append(
+                f"reference.{key} is required (no single farfield stream to take "
+                "it from)"
+            )
 
 
 def _unknown(what, name, candidates):

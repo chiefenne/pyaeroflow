@@ -34,6 +34,7 @@ Click a case to jump to its section; each section ends with a link back here.
 | L2 (0.9) | [k-ω SST: flat plate, SD7003](#sec-9) | verification/validation | NASA TMR SST, LES/DNS, XFOIL, SA-AFT, Herbst et al. 2017, Selig et al. 1995 | `tests/verification/test_rans_plate.py::test_sst_turbulent_plate`, `pyaeroflow run examples/cases/sst_sd7003.toml`, `sst_sd7003_ogrid.toml` |
 | L3 step 4 (0.9) | [SST-LM γ-Re_θ: T3A, T3B, T3A−, SD7003](#sec-10) | validation | ERCOFTAC T3 (Roach & Brierley), LES/DNS, SA-AFT | `pyaeroflow run examples/cases/lm_t3a.toml` (mesh: `examples/cases/make_plate_lm.py`), `pyaeroflow run examples/cases/lm_sd7003.toml`, `pyaeroflow polar examples/cases/lm_sd7003_polar.toml --alpha 4 6 8 9 10 2 0` |
 | – | [Known limits of the transition models](#sec-11) | summary | sections 8–10 | – |
+| L1 C1 | [Compressible Euler: ramp, NACA 0012](#sec-12) | verification/validation | oblique-shock relations, Vassberg & Jameson 2010, Vassberg et al. 2011 | `python examples/l1_compressible.py [--fine]` |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
 the scripts write) is not tracked.
@@ -753,6 +754,59 @@ turbulence (Tu from about 0.5 %, bypass transition).
 
 [↑ back to table](#stage-table)
 
+<a id="sec-12"></a>
+
+## 12. Compressible Euler (L1 stage C1)
+
+The compressible solver (`physics.flow = "compressible"`, `docs/configuration.md`,
+[Compressible flow](configuration.md#compressible-flow)) with the defaults:
+Roe flux, entropy fix 0.001, MUSCL with the Venkatakrishnan–Wang limiter
+(not frozen), implicit pseudo-time with Newton–Krylov. Runs of 2026-11-03 in
+the cloud sandbox (4 cores, SuperLU instead of PARDISO; the wall times are
+not representative).
+
+**Compression ramp, M 2, 10° (verification).** `pyaeroflow.cases.oblique_shock`,
+96 × 64 quadrilaterals (also `examples/cases/ramp_10deg_m2.toml`). The exact
+weak oblique shock stands at 39.31° with p₂/p₁ = 1.7066 and M₂ = 1.6405.
+On 60 × 40 cells the mean ramp wall pressure (cells between 30 % and 90 % of
+the ramp) is p₂/p₁ = 1.7071 (+0.03 %), the Mach number of the wall cells
+1.633 (−0.5 %); the residual reaches machine zero in 27 iterations with the
+limiter active. The unit test checks 2 % at first order on 30 × 20 cells.
+
+**NACA 0012, Euler (validation).** TMR NACA 0012 definition with the sharp
+trailing edge (`airfoil_points(n, cut=1.0)`), O-grids from
+`airfoil_ogrid` with the farfield at 100 chords, no vortex correction, wall
+spacing 10⁻³ c. Reference: the continuum estimates of Vassberg & Jameson
+(2010, Table 10 and 11: FLO82, OVERFLOW, CFL3D with and without vortex
+correction, Karman–Trefftz O-grids to 4096² cells, farfield 150 chords) and
+OVERFLOW on the 256² O-grid for M 0.85 (Vassberg et al. 2011). All runs
+converged 10–11 orders (machine zero).
+
+| case | quantity | 192 × 64 (12k) | 384 × 128 (49k) | reference (range of the codes) |
+|---|---|---|---|---|
+| M 0.5, α 1.25° | C_L | 0.1760 | 0.1770 | 0.17978–0.18035 |
+| | C_D | 0.00089 | 0.00068 | 0.00000–0.00001 |
+| | C_M | 0.0016 | 0.0018 | 0.00226–0.00228 |
+| M 0.8, α 1.25° | C_L | 0.3415 | 0.3436 | 0.3482–0.3562 |
+| | C_D | 0.02249 | 0.02251 | 0.02245–0.02268 |
+| | C_M | 0.0350 | 0.0355 | 0.0374–0.0388 |
+| M 0.8, α 0° | C_D | 0.00887 | – | 0.008342 |
+| M 0.85, α 0° | C_D | 0.04665 | – | 0.04696 (OVERFLOW, 256²) |
+
+C_M about the quarter chord, positive nose-down as in the paper. The
+transonic drag is inside the band of the four reference solutions already
+on 12k cells; the lift approaches it from below (−2 % at 49k against the
+lower end) with first-order grid convergence, as Vassberg & Jameson find for
+all their codes in the lifting transonic case (FLO82 needs 512² cells for
+the asymptotic range; on 128² it gives C_L 0.3735). At M 0.5 the drag is the
+spurious entropy drag of the coarse grids. For scale, FLO82 on its own
+128² grid has C_D 0.000298. The 49k M 0.5 case (C_D 0.00068, down from 0.00089)
+shows the drag converging towards zero with grid refinement.
+
+![Wall Cp](figures/l1_naca0012_cp.png)
+
+[↑ back to table](#stage-table)
+
 ## References
 
 - Ghia, U., Ghia, K. N., Shin, C. T. (1982): High-Re solutions for
@@ -765,6 +819,11 @@ turbulence (Tu from about 0.5 %, bypass transition).
   zero-pressure-gradient flat plate and 2D NACA 0012 airfoil cases,
   https://tmbwg.github.io/turbmodels/ (source repository
   github.com/TMBWG/turbmodels).
+- Vassberg, J. C., Jameson, A. (2010): In pursuit of grid convergence for
+  two-dimensional Euler solutions. J. Aircraft 47(4), 1152–1166.
+- Vassberg, J. C., Harrison, N. A., Roman, D. L., Jameson, A. (2011): A
+  systematic study on the impact of dimensionality for a two-dimensional
+  aerodynamic optimization model problem. AIAA 2011-3176.
 - Ladson, C. L. (1988): Effects of independent variation of Mach and
   Reynolds numbers on the low-speed aerodynamic characteristics of the NACA
   0012 airfoil section. NASA TM 4074.

@@ -22,6 +22,15 @@ changes are in the [changelog](CHANGELOG.md).
 *SD7003, α = 4°, Re = 60 000, k-ω SST-2003m with Langtry–Menter 2009
 transition: laminar separation bubble on the upper surface.*
 
+![NACA 0012 at alpha 1.25 deg, M = 0.8, Euler](docs/figures/euler_naca0012_m08_a125.png)
+
+*NACA 0012, α = 1.25°, M∞ = 0.8, inviscid (compressible Euler, Roe flux with
+second-order MUSCL reconstruction): transonic flow with a supersonic pocket on
+each side, terminated by a shock at about 62 % chord on the upper surface and
+about 35 % on the lower surface. 49k-cell O-grid, C<sub>L</sub> = 0.344,
+C<sub>D</sub> = 0.0225 (pure wave drag); see
+[validation §12](docs/validation.md#sec-12).*
+
 ## Documentation
 
 - [Requirements](docs/requirements.md): decisions, planned features, stage plan
