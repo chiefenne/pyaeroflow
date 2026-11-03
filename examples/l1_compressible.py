@@ -68,7 +68,7 @@ def naca(mach, n_surface, n_radial):
     )
     raw = tomllib.loads(CASE.format(name=name, directory=OUT / name, mach=mach))
     result = run_case(resolve(raw, OUT / f"{name}.toml"), console=False, mesh=mesh)
-    return name, mesh.n_cells, result.coefficients, result.out_dir
+    return name, mesh.n_cells, result.coefficients, result.output_dir
 
 
 def plot(runs, path):
