@@ -19,7 +19,10 @@
   `pyaeroflow.cases.tmr_flat_plate.solve(mach=0.2)`; example
   `naca0012_sa_m015.toml` on the TMR 225 x 65 C-grid (committed with its
   PLOT3D file and `examples/meshes/make_tmr_naca0012.py` for the finer
-  levels); `docs/validation.md` §14. y+ and nu_t/nu outputs use the local
+  levels); `docs/validation.md` §14. New `numerics.low_mach_correction`
+  (Rieper, SU2 `LOW_MACH_CORR`): at M 0.15 plain Roe gives +10 to +26 %
+  pressure drag on the TMR 225 x 65 and 113 x 33 grids; with it NACA 0012
+  on 449 x 129 is CL 1.0914, CD 0.01270 (CFL3D same h 1.0909, 0.01273). y+ and nu_t/nu outputs use the local
   wall density and viscosity in compressible flow. SST, transition models
   and laminar regions stay incompressible only.
 
