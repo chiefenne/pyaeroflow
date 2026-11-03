@@ -36,6 +36,7 @@ Click a case to jump to its section; each section ends with a link back here.
 | – | [Known limits of the transition models](#sec-11) | summary | sections 8–10 | – |
 | L1 C1 | [Compressible Euler: ramp, NACA 0012](#sec-12) | verification/validation | oblique-shock relations, Vassberg & Jameson 2010, Vassberg et al. 2011 | `python examples/l1_compressible.py [--fine]` |
 | L1 C2 | [Compressible laminar: flat plate, NACA 0012 Re 5000](#sec-13) | verification/validation | compressible similarity solution, Swanson & Langer 2016 | `python examples/l1_laminar.py` |
+| L1 C3 | [Compressible SA-neg: TMR flat plate M 0.2, NACA 0012 M 0.15](#sec-14) | verification/validation | NASA TMR (CFL3D, FUN3D) | `pyaeroflow run examples/cases/naca0012_sa_m015.toml` |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
 the scripts write) is not tracked.
@@ -866,6 +867,81 @@ recirculation behind the sharp trailing edge with fanned, skewed cells: use
 a C-mesh for viscous airfoil cases with trailing-edge separation.
 
 ![Compressible laminar: flat plate and NACA 0012](figures/l1_laminar.png)
+
+[↑ back to table](#stage-table)
+
+<a id="sec-14"></a>
+
+## 14. Compressible SA-neg RANS (L1 stage C3)
+
+`physics.model = "rans"` with `physics.flow = "compressible"` and
+`turbulence = "sa-neg"`: the conservative compressible SA-neg of NASA TMR
+(density-weighted convection and diffusion of ν̃, the −∇ρ·∇ν̃ term), μ + μ_t
+in the stress, c_p(μ/Pr + μ_t/Pr_t) in the heat flux, Pr_t 0.9 (see
+[Compressible flow](configuration.md#compressible-flow)). Runs of 2026-11-03
+in the cloud sandbox (4 cores, PARDISO).
+
+**Low-Mach correction.** At M 0.15 the plain Roe flux is too dissipative:
+on the TMR 113 × 33 grid at α 10° the pressure drag is 26 % above INC
+(C_Dp 0.0355 vs 0.0281) and the lift 2 % below; on 225 × 65 the pressure
+drag is +10 %. `numerics.low_mach_correction = true` (Rieper's correction,
+SU2 `LOW_MACH_CORR`) removes this: C_Dp 0.0173 on 113 × 33 and 0.0090 on
+225 × 65, close to what the finer grids and CFL3D give, and the run converges
+in far fewer iterations. It is off by default and recommended below about
+M 0.3. All results below use it unless noted.
+
+**TMR flat plate, M 0.2, Re 5·10⁶ (verification).**
+`pyaeroflow.cases.tmr_flat_plate.solve(mach=0.2)` on the TMR domain with the
+incompressible plate's mesh family (adiabatic plate, Sutherland with the TMR
+reference temperature of 540 R). TMR finest grid (CFL3D/FUN3D mean):
+C_f(0.97) = 0.0027055, C_D = 0.0028562.
+
+| cells | solver | C_f(0.97) | C_D | iterations |
+|---|---|---|---|---|
+| 7.7k | INC | 0.0027418 (+1.3 %) | 0.0029076 (+1.8 %) | 91 |
+| | compressible | 0.0027337 (+1.0 %) | 0.0029075 (+1.8 %) | 46 |
+| | compressible, low-Mach corr. | 0.0027365 (+1.1 %) | 0.0028999 (+1.5 %) | 121 |
+| 30.7k | INC | 0.0027360 (+1.1 %) | 0.0028979 (+1.5 %) | 146 |
+| | compressible | 0.0027287 (+0.9 %) | 0.0028966 (+1.4 %) | 45 |
+| | compressible, low-Mach corr. | 0.0027306 (+0.9 %) | 0.0028899 (+1.2 %) | 48 |
+
+The compressible C_f is 0.2–0.3 % below INC, the direction and size that the
+compressibility of the plate boundary layer at M 0.2 gives. The remaining
++0.9 % against TMR is the mesh (the same for INC, section 5).
+
+**NACA 0012, M 0.15, Re 6·10⁶, α 10° (validation).**
+`examples/cases/naca0012_sa_m015.toml`, the TMR 225 × 65 C-grid and the
+449 × 129 rebuild (`examples/meshes/make_tmr_naca0012.py`), farfield 500
+chords, no vortex correction, ν̃/ν = 3, adiabatic wall. CFL3D at the same
+h = √(1/N) is the reference for each grid (family I); the INC runs are those
+of `analysis/naca0012`.
+
+| grid | run | C_L | C_D | C_Dp / C_Dv |
+|---|---|---|---|---|
+| 225 × 65, frozen limiter | CFL3D, same h | 1.0838 | 0.01449 | 0.00833 / 0.00616 |
+| | INC | 1.0643 | 0.01759 | 0.01179 / 0.00581 |
+| | compressible, plain Roe | 1.0730 | 0.01875 | 0.01295 / 0.00581 |
+| | compressible, low-Mach corr. | 1.0784 | 0.01498 | 0.00896 / 0.00602 |
+| 449 × 129, released limiter | CFL3D, same h | 1.0909 | 0.01273 | 0.00654 / 0.00619 |
+| | INC | 1.0844 | 0.01267 | 0.00645 / 0.00622 |
+| | compressible, low-Mach corr. | 1.0914 | 0.01270 | 0.00658 / 0.00613 |
+| 897 × 257 | CFL3D / FUN3D | 1.0909 / 1.0983 | 0.01231 / 0.01242 | |
+
+On 449 × 129 the lift is within 0.05 % of CFL3D (INC: −0.6 %, the
+compressibility effect that INC cannot show) and the drag within 0.2 %. The
+225 × 65 run uses the frozen limiter, which adds dissipation (INC and
+compressible alike); with the correction it is 3 % above CFL3D at the same
+grid. The 449 × 129 run stops at 6.6 orders, where the residual reaches
+round-off and the line search rejects; the forces were constant to four
+digits long before.
+
+At α 15° (449 × 129) the run reaches 5.2 orders and C_L 1.5323, C_D 0.02254
+(CFL3D 897 × 257: 1.5461, 0.02124). **Open:** α 0° on 449 × 129 does not
+converge from the freestream start: the impulsive start leaves a large
+separated region and the pseudo-time steps are rejected (tried: earlier
+Newton–Krylov switch, restart from the α 10° state); α 0° on the
+compressible solver is not validated yet. SST (C4) and RAE 2822 are the next
+stages.
 
 [↑ back to table](#stage-table)
 

@@ -127,13 +127,26 @@ class CompressibleModel(NamedTuple):
     limiter_threshold : float
     entropy_fix : float
         Harten's coefficient: delta = entropy_fix (|v_n| + c); 0 = off.
+    low_mach_correction : bool
+        Rieper's low-Mach correction of the Roe flux on interior faces (SU2
+        ``LOW_MACH_CORR``): the face velocities are blended towards their
+        mean by z = min(max(M_L, M_R), 1), which scales the velocity-jump
+        dissipation with the local Mach number.
     viscous_gradient : str
         Face-gradient scheme of the viscous flux and the wall loads.
     alpha : float
     density : float
         Reference density of the force coefficients (freestream, 1).
-    pin, turbulence, transition, coupling :
-        Interface of the problem class: no pin, no turbulence model.
+    turbulence : {"none", "sa-neg"}
+        Turbulence model (C3): "sa-neg" adds nu_tilde as fifth variable
+        (:mod:`pyaeroflow.physics.rans_compressible`).
+    turbulence_spatial_order : int
+        1 or 2: convective states of the turbulence equation.
+    prandtl_turbulent : float
+        Turbulent Prandtl number of the eddy heat flux (SU2 ``PRANDTL_TURB``).
+    pin, transition, coupling :
+        Interface of the problem class: no pin, no transition model, the
+        mean-flow/turbulence coupling of the first-order Jacobian.
     """
 
     gamma: float = 1.4
@@ -146,18 +159,21 @@ class CompressibleModel(NamedTuple):
     limiter: str = "venkatakrishnan-wang"
     limiter_threshold: float = 0.05
     entropy_fix: float = 0.001
+    low_mach_correction: bool = False
     viscous_gradient: str = "alpha-damping"
     alpha: float = 4.0 / 3.0
     density: float = 1.0
     pin: tuple = None
     turbulence: str = "none"
+    turbulence_spatial_order: int = 1
+    prandtl_turbulent: float = 0.9
     transition: str = "none"
     coupling: str = "segregated"
 
     @property
     def n_var(self):
-        """Number of variables: p, u, v, T."""
-        return 4
+        """Number of variables: p, u, v, T (and nu_tilde with SA-neg)."""
+        return 5 if self.turbulence == "sa-neg" else 4
 
 
 def gas_constant_for_mach(mach, gamma=1.4):
@@ -175,12 +191,15 @@ class BoundaryData(NamedTuple):
         Prescribed (p, u, v, T) where the kind uses them; the total-conditions
         inlet stores (p_0, d_x, d_y, T_0) with the unit flow direction d.
     gamma, gas_constant : float
+    nu_tilde : float array, shape (n_bfaces,) or None
+        Prescribed SA working variable at inflow faces (zero elsewhere).
     """
 
     kind: jnp.ndarray
     value: jnp.ndarray
     gamma: float = 1.4
     gas_constant: float = 1.0 / 1.4
+    nu_tilde: jnp.ndarray = None
 
 
 def _evaluate(spec, x, y):
@@ -205,13 +224,15 @@ def boundary_data(disc, conditions, model):
         ``total-pressure-inlet`` ``total_pressure``, ``total_temperature``
         and ``flow_direction``; ``wall`` an optional ``temperature``
         (isothermal; stored in the T column, 0 = adiabatic);
-        ``slip-wall`` and ``symmetry`` nothing. Constants or callables of
-        the boundary-face centres.
+        ``slip-wall`` and ``symmetry`` nothing; inflow kinds an optional
+        ``nu_tilde`` (SA-neg). Constants or callables of the boundary-face
+        centres.
     model : CompressibleModel
     """
     nb = disc.boundary_face_ids.size
     kind = np.zeros(nb, dtype=np.int64)
     value = np.zeros((nb, 4))
+    nu_tilde = np.zeros(nb)
     missing = set(disc.boundary_slices) - set(conditions)
     extra = set(conditions) - set(disc.boundary_slices)
     if missing or extra:
@@ -250,11 +271,15 @@ def boundary_data(disc, conditions, model):
             )
         for col, spec in enumerate(cols):
             value[sl, col] = np.broadcast_to(_evaluate(spec, x, y), x.shape)
+        nu_tilde[sl] = np.broadcast_to(
+            _evaluate(bc.get("nu_tilde", 0.0), x, y), x.shape
+        )
     return BoundaryData(
         jnp.asarray(kind),
         jnp.asarray(value),
         float(model.gamma),
         float(model.gas_constant),
+        jnp.asarray(nu_tilde),
     )
 
 
@@ -404,6 +429,36 @@ def _flux(model, w_l, w_r, normal):
     )
 
 
+def low_mach_states(gamma, gas_constant, w_l, w_r):
+    """Rieper's low-Mach correction of the face states (SU2 ``LOW_MACH_CORR``).
+
+    u_L* = (1 + z)/2 u_L + (1 - z)/2 u_R and u_R* likewise, with
+    z = min(max(M_L, M_R), 1) (Rieper, J. Comput. Phys. 230, 2011): the
+    velocity jump that drives the Roe dissipation is scaled by z, which
+    removes the O(1/M) excess dissipation of the pressure field at low Mach
+    numbers. p and T are unchanged.
+    """
+    c2 = gamma * gas_constant
+
+    def mach2(w):
+        return (w[:, U] ** 2 + w[:, V] ** 2) / (c2 * w[:, T])
+
+    z = jnp.minimum(jnp.sqrt(jnp.maximum(mach2(w_l), mach2(w_r)) + 1e-30), 1.0)
+    a, b = (0.5 * (1.0 + z))[:, None], (0.5 * (1.0 - z))[:, None]
+    v_l, v_r = w_l[:, U:T], w_r[:, U:T]
+    return (
+        w_l.at[:, U:T].set(a * v_l + b * v_r),
+        w_r.at[:, U:T].set(a * v_r + b * v_l),
+    )
+
+
+def interior_convective_flux(model, w_l, w_r, normal):
+    """Roe flux through interior faces, with the low-Mach correction if set."""
+    if model.low_mach_correction:
+        w_l, w_r = low_mach_states(model.gamma, model.gas_constant, w_l, w_r)
+    return _flux(model, w_l, w_r, normal)
+
+
 # -- boundary conditions ---------------------------------------------------------
 
 
@@ -503,8 +558,12 @@ def stress(mu, grad):
     return tau - (2.0 / 3.0 * mu * div)[:, None, None] * jnp.eye(2)[None]
 
 
-def viscous_flux(model, grad, w_f, normal, heat=True):
+def viscous_flux(model, grad, w_f, normal, heat=True, mu_t=None):
     """-F_v.n per unit length, shape (n, 4) (added to the convective flux).
+
+    With an eddy viscosity ``mu_t`` (n,) (RANS, C3) the stress uses
+    mu + mu_t and the conductivity c_p (mu / Pr + mu_t / Pr_t) (Boussinesq,
+    without the 2/3 rho k term, as SU2 for SA).
 
     Parameters
     ----------
@@ -515,26 +574,32 @@ def viscous_flux(model, grad, w_f, normal, heat=True):
     normal : (n, 2)
     heat : bool or bool array (n,)
         False drops the heat flux (adiabatic walls).
+    mu_t : (n,), optional
+        Dynamic eddy viscosity at the faces.
     """
     mu = laminar_viscosity(model, w_f[:, T])
+    k_over_cp = mu / model.prandtl
+    if mu_t is not None:
+        k_over_cp = k_over_cp + mu_t / model.prandtl_turbulent
+        mu = mu + mu_t
     tn = jnp.einsum("nij,nj->ni", stress(mu, grad), normal)
     work = w_f[:, U] * tn[:, 0] + w_f[:, V] * tn[:, 1]
-    k = mu * heat_capacity(model) / model.prandtl
+    k = k_over_cp * heat_capacity(model)
     q = k * jnp.einsum("nk,nk->n", grad[:, T, :], normal)
     q = jnp.where(heat, q, 0.0)
     return -jnp.stack((jnp.zeros_like(mu), tn[:, 0], tn[:, 1], work + q), axis=1)
 
 
-def boundary_viscous_flux(model, bc, grad, w_b, normal):
+def boundary_viscous_flux(model, bc, grad, w_b, normal, mu_t=None):
     """-F_v.n through boundary faces (n_bfaces, 4).
 
     Walls: stress of the face gradient, heat flux only where the wall is
     isothermal. Slip walls and symmetry: none. Other kinds: the full flux
-    with the boundary state.
+    with the boundary state. ``mu_t``: the eddy viscosity at the faces (RANS).
     """
     kind = bc.kind
     adiabatic = (kind == WALL) & (bc.value[:, T] <= 0.0)
-    flux = viscous_flux(model, grad, w_b, normal, heat=~adiabatic)
+    flux = viscous_flux(model, grad, w_b, normal, heat=~adiabatic, mu_t=mu_t)
     return jnp.where((kind == SYMMETRY)[:, None], 0.0, flux)
 
 
@@ -622,7 +687,7 @@ def residual(model, geom, bc, w, order, params=None, psi=None):
         w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
         grad = lsq_gradient(geom, w, w_b)
     w_l, w_r, w_in = face_states(model, geom, bc, w, order, psi, w_b, grad)
-    f_flux = _flux(model, w_l, w_r, geom.f_normal)
+    f_flux = interior_convective_flux(model, w_l, w_r, geom.f_normal)
     b_flux = boundary_convective_flux(model, bc, geom.b_normal, w_in)
     if viscous:
         o, n = geom.f_owner, geom.f_neigh
@@ -676,7 +741,7 @@ def interior_flux(model, params, w_o, w_n, normal, delta):
     Viscous part: the two-point face gradient (the normal derivative of the
     face-gradient scheme, as the incompressible solver).
     """
-    conv = _flux(model, w_o[None], w_n[None], normal[None])[0]
+    conv = interior_convective_flux(model, w_o[None], w_n[None], normal[None])[0]
     if model.viscosity > 0.0:
         dn = jnp.dot(delta, normal)
         if model.viscous_gradient == "alpha-damping":
@@ -710,34 +775,47 @@ def scheme_parameters(model, w, bc):
     return 0.0
 
 
+def face_eigenvalue(model, w_f, normal, delta, mu_t=None):
+    """|v_n| + c + lambda_v per face for face states w_f (n, >= 4).
+
+    Viscous part: lambda_v = (4/3 (mu + mu_t) + gamma (mu / Pr + mu_t / Pr_t))
+    / (rho |d.n|), SU2's two viscous eigenvalue terms over the face distance;
+    ``mu_t`` (n,) is the eddy viscosity (RANS), None = laminar.
+    """
+    c = sound_speed(model.gamma, model.gas_constant, w_f)
+    out = jnp.abs(jnp.einsum("fk,fk->f", w_f[:, U:T], normal)) + c
+    if model.viscosity > 0.0:
+        mu = laminar_viscosity(model, w_f[:, T])
+        rho = density(model.gas_constant, w_f)
+        dn = jnp.abs(jnp.einsum("fk,fk->f", delta, normal))
+        visc = (4.0 / 3.0 + model.gamma / model.prandtl) * mu
+        if mu_t is not None:
+            visc = visc + (4.0 / 3.0 + model.gamma / model.prandtl_turbulent) * mu_t
+        out = out + visc / (rho * dn)
+    return out
+
+
+def sum_face_eigenvalues(geom, lam_f, lam_b, n):
+    """Sum of face eigenvalues times face length per cell."""
+    lam_f = lam_f * geom.f_length
+    lam_b = lam_b * geom.b_length
+    return (
+        jax.ops.segment_sum(lam_f, geom.f_owner, num_segments=n)
+        + jax.ops.segment_sum(lam_f, geom.f_neigh, num_segments=n)
+        + jax.ops.segment_sum(lam_b, geom.b_owner, num_segments=n)
+    )
+
+
 @partial(jax.jit, static_argnums=0)
 def spectral_radius(model, geom, w, params=None):
     """Sum over faces of (|v_n| + c + lambda_v) * length, per cell.
 
-    Viscous part (laminar): lambda_v = (4/3 + gamma / Pr) mu / (rho d.n), the
-    sum of SU2's two viscous eigenvalue terms over the face distance.
+    See :func:`face_eigenvalue`; face states are the mean of the two cells.
     """
-    n = w.shape[0]
     o, nb, b = geom.f_owner, geom.f_neigh, geom.b_owner
-
-    def lam(w_f, normal, delta):
-        c = sound_speed(model.gamma, model.gas_constant, w_f)
-        out = jnp.abs(jnp.einsum("fk,fk->f", w_f[:, U:T], normal)) + c
-        if model.viscosity > 0.0:
-            mu = laminar_viscosity(model, w_f[:, T])
-            rho = density(model.gas_constant, w_f)
-            dn = jnp.abs(jnp.einsum("fk,fk->f", delta, normal))
-            coeff = 4.0 / 3.0 + model.gamma / model.prandtl
-            out = out + coeff * mu / (rho * dn)
-        return out
-
-    lam_f = lam(0.5 * (w[o] + w[nb]), geom.f_normal, geom.f_delta) * geom.f_length
-    lam_b = lam(w[b], geom.b_normal, geom.b_delta) * geom.b_length
-    return (
-        jax.ops.segment_sum(lam_f, o, num_segments=n)
-        + jax.ops.segment_sum(lam_f, nb, num_segments=n)
-        + jax.ops.segment_sum(lam_b, b, num_segments=n)
-    )
+    lam_f = face_eigenvalue(model, 0.5 * (w[o] + w[nb]), geom.f_normal, geom.f_delta)
+    lam_b = face_eigenvalue(model, w[b], geom.b_normal, geom.b_delta)
+    return sum_face_eigenvalues(geom, lam_f, lam_b, w.shape[0])
 
 
 @partial(jax.jit, static_argnums=0)

@@ -1,6 +1,30 @@
 # Changelog
 
-## Unreleased – compressible Euler and laminar solver (L1, stages C0–C2)
+## Unreleased – compressible Euler, laminar and SA-neg solver (L1, stages C0–C3)
+
+- Compressible RANS with SA-neg (C3): `physics.model = "rans"` (turbulence
+  `sa-neg`) with `physics.flow = "compressible"`. The turbulence row is the
+  conservative compressible SA-neg of NASA TMR: rho nu_tilde convected with
+  the mass flux of the Roe flux, diffusion rho (nu + nu_tilde f_n) grad
+  nu_tilde / sigma, sources times rho and the term
+  -(nu + nu_tilde f_n) grad rho . grad nu_tilde / sigma, with the local
+  nu = mu(T) / rho; the unknown stays nu_tilde (fifth column). The mean flow
+  gets mu + mu_t (mu_t = rho nu_tilde f_v1) in the stress and
+  c_p (mu / Pr + mu_t / Pr_t) in the heat flux (new `fluid.prandtl_turbulent`,
+  0.9). Conservative pseudo-time blocks d(rho, rho u, rho v, rho E,
+  rho nu_tilde)/dV, eddy viscosity in the viscous spectral radius, segregated
+  or coupled first-order Jacobian, the p/T positivity limiter combined with
+  `solver.nu_tilde_step_limit`. Inflow `turbulence` tables refer to the nu
+  of the boundary state. New module `physics/rans_compressible.py`;
+  `pyaeroflow.cases.tmr_flat_plate.solve(mach=0.2)`; example
+  `naca0012_sa_m015.toml` on the TMR 225 x 65 C-grid (committed with its
+  PLOT3D file and `examples/meshes/make_tmr_naca0012.py` for the finer
+  levels); `docs/validation.md` §14. New `numerics.low_mach_correction`
+  (Rieper, SU2 `LOW_MACH_CORR`): at M 0.15 plain Roe gives +10 to +26 %
+  pressure drag on the TMR 225 x 65 and 113 x 33 grids; with it NACA 0012
+  on 449 x 129 is CL 1.0914, CD 0.01270 (CFL3D same h 1.0909, 0.01273). y+ and nu_t/nu outputs use the local
+  wall density and viscosity in compressible flow. SST, transition models
+  and laminar regions stay incompressible only.
 
 - Compressible laminar Navier-Stokes (C2): `physics.model = "laminar"` with
   `physics.flow = "compressible"`. Viscous stress with mu(T) by Sutherland's
@@ -19,7 +43,7 @@
   0.02 %); example `naca0012_laminar_m05.toml` (M 0.5, Re 5000 on the PyAero
   C-mesh: C_D 0.05592 vs 0.05557, separation at x/c 0.808 vs 0.808,
   Swanson & Langer 2016) and `examples/l1_laminar.py`; `docs/validation.md`
-  §13. `physics.model = "rans"` stays rejected for compressible flow.
+  §13.
 - Fix: the log of a compressible run printed the "Configuration" heading
   twice.
 

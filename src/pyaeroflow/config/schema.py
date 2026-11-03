@@ -238,6 +238,13 @@ SCHEMA = {
             "Laminar Prandtl number (compressible: conductivity mu c_p / Pr)",
             minimum=0.0,
         ),
+        "prandtl_turbulent": Opt(
+            "float",
+            0.9,
+            "Turbulent Prandtl number (compressible RANS: eddy conductivity "
+            "mu_t c_p / Pr_t)",
+            minimum=0.0,
+        ),
     },
     "initial": {
         "velocity": Opt("float2", None, "Initial velocity (u, v)", "m/s"),
@@ -321,6 +328,14 @@ SCHEMA = {
             "Roe flux: Harten's entropy fix, delta = entropy_fix (|v_n| + c) "
             "(SU2 ENTROPY_FIX_COEFF); 0 = off",
             minimum=0.0,
+        ),
+        "low_mach_correction": Opt(
+            "bool",
+            False,
+            "Roe flux (compressible): Rieper's low-Mach correction of the "
+            "face velocities, z = min(max(M_L, M_R), 1), as SU2 "
+            "LOW_MACH_CORR; reduces the excess pressure dissipation of the "
+            "Roe scheme at low Mach numbers (about M < 0.3)",
         ),
         "spatial_order": Opt(
             "int", 2, "1: piecewise constant, 2: MUSCL", choices=(1, 2)

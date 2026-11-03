@@ -13,8 +13,8 @@ solver and BDF2 dual time stepping. Verified and validated against Couette and
 Poiseuille flow, the lid-driven cavity, the DFG cylinder benchmarks, the NASA
 TMR flat plate and NACA 0012, ERCOFTAC T3, the Eppler 387 and the SD7003
 ([validation](docs/validation.md)). A density-based compressible solver
-(`physics.flow = "compressible"`, SU2 formulation) covers the Euler and the
-laminar Navier–Stokes equations so far; RANS follows. Meshes come from PyAero (`.su2`) or Gmsh
+(`physics.flow = "compressible"`, SU2 formulation) covers the Euler, the
+laminar Navier–Stokes and the SA-neg RANS equations so far; SST follows. Meshes come from PyAero (`.su2`) or Gmsh
 (`.msh`). The 1.0 milestone is recorded in
 [requirements §4a](docs/requirements.md#4a-milestone-10-reached-2026-10-30);
 changes are in the [changelog](CHANGELOG.md).

@@ -18,9 +18,13 @@ import numpy as np
 
 from pyaeroflow.driver import IncompressibleProblem
 from pyaeroflow.mesh import geometric_growth, split_boundary, structured
+from pyaeroflow.physics import compressible as comp
 from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
-from pyaeroflow.solver import PseudoTimeSettings
+from pyaeroflow.solver import LinearSettings, PseudoTimeSettings
+
+# TMR reference temperature 540 R (300 K): Sutherland's S / T_ref = 198.6 / 540.
+TMR_SUTHERLAND = 198.6 / 540.0
 
 # NASA TMR (now tmbwg.github.io/turbmodels), flatplate_sa.html, finest grid
 # 545 x 385 (N = 208896), M = 0.2, Re = 5e6 per unit length (data files
@@ -93,8 +97,17 @@ def solve(
     critical_amplification=None,
     turbulence="sa-neg",
     k_omega=None,
+    mach=None,
+    low_mach_correction=False,
 ):
     """Run the turbulent flat plate and evaluate C_f(x) and the drag.
+
+    ``mach`` (e.g. 0.2, the TMR value) runs the compressible solver (L1,
+    SA-neg only): freestream rho = U = T = 1, adiabatic plate, velocity
+    inlet with T = 1, static-pressure outlet at p_inf, Sutherland's law with
+    the TMR reference temperature of 540 R. C_f and C_D use q = rho U^2 / 2
+    of the freestream as in the incompressible case. ``low_mach_correction``
+    switches on Rieper's correction of the Roe flux.
 
     ``transition = "bcm"`` with ``turbulence_intensity`` (percent) runs the
     transitional plate (T3-series style) instead of the fully turbulent one;
@@ -117,6 +130,10 @@ def solve(
     else:
         turb = {"nu_tilde": nt_inf}
     mesh = plate_mesh(nx_plate, nx_front, ny, reynolds)
+    if mach is not None:
+        return _solve_compressible(
+            mesh, mach, nu, nt_inf, settings, coupling, low_mach_correction
+        )
     conditions = {
         "left": {"type": "velocity-inlet", "velocity": (u_inf, 0.0), **turb},
         "right": {"type": "pressure-outlet", "pressure": 0.0},
@@ -143,6 +160,53 @@ def solve(
         problem.initial_state((u_inf, 0.0), nu_tilde=nt_inf, k_omega=k_omega),
         settings or PseudoTimeSettings(residual_drop=8.0, max_iterations=400),
     )
+    return _evaluate(
+        problem, result, nu, TMR_REFERENCE_SST if turbulence == "sst" else TMR_REFERENCE
+    )
+
+
+def _solve_compressible(
+    mesh, mach, nu, nt_inf, settings, coupling, low_mach_correction
+):
+    r_gas, ff = comp.freestream_conditions(mach)
+    turb = {"nu_tilde": nt_inf}
+    conditions = {
+        "left": {
+            "type": "velocity-inlet",
+            "velocity": (1.0, 0.0),
+            "temperature": 1.0,
+            **turb,
+        },
+        "right": {"type": "pressure-outlet", "pressure": r_gas},
+        "top": {**ff, **turb},
+        "symmetry": {"type": "symmetry"},
+        "plate": {"type": "wall"},
+    }
+    model = comp.CompressibleModel(
+        gas_constant=r_gas,
+        viscosity=nu,
+        sutherland_temperature=TMR_SUTHERLAND,
+        turbulence="sa-neg",
+        coupling=coupling,
+        limiter="none",  # smooth flow; as the incompressible default
+        low_mach_correction=low_mach_correction,
+    )
+    problem = IncompressibleProblem(mesh, model, conditions)
+    result = problem.solve(
+        problem.initial_state((1.0, 0.0), r_gas, nu_tilde=nt_inf),
+        settings
+        or PseudoTimeSettings(
+            residual_drop=8.0,
+            max_iterations=400,
+            linear=LinearSettings(type="pardiso"),
+        ),
+    )
+    return _evaluate(problem, result, nu, TMR_REFERENCE)
+
+
+def _evaluate(problem, result, nu, reference):
+    """C_f(x), C_f(0.97), C_D and the largest y+ of a plate solution."""
+    u_inf = 1.0
     faces = problem.boundary_faces(["plate"])
     q = 0.5 * u_inf**2
     loads = problem.wall_loads(result.u)
@@ -168,5 +232,5 @@ def solve(
         cf_097,
         cd,
         float(y_plus.max()),
-        TMR_REFERENCE_SST if turbulence == "sst" else TMR_REFERENCE,
+        reference,
     )
