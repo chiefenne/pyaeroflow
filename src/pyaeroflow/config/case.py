@@ -741,7 +741,8 @@ def _flow_rules(data, boundaries, farfields, compressible, problems, notices):
 
     Incompressible: fluid.density and farfield.velocity are required, the
     pressures are gauge pressures (default 0) and the compressible keys are
-    rejected. Compressible: physics.model = euler or laminar, steady,
+    rejected. Compressible: physics.model = euler, laminar or rans (SA-neg),
+    steady,
     farfield.mach is required, the pressures are absolute (farfield default 101325 Pa,
     temperature 288.15 K), outlets, inlets need their pressure and
     temperature, and the reference density, velocity and temperature follow
@@ -760,6 +761,10 @@ def _flow_rules(data, boundaries, farfields, compressible, problems, notices):
     if not compressible:
         if fluid["density"] is None:
             problems.append("fluid.density is required")
+        if num["low_mach_correction"]:
+            problems.append(
+                "numerics.low_mach_correction: needs physics.flow = compressible"
+            )
         if ref["temperature"] is not None:
             notices.append("reference.temperature ignored: incompressible flow")
         for name, b in boundaries.items():
@@ -777,10 +782,17 @@ def _flow_rules(data, boundaries, farfields, compressible, problems, notices):
         return
 
     if physics["model"] == "rans":
-        problems.append(
-            "physics.flow = compressible: physics.model = rans is planned (euler "
-            "and laminar are available)"
-        )
+        if physics["turbulence"] == "sst":
+            problems.append(
+                "physics.flow = compressible: turbulence = sst is planned (sa-neg "
+                "is available)"
+            )
+        tr = physics["transition"]
+        if tr["model"] != "none" or tr["mode"] != "none":
+            problems.append(
+                "physics.flow = compressible: transition models and prescribed "
+                "laminar regions are incompressible only"
+            )
     if data["time"]["mode"] == "unsteady":
         problems.append("physics.flow = compressible: time.mode = unsteady is planned")
     if ref["vortex_correction"]:

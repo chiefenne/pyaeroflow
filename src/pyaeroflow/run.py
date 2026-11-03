@@ -376,14 +376,16 @@ def sutherland_viscosity(t, s=110.4, mu_ref=SUTHERLAND_MU_REF, t_ref=SUTHERLAND_
 
 
 def _setup_compressible(config, mesh):
-    """:func:`setup` of a compressible case (L1: Euler, laminar).
+    """:func:`setup` of a compressible case (L1: Euler, laminar, SA-neg RANS).
 
     References: rho, U and T of the farfield stream (or the reference
     section); pressures are absolute and scaled by rho_ref U_ref^2,
     temperatures by T_ref, the viscosity by rho_ref U_ref L_ref (mu at
-    T_ref = 1 / Re).
+    T_ref = 1 / Re). With SA-neg the inflow nu_tilde is the boundary's
+    nu_tilde / nu times the local nu = mu(T) / rho of that boundary state.
     """
     cfg = config.data
+    rans = cfg["physics"]["model"] == "rans"
     fluid, ref, num = cfg["fluid"], cfg["reference"], cfg["numerics"]
     gamma, r_si = fluid["gamma"], fluid["gas_constant"]
     scaling = Scaling(
@@ -405,6 +407,38 @@ def _setup_compressible(config, mesh):
             sutherland_viscosity(scaling.temperature, fluid["sutherland_temperature"])
             / scaling.viscosity
         )
+    model = comp.CompressibleModel(
+        gamma=gamma,
+        gas_constant=r_nd,
+        viscosity=mu_nd,
+        viscosity_law=fluid["viscosity_model"],
+        sutherland_temperature=fluid["sutherland_temperature"] / scaling.temperature,
+        prandtl=fluid["prandtl"],
+        spatial_order=num["spatial_order"],
+        limiter=num["limiter"],
+        limiter_threshold=num["limiter_threshold"],
+        entropy_fix=num["entropy_fix"],
+        low_mach_correction=num["low_mach_correction"],
+        viscous_gradient=num["viscous_gradient"],
+        alpha=num["alpha"],
+        turbulence="sa-neg" if rans else "none",
+        turbulence_spatial_order=num["turbulence_spatial_order"],
+        prandtl_turbulent=fluid["prandtl_turbulent"],
+        coupling=cfg["solver"]["turbulence_coupling"],
+    )
+    turbulence = {}  # reported values per inflow boundary and "initial"
+
+    def nu_nd(temperature, density):
+        """Non-dimensional kinematic viscosity mu(T) / rho."""
+        return float(comp.laminar_viscosity(model, jnp.asarray(temperature))) / density
+
+    def add_turbulence(name, entry, table, speed_nd, t_nd, rho_nd):
+        nu = nu_nd(t_nd, rho_nd)
+        nu_si = nu * scaling.viscosity / scaling.density
+        tv = turbulence_values(table, nu_si, speed_nd * scaling.velocity)
+        turbulence[name] = tv
+        entry["nu_tilde"] = tv.chi * nu
+
     conditions = {}
     for name, b in cfg["boundary"].items():
         kind = b["type"]
@@ -432,21 +466,37 @@ def _setup_compressible(config, mesh):
             entry["total_pressure"] = b["total_pressure"] / scaling.pressure
             entry["total_temperature"] = b["total_temperature"] / scaling.temperature
             entry["flow_direction"] = tuple(b["flow_direction"])
+        if rans and kind == "farfield":
+            t_b = entry["temperature"]
+            add_turbulence(
+                name,
+                entry,
+                b.get("turbulence"),
+                math.hypot(*entry["velocity"]),
+                t_b,
+                entry["pressure"] / (r_nd * t_b),
+            )
+        elif rans and kind == "velocity-inlet":
+            t_b = entry["temperature"]
+            add_turbulence(
+                name,
+                entry,
+                b.get("turbulence"),
+                math.hypot(*entry["velocity"]),
+                t_b,
+                1.0 / t_b,  # the reference pressure
+            )
+        elif rans and kind == "total-pressure-inlet":
+            t_b = entry["total_temperature"]
+            add_turbulence(
+                name,
+                entry,
+                b.get("turbulence"),
+                1.0,
+                t_b,
+                entry["total_pressure"] / (r_nd * t_b),
+            )
         conditions[name] = entry
-    model = comp.CompressibleModel(
-        gamma=gamma,
-        gas_constant=r_nd,
-        viscosity=mu_nd,
-        viscosity_law=fluid["viscosity_model"],
-        sutherland_temperature=fluid["sutherland_temperature"] / scaling.temperature,
-        prandtl=fluid["prandtl"],
-        spatial_order=num["spatial_order"],
-        limiter=num["limiter"],
-        limiter_threshold=num["limiter_threshold"],
-        entropy_fix=num["entropy_fix"],
-        viscous_gradient=num["viscous_gradient"],
-        alpha=num["alpha"],
-    )
     problem = FlowProblem(
         _scaled_mesh(mesh, 1.0 / scaling.length),
         model,
@@ -463,23 +513,49 @@ def _setup_compressible(config, mesh):
             pressure, temperature = r_nd * src["temperature"], src["temperature"]
     else:  # restart without an explicit initial state: the reference state
         velocity, pressure, temperature = (1.0, 0.0), r_nd, 1.0
-    w0 = problem.initial_state(velocity, pressure, temperature=temperature)
+    nu_tilde = None
+    if rans:
+        src_name = init["from_boundary"]
+        if init["turbulence"] is None and src_name in turbulence:
+            turbulence["initial"] = turbulence[src_name]
+            nu_tilde = conditions[src_name]["nu_tilde"]
+        else:
+            entry = {}
+            add_turbulence(
+                "initial",
+                entry,
+                init["turbulence"],
+                math.hypot(*velocity),
+                temperature,
+                pressure / (r_nd * temperature),
+            )
+            nu_tilde = entry["nu_tilde"]
+    w0 = problem.initial_state(
+        velocity, pressure, nu_tilde=nu_tilde, temperature=temperature
+    )
     if init["restart"] is not None:
         restart = config.resolve_path(init["restart"])
-        w0, _ = load_restart(restart, mesh, w0, flow=comp.FLOW)
-        config.notices.append(
-            f"initial state from restart file {_display_path(restart)}"
-        )
-    problem.turbulence_values = {}
+        w0, n_read = load_restart(restart, mesh, w0, flow=comp.FLOW)
+        note = f"initial state from restart file {_display_path(restart)}"
+        if n_read < w0.shape[1]:
+            note += f" ({n_read} of {w0.shape[1]} variables; nu_tilde from the setup)"
+        config.notices.append(note)
+    problem.turbulence_values = turbulence
     return problem, scaling, w0, mesh
 
 
 def state_scale(problem, scaling):
     """Factors from the non-dimensional state columns to SI units."""
     if problem.compressible:
-        return np.array(
-            [scaling.pressure, scaling.velocity, scaling.velocity, scaling.temperature]
-        )
+        scale = [
+            scaling.pressure,
+            scaling.velocity,
+            scaling.velocity,
+            scaling.temperature,
+        ]
+        if problem.turbulent:
+            scale.append(scaling.viscosity / scaling.density)
+        return np.array(scale)
     scale = [scaling.pressure, scaling.velocity, scaling.velocity]
     if problem.model.turbulence == "sst":
         scale += [scaling.velocity**2, scaling.velocity / scaling.length]
@@ -738,7 +814,8 @@ def load_restart(path, mesh, w_default, flow="incompressible"):
     restart used for a laminar case drops it. The column count tells the
     turbulence model (4 SA, 5 SST, 6 SA-AFT, 7 SST-LM): between SST and SA
     only p, u, v are taken over; SST <-> SST-LM keeps k and omega, SA <-> SA-AFT
-    keeps nu_tilde.
+    keeps nu_tilde. Compressible states have 4 (laminar) or 5 (SA-neg)
+    columns.
     """
     with np.load(path) as data:
         if str(data["fingerprint"]) != mesh_fingerprint(mesh):
@@ -751,7 +828,9 @@ def load_restart(path, mesh, w_default, flow="incompressible"):
         w = np.array(data["w"], dtype=float)
     n = min(w.shape[1], w_default.shape[1])
     sst_family = (5, 7)
-    if (w.shape[1] in sst_family) != (w_default.shape[1] in sst_family):
+    if flow == "incompressible" and (
+        (w.shape[1] in sst_family) != (w_default.shape[1] in sst_family)
+    ):
         n = min(n, 3)
     w0 = np.array(w_default, dtype=float)
     w0[:, :n] = w[:, :n]
@@ -1690,7 +1769,7 @@ class Monitor:
         return out
 
     def write_wall(self, w, boundary, path):
-        """Write x, y, p, Cp, tau_x, tau_y, Cf (compressible laminar: T, q_w).
+        """Write x, y, p, Cp, tau_x, tau_y, Cf (compressible viscous: T, q_w).
 
         SI units; q_w is the heat flux from the wall into the fluid.
         """
@@ -1723,13 +1802,8 @@ class Monitor:
             )
         if self.problem.turbulent:
             # y+ of the first cell centre: d sqrt(|tau_w| / rho) / nu (non-dim.).
-            m = self.problem.model
-            owner = np.asarray(self.problem.geom.b_owner)[faces]
-            dist = np.asarray(self.problem.geom.wall_distance)[owner]
             tau_w = np.hypot(d["tau_x"], d["tau_y"])
-            columns["y_plus"] = (
-                dist * np.sqrt(tau_w / m.density) / (m.viscosity / m.density)
-            )
+            columns["y_plus"] = self.problem.wall_y_plus(w, faces, tau_w)
             # Maximum nu_t/nu over the boundary-layer column above each face:
             # laminar ~1e-6-1e-2, turbulent 10-100.
             columns["nu_t_ratio_max"] = self.problem.wall_eddy_viscosity_ratio(w, faces)
@@ -2116,10 +2190,21 @@ def _log_setup_compressible(log, config, problem, scaling, mesh):
             ),
             ("Prandtl number", f"{m.prandtl:g}"),
         ]
+    if problem.turbulent:
+        rows += [
+            (
+                "turbulence model",
+                "SA-neg, conservative compressible form (NASA TMR), "
+                f"turbulence order {m.turbulence_spatial_order}",
+            ),
+            ("turbulent Prandtl number", f"{m.prandtl_turbulent:g}"),
+        ]
     rows += [
         (
             "convective flux",
-            f"{num['convective_flux']}, entropy fix {num['entropy_fix']:g}, order "
+            f"{num['convective_flux']}, entropy fix {num['entropy_fix']:g}"
+            + (", low-Mach correction" if num["low_mach_correction"] else "")
+            + f", order "
             f"{num['spatial_order']}, limiter {num['limiter']}",
         ),
         ("solver", cfg["solver"]["method"]),
@@ -2137,6 +2222,10 @@ def _log_setup_compressible(log, config, problem, scaling, mesh):
         log.write("  " + line)
     log.section("Boundary conditions")
     log.table([(name, _describe_boundary(b)) for name, b in cfg["boundary"].items()])
+    if problem.turbulent:
+        log.section("Turbulence")
+        tv = problem.turbulence_values
+        log.table([("model", "sa-neg")] + [(name, tv[name].report()) for name in tv])
     if config.notices:
         log.section("Notices")
         for note in config.notices:

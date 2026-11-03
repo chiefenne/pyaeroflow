@@ -6,8 +6,8 @@ provides the residual, Jacobian and pseudo-time term for the solvers in
 :class:`~pyaeroflow.physics.incompressible.IncompressibleModel` (SU2 INC,
 with the turbulence and transition models) or
 :class:`~pyaeroflow.physics.compressible.CompressibleModel` (density-based,
-Euler and laminar Navier-Stokes). A flow family is a physics module with the
-same interface:
+Euler, laminar Navier-Stokes and SA-neg RANS). A flow family is a physics
+module with the same interface:
 ``build_boundary_data``, ``lsq_include``, ``scheme_parameters`` (the
 per-evaluation constants of the scheme that the residual, Jacobian and
 pseudo-time term take frozen; beta^2 of the artificial compressibility for
@@ -29,7 +29,7 @@ from pyaeroflow.numerics.wall_distance import mesh_wall_distance, mesh_wall_norm
 from pyaeroflow.physics import compressible as comp
 from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
-from pyaeroflow.physics import lm, rans, rans_sst, sst
+from pyaeroflow.physics import lm, rans, rans_compressible, rans_sst, sst
 from pyaeroflow.solver import (
     JacobianPattern,
     PseudoTimeSettings,
@@ -205,9 +205,11 @@ class FlowProblem:
         self.flow = flow_module(model)
         self.compressible = self.flow is comp
         self.turbulent = model.turbulence != "none"
-        if self.compressible:
-            if self.turbulent:
-                raise ValueError("compressible flow: turbulence models are planned")
+        if self.compressible and self.turbulent:
+            if model.turbulence == "sst":
+                raise ValueError("compressible flow: SST is planned (C4)")
+            if model.transition != "none":
+                raise ValueError("compressible flow: transition models are planned")
         if self.turbulent:
             if model.turbulence not in TURBULENCE_MODELS:
                 raise ValueError(f"unknown turbulence model '{model.turbulence}'")
@@ -217,7 +219,7 @@ class FlowProblem:
                 raise ValueError(f"transition model '{model.transition}' needs SA")
             if model.turbulence != "sst" and model.transition == "lm":
                 raise ValueError("the Langtry-Menter transition model needs SST")
-            nu = model.viscosity / model.density
+            nu = model.viscosity / model.density  # compressible: of the reference
             # Default inflow values: nu_tilde = 3 nu (NASA TMR, D33); SST
             # k and omega from Tu = 0.1 %, nu_t / nu = 1.
             defaults = {}
@@ -276,9 +278,14 @@ class FlowProblem:
             model = model._replace(pin=(cell, float(pin_pressure)))
             self.pinned_cell = cell
         self.model = model
-        self.physics = {"sa-neg": rans, "sst": rans_sst}.get(
-            model.turbulence, self.flow
-        )
+        if self.compressible:
+            self.physics = rans_compressible if self.turbulent else comp
+        else:
+            self.physics = {"sa-neg": rans, "sst": rans_sst}.get(
+                model.turbulence, self.flow
+            )
+        # Column of the first turbulence variable (nu_tilde or k).
+        self.turbulence_column = getattr(self.physics, "NT", rans.NT)
         self._pattern = None  # Jacobian sparsity, built at the first assembly
         self._fi = partial(self.physics.interior_flux, model)
         self._fb = partial(self.physics.boundary_flux, model)
@@ -500,7 +507,7 @@ class FlowProblem:
             b_args = b_args + (self.bc.nu_tilde,)
         if self.turbulent:
             mask = (
-                rans.segregated_mask(self.model.n_var)
+                self.physics.segregated_mask(self.model.n_var)
                 if self.model.coupling == "segregated"
                 else None
             )
@@ -627,7 +634,7 @@ class FlowProblem:
     def wall_heat_flux(self, w):
         """Wall heat flux into the fluid per boundary face (compressible only)."""
         return np.asarray(
-            comp.wall_heat_flux(self.model, self.geom, self.bc, jnp.asarray(w))
+            self.physics.wall_heat_flux(self.model, self.geom, self.bc, jnp.asarray(w))
         )
 
     def vorticity(self, w):
@@ -668,13 +675,43 @@ class FlowProblem:
         summary is where it first exceeds 1. ``faces`` are boundary-face
         indices (``b_*`` order).
         """
-        ratio = self.eddy_viscosity(w) / (self.model.viscosity / self.model.density)
+        ratio = self.eddy_viscosity(w) / self.kinematic_viscosity(w)
         face_ids = self.disc.boundary_face_ids[np.asarray(faces)]
         nearest = self.nearest_wall_face
         column = np.full(self.mesh.n_faces, -np.inf)
         valid = (nearest >= 0) & (np.asarray(self.geom.wall_distance) <= 0.05)
         np.maximum.at(column, nearest[valid], ratio[valid])
         return np.where(np.isfinite(column[face_ids]), column[face_ids], 0.0)
+
+    def kinematic_viscosity(self, w):
+        """Molecular kinematic viscosity per cell (compressible: mu(T) / rho)."""
+        if self.compressible:
+            return np.asarray(
+                rans_compressible.kinematic_viscosity(self.model, jnp.asarray(w))
+            )
+        return np.full(w.shape[0], self.model.viscosity / self.model.density)
+
+    def wall_y_plus(self, w, faces, tau_w):
+        """y+ = d sqrt(tau_w / rho_w) / nu_w of the wall cells of ``faces``.
+
+        ``tau_w`` (non-dimensional) per face; rho_w and nu_w = mu(T_w) / rho_w
+        of the wall boundary state (constants for incompressible flow).
+        """
+        faces = np.asarray(faces)
+        owner = np.asarray(self.geom.b_owner)[faces]
+        dist = np.asarray(self.geom.wall_distance)[owner]
+        if self.compressible:
+            w_b = np.asarray(
+                self.physics.boundary_state(
+                    self.bc, self.geom.b_normal, jnp.asarray(w)[self.geom.b_owner]
+                )
+            )[faces]
+            rho = np.asarray(comp.density(self.model.gas_constant, w_b))
+            nu = np.asarray(rans_compressible.kinematic_viscosity(self.model, w_b))
+        else:
+            rho = self.model.density
+            nu = self.model.viscosity / self.model.density
+        return dist * np.sqrt(np.abs(tau_w) / rho) / nu
 
     def eddy_viscosity(self, w):
         """Kinematic eddy viscosity per cell (zeros without a turbulence model)."""
@@ -684,7 +721,7 @@ class FlowProblem:
             return np.asarray(
                 rans_sst.eddy_viscosity(self.model, self.geom, self.bc, jnp.asarray(w))
             )
-        return np.asarray(rans.eddy_viscosity(self.model, jnp.asarray(w)))
+        return np.asarray(self.physics.eddy_viscosity(self.model, jnp.asarray(w)))
 
     def blending_f1(self, w):
         """Menter's first SST blending function per cell (SST only)."""
@@ -822,7 +859,8 @@ class FlowProblem:
                         1
                     ]
             else:
-                w[:, rans.NT] = 3.0 * nu if nu_tilde is None else nu_tilde
+                nt = 3.0 * nu if nu_tilde is None else nu_tilde
+                w[:, self.turbulence_column] = nt
         return w
 
     def solve(
@@ -1050,7 +1088,15 @@ class FlowProblem:
         nu_tilde cap of ``factor`` (None = no cap).
         """
         if self.compressible:
-            return self._positivity_limiter()
+            positivity = self._positivity_limiter()
+            cap = self._nu_tilde_limiter(factor)
+            if cap is None:
+                return positivity
+
+            def limit_step(u, du, r=None, tau=None):
+                return positivity(u, cap(u, du), r, tau)
+
+            return limit_step
         if self.model.turbulence == "sst":
             return self._sst_limiter(
                 clip=clip, guard=gamma_guard, stats=guard_stats, whole_cell=whole_cell
@@ -1178,11 +1224,12 @@ class FlowProblem:
         if factor is None or not self.turbulent:
             return None
         nu_floor = self.model.viscosity / self.model.density
+        col = self.turbulence_column
 
         def limit_step(u, du, r=None, tau=None):
-            cap = factor * np.maximum(np.abs(u[:, rans.NT]), nu_floor)
+            cap = factor * np.maximum(np.abs(u[:, col]), nu_floor)
             du = du.copy()
-            du[:, rans.NT] = np.clip(du[:, rans.NT], -cap, cap)
+            du[:, col] = np.clip(du[:, col], -cap, cap)
             return du
 
         return limit_step

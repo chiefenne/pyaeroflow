@@ -1,6 +1,7 @@
 """Compressible solver (L1): Euler and laminar fluxes, boundary states, setup."""
 
 import math
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -299,7 +300,10 @@ def test_compressible_case_resolves_reference_values():
 @pytest.mark.parametrize(
     ("change", "message"),
     [
-        (lambda r: r["physics"].update(model="rans"), "rans is planned"),
+        (
+            lambda r: r["physics"].update(model="rans", turbulence="sst"),
+            "sst is planned",
+        ),
         (lambda r: r["boundary"]["farfield"].pop("mach"), "mach is required"),
         (lambda r: r["boundary"]["farfield"].update(velocity=1.0), "take mach"),
         (lambda r: r.update(numerics={"convective_flux": "fds"}), "convective_flux"),
@@ -550,3 +554,40 @@ def test_compressible_laminar_case_rules():
     raw = _raw()
     raw["boundary"]["airfoil"]["temperature"] = 300.0
     assert any("ignored" in n for n in resolve(raw).notices)  # Euler
+
+
+def test_low_mach_correction():
+    """Rieper's correction: no change at M >= 1, consistent, less dissipation."""
+    r_gas = comp.gas_constant_for_mach(0.1)
+    w_l = jnp.array([[r_gas, 0.1, 0.02, 1.0]])
+    w_r = jnp.array([[r_gas * 1.001, 0.09, -0.01, 1.002]])
+    a, b = comp.low_mach_states(1.4, r_gas, w_l, w_r)
+    np.testing.assert_allclose(a[:, [0, 3]], w_l[:, [0, 3]])  # p, T unchanged
+    mean = 0.5 * (w_l[:, 1:3] + w_r[:, 1:3])
+    assert np.all(np.abs(a[:, 1:3] - mean) < np.abs(w_l[:, 1:3] - mean))
+    fast = w_l.at[:, 1].set(15.0)  # c = sqrt(gamma R T) = 10: M = 1.5, z = 1
+    a, b = comp.low_mach_states(1.4, r_gas, fast, w_r)
+    np.testing.assert_allclose(a, fast)
+    np.testing.assert_allclose(b, w_r)
+    n = jnp.array([[1.0, 0.0]])
+    model = comp.CompressibleModel(gas_constant=r_gas, low_mach_correction=True)
+    f = comp.interior_convective_flux(model, w_l, w_l, n)
+    np.testing.assert_allclose(f, comp.physical_flux(1.4, r_gas, w_l, n), rtol=1e-12)
+
+
+def test_low_mach_correction_jacobian_and_jvp():
+    prob, ff = _viscous_box(order=2)
+    prob.model = prob.model._replace(low_mach_correction=True)
+    prob._fi = partial(comp.interior_flux, prob.model)
+    rng = np.random.default_rng(8)
+    w = prob.initial_state(ff["velocity"], ff["pressure"])
+    w = w * (1.0 + rng.uniform(-0.05, 0.05, w.shape))
+    dw = rng.standard_normal(w.shape) * 1e-2
+    psi = prob.limiter(w)
+    jv = prob.jvp(w, dw, 0.0, psi)
+    eps = 1e-6
+    fd = (
+        prob.residual(w + eps * dw, 0.0, psi=psi)
+        - prob.residual(w - eps * dw, 0.0, psi=psi)
+    ) / (2 * eps)
+    np.testing.assert_allclose(jv, fd, rtol=1e-6, atol=1e-9)

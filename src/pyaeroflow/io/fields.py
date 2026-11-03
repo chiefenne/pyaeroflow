@@ -100,10 +100,8 @@ def _wall_cells(ctx):
     owner = np.asarray(geom.b_owner)[faces]
     length = np.asarray(geom.b_length)[faces]
     if problem.turbulent:
-        m = problem.model
-        dist = np.asarray(geom.wall_distance)[owner]
         tau = np.hypot(d["tau_x"], d["tau_y"])
-        values["y_plus"] = dist * np.sqrt(tau / m.density) / (m.viscosity / m.density)
+        values["y_plus"] = problem.wall_y_plus(ctx.w, faces, tau)
     weight = np.zeros(problem.mesh.n_cells)
     np.add.at(weight, owner, length)
     out = {}
@@ -166,7 +164,8 @@ def _kinematic_viscosity(c):
 
 
 def _nu_tilde(c):
-    return c.w[:, 3] * c.scaling.viscosity / c.scaling.density
+    col = c.problem.turbulence_column
+    return c.w[:, col] * c.scaling.viscosity / c.scaling.density
 
 
 def _eddy_viscosity(c):
@@ -174,8 +173,7 @@ def _eddy_viscosity(c):
 
 
 def _eddy_viscosity_ratio(c):
-    m = c.problem.model
-    return c.problem.eddy_viscosity(c.w) / (m.viscosity / m.density)
+    return c.problem.eddy_viscosity(c.w) / c.problem.kinematic_viscosity(c.w)
 
 
 def _effective_viscosity(c):
@@ -185,7 +183,12 @@ def _effective_viscosity(c):
 
 def _dynamic_eddy_viscosity(c):
     nu_t = c.problem.eddy_viscosity(c.w) * c.scaling.viscosity / c.scaling.density
-    return c.problem.model.density * c.scaling.density * nu_t
+    if c.problem.compressible:
+        m = c.problem.model
+        rho = c.w[:, 0] / (m.gas_constant * c.w[:, 3])
+    else:
+        rho = c.problem.model.density
+    return rho * c.scaling.density * nu_t
 
 
 def _turbulent_kinetic_energy(c):
@@ -722,6 +725,10 @@ def catalogue_table():
             Capabilities("laminar", "none", True, True, True, "none", "compressible"),
         ),
         ("SA", Capabilities("rans", "none", True, True, True)),
+        (
+            "compressible SA",
+            Capabilities("rans", "none", True, True, True, "sa-neg", "compressible"),
+        ),
         ("SA + BCM", Capabilities("rans", "bcm", True, True, True)),
         ("SA + AFT", Capabilities("rans", "aft", True, True, True)),
         ("SST", Capabilities("rans", "none", True, True, True, "sst")),
