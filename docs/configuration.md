@@ -236,13 +236,19 @@ file (either byte order). Formats 1 and 3 are rejected; export the mesh as
 | Key | Type | Default | Description | # |
 |-----|------|---------|-------------|---|
 | `density` | float | req. (incompressible) | ρ in kg/m³ (constant, D5). Compressible flow: ignored with a notice, ρ = p/(R T) | |
-| `viscosity` | float | – | Dynamic viscosity μ in Pa·s | |
-| `reynolds_number` | float | – | Re = ρ U_ref L_ref / μ. μ is derived from it, using `[reference]` velocity and length | D31 |
+| `viscosity` | float | – | Dynamic viscosity μ in Pa·s. Compressible flow: μ at the reference temperature | |
+| `reynolds_number` | float | – | Re = ρ U_ref L_ref / μ. μ is derived from it, using `[reference]` velocity and length (compressible: of the reference state) | D31 |
 | `gamma` | float | `1.4` | Compressible flow: ratio of specific heats γ | L1 |
 | `gas_constant` | float | `287.058` | Compressible flow: specific gas constant R in J/(kg K) | L1 |
+| `viscosity_model` | string | `"sutherland"` | Compressible flow: μ(T) by Sutherland's law, μ = μ_ref (T/T_ref)^{3/2} (T_ref + S)/(T + S), scaled to `viscosity` or `reynolds_number` at the reference temperature, or `"constant"` | L1 |
+| `sutherland_temperature` | float | `110.4` | Compressible flow: Sutherland's constant S in K | L1 |
+| `prandtl` | float | `0.72` | Compressible flow: laminar Prandtl number; conductivity k = μ c_p / Pr | L1 |
 
 Exactly one of `viscosity` and `reynolds_number` is required, except for
-`model = "euler"`. Non-dimensional setup: `density = 1.0`, reference velocity
+`model = "euler"`. A compressible laminar case may give neither: μ then
+follows from Sutherland's law of air (SU2's μ_ref = 1.716·10⁻⁵ Pa·s at
+273.15 K, S = 110.4 K) at the reference temperature, i.e. the Reynolds
+number from the farfield pressure, temperature and Mach number. Non-dimensional setup: `density = 1.0`, reference velocity
 and length `1.0`, `reynolds_number = Re` → μ = 1/Re.
 
 ### `[initial]`
@@ -274,7 +280,7 @@ dependence: P7). Types marked "inflow" take a `turbulence` table
 
 | `type` | Parameters |
 |--------|-----------------------|
-| `"wall"` | No-slip wall. Optional `velocity = [u, v]` for a moving wall (e.g. cavity lid) |
+| `"wall"` | No-slip wall. Optional `velocity = [u, v]` for a moving wall (e.g. cavity lid). Compressible laminar flow: adiabatic, or isothermal with `temperature` (K); a slip wall with `model = "euler"` |
 | `"slip-wall"` | Identical to `"symmetry"`: zero normal velocity, no shear stress |
 | `"symmetry"` | Symmetry plane: zero normal velocity, no shear stress |
 | `"farfield"` | `velocity` (magnitude, m/s), `angle_of_attack` (deg, default 0), `pressure` (Pa, default 0); inflow: `turbulence`. Compressible flow: `mach` instead of `velocity` (required), `pressure` absolute (default 101325 Pa), `temperature` (K, default 288.15); the Roe flux between the interior and the freestream state picks the incoming characteristics (SU2 `MARKER_FAR`), so the same type serves sub- and supersonic in- and outflow. Several farfield boundaries with the same values (e.g. PyAero's `inlet`, `outlet`, `top`, `bottom`) count as one freestream for the defaults of `reference.velocity`, `reference.angle_of_attack`, `initial.from_boundary` and the Cp reference pressure |
@@ -417,9 +423,10 @@ in that run and keep them.
 
 ### Compressible flow
 
-`physics.flow = "compressible"` (L1, so far `model = "euler"`, steady,
-implicit or explicit pseudo-time) solves the Euler equations of an ideal gas
-in the density-based form of SU2's compressible solver:
+`physics.flow = "compressible"` (L1, so far `model = "euler"` or
+`"laminar"`, steady, implicit or explicit pseudo-time) solves the Euler or
+laminar Navier–Stokes equations of an ideal gas in the density-based form of
+SU2's compressible solver:
 
 - Unknowns per cell: p, u, v, T (the primitive variables SU2 reconstructs),
   ρ = p/(R T); residual rows: mass, x- and y-momentum, energy (log columns
@@ -437,10 +444,21 @@ in the density-based form of SU2's compressible solver:
 - Boundary types: `farfield`, `wall` / `slip-wall` / `symmetry` (Euler wall:
   pressure flux only), `pressure-outlet`, `total-pressure-inlet`,
   `velocity-inlet`, `periodic`. Not available: `transpiration-wall`, moving
-  walls, `reference.vortex_correction`, `time.mode = "unsteady"`,
+  walls, `model = "rans"`, `reference.vortex_correction`, `time.mode = "unsteady"`,
   `initial.velocity` (start from the farfield or a restart). Restart files
   carry the flow family; one of the other family is rejected.
 - C_p uses the farfield pressure, q = ½ ρ∞ U∞².
+- Laminar (`model = "laminar"`, stage C2, SU2 `CNSSolver`): viscous stress
+  with μ(T) (`fluid.viscosity_model`, Sutherland by default), heat flux
+  k ∇T with k = μ c_p / Pr (`fluid.prandtl`, 0.72), the work of the viscous
+  stress in the energy equation; face gradients as in the incompressible
+  solver (`numerics.viscous_gradient`). `wall` is a no-slip wall, adiabatic
+  by default or isothermal with `temperature = T_w` (K). Slip walls and
+  symmetry faces carry no viscous flux. The wall CSV gets the columns `T`
+  (wall temperature, K) and `q_w` (heat flux from the wall into the fluid,
+  W/m²). The fields `kinematic_viscosity` and `effective_viscosity` are
+  μ(T)/ρ per cell. For a shock-free case `numerics.limiter = "none"` keeps
+  the boundary layer at full second order.
 
 ```toml
 # NACA 0012, M = 0.8, alpha = 1.25 deg, inviscid (AGARD-AR-211 case 1)
@@ -460,6 +478,26 @@ mach = 0.8
 angle_of_attack = 1.25            # deg
 pressure = 101325.0               # Pa, absolute (default)
 temperature = 288.15              # K (default)
+```
+
+```toml
+# NACA 0012, M = 0.5, alpha = 0, Re = 5000, laminar
+# (examples/cases/naca0012_laminar_m05.toml)
+[physics]
+flow = "compressible"
+model = "laminar"
+
+[fluid]
+reynolds_number = 5000.0          # of the freestream; Sutherland mu(T), Pr 0.72
+
+[reference]
+length = 1.0                      # chord
+
+[numerics]
+limiter = "none"                  # shock-free
+
+[boundary.airfoil]
+type = "wall"                     # adiabatic; temperature = 300.0 for isothermal
 ```
 
 ### Turbulence values
@@ -591,48 +629,48 @@ All values are in SI units except the residuals and the wall coefficients (non-d
 
 The table is generated from the field registry (`pyaeroflow.io.fields`); a column marks the model combinations for which a field exists. A field also needs the conditions of the column "Needs".
 
-| Field | Unit | Description | Needs | euler | compressible euler | laminar | SA | SA + BCM | SA + AFT | SST | SST + LM |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| `pressure` | Pa | Static pressure | always | x | x | x | x | x | x | x | x |
-| `velocity` | m/s | Velocity vector | always | x | x | x | x | x | x | x | x |
-| `velocity_magnitude` | m/s | Speed | always | x | x | x | x | x | x | x | x |
-| `density` | kg/m^3 | Density p / (R T) | compressible |  | x |  |  |  |  |  |  |
-| `temperature` | K | Static temperature | compressible |  | x |  |  |  |  |  |  |
-| `mach` | 1 | Mach number |v| / c | compressible |  | x |  |  |  |  |  |  |
-| `vorticity` | 1/s | dv/dx - du/dy from the least-squares gradient (signed) | always | x | x | x | x | x | x | x | x |
-| `kinematic_viscosity` | m^2/s | Laminar kinematic viscosity (constant) | laminar, rans |  |  | x | x | x | x | x | x |
-| `eddy_viscosity` | m^2/s | Kinematic eddy viscosity nu_t | rans |  |  |  | x | x | x | x | x |
-| `eddy_viscosity_ratio` | 1 | nu_t / nu | rans |  |  |  | x | x | x | x | x |
-| `effective_viscosity` | m^2/s | nu + nu_t (the laminar value without a turbulence model) | laminar, rans |  |  | x | x | x | x | x | x |
-| `mu_t` | Pa s | Dynamic eddy viscosity rho nu_t | rans |  |  |  | x | x | x | x | x |
-| `nu_tilde` | m^2/s | SA working variable | rans with turbulence = sa-neg |  |  |  | x | x | x |  |  |
-| `k` | m^2/s^2 | Turbulent kinetic energy (SST) | rans with turbulence = sst |  |  |  |  |  |  | x | x |
-| `omega` | 1/s | Specific dissipation rate (SST) | rans with turbulence = sst |  |  |  |  |  |  | x | x |
-| `blending_f1` | 1 | Menter's blending function F1 (1: k-omega near the wall, 0: k-epsilon) | rans with turbulence = sst |  |  |  |  |  |  | x | x |
-| `wall_distance` | m | Distance to the nearest wall used by the turbulence model | rans |  |  |  | x | x | x | x | x |
-| `intermittency` | 1 | Transition intermittency gamma | rans with a transition model |  |  |  |  | x | x |  | x |
-| `amplification_factor` | 1 | Amplification factor n of SA-AFT | rans with transition.model = aft |  |  |  |  |  | x |  |  |
-| `re_theta_t` | 1 | Transported transition-onset momentum-thickness Reynolds number Re_thetat of Langtry-Menter | rans with transition.model = lm |  |  |  |  |  |  |  | x |
-| `intermittency_effective` | 1 | Effective intermittency max(gamma, gamma_sep) on the SST production (gamma_sep > 1 marks separation-induced transition) | rans with transition.model = lm |  |  |  |  |  |  |  | x |
-| `residual_p` | 1 | Pressure (continuity) residual per cell volume | steady, implicit, incompressible | x |  | x | x | x | x | x | x |
-| `residual_u` | 1 | x-momentum residual per cell volume | steady, implicit, incompressible | x |  | x | x | x | x | x | x |
-| `residual_v` | 1 | y-momentum residual per cell volume | steady, implicit, incompressible | x |  | x | x | x | x | x | x |
-| `residual_rho` | 1 | Continuity residual per cell volume | steady, implicit, compressible |  | x |  |  |  |  |  |  |
-| `residual_rhou` | 1 | x-momentum residual per cell volume | steady, implicit, compressible |  | x |  |  |  |  |  |  |
-| `residual_rhov` | 1 | y-momentum residual per cell volume | steady, implicit, compressible |  | x |  |  |  |  |  |  |
-| `residual_rhoE` | 1 | Energy residual per cell volume | steady, implicit, compressible |  | x |  |  |  |  |  |  |
-| `residual_nu_tilde` | 1 | nu_tilde residual per cell volume | steady, implicit, turbulence = sa-neg |  |  |  | x | x | x |  |  |
-| `residual_k` | 1 | k residual per cell volume | steady, implicit, turbulence = sst |  |  |  |  |  |  | x | x |
-| `residual_omega` | 1 | omega residual per cell volume | steady, implicit, turbulence = sst |  |  |  |  |  |  | x | x |
-| `residual_gamma` | 1 | log-intermittency residual per cell volume | steady, implicit, transition.model = aft |  |  |  |  |  | x |  |  |
-| `residual_n` | 1 | Amplification-factor residual per cell volume | steady, implicit, transition.model = aft |  |  |  |  |  | x |  |  |
-| `residual_intermittency` | 1 | Intermittency residual per cell volume | steady, implicit, transition.model = lm |  |  |  |  |  |  |  | x |
-| `residual_re_theta_t` | 1 | Re_thetat residual per cell volume | steady, implicit, transition.model = lm |  |  |  |  |  |  |  | x |
-| `cf` | 1 | Skin-friction coefficient with attached flow positive on every side (the wall CSV keeps the sign of the wall traversal); wall cells only | wall in output.force_boundaries, laminar or rans |  |  | x | x | x | x | x | x |
-| `cp_wall` | 1 | Pressure coefficient at the wall; wall cells only | wall in output.force_boundaries | x | x | x | x | x | x | x | x |
-| `tau_wall_x` | 1 | Wall shear stress x component (non-dimensional, rho U^2); wall cells only | wall in output.force_boundaries, laminar or rans |  |  | x | x | x | x | x | x |
-| `tau_wall_y` | 1 | Wall shear stress y component (non-dimensional, rho U^2); wall cells only | wall in output.force_boundaries, laminar or rans |  |  | x | x | x | x | x | x |
-| `y_plus` | 1 | y+ of the first cell centre; wall cells only | wall in output.force_boundaries, rans |  |  |  | x | x | x | x | x |
+| Field | Unit | Description | Needs | euler | compressible euler | laminar | compressible laminar | SA | SA + BCM | SA + AFT | SST | SST + LM |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `pressure` | Pa | Static pressure | always | x | x | x | x | x | x | x | x | x |
+| `velocity` | m/s | Velocity vector | always | x | x | x | x | x | x | x | x | x |
+| `velocity_magnitude` | m/s | Speed | always | x | x | x | x | x | x | x | x | x |
+| `density` | kg/m^3 | Density p / (R T) | compressible |  | x |  | x |  |  |  |  |  |
+| `temperature` | K | Static temperature | compressible |  | x |  | x |  |  |  |  |  |
+| `mach` | 1 | Mach number |v| / c | compressible |  | x |  | x |  |  |  |  |  |
+| `vorticity` | 1/s | dv/dx - du/dy from the least-squares gradient (signed) | always | x | x | x | x | x | x | x | x | x |
+| `kinematic_viscosity` | m^2/s | Laminar kinematic viscosity (constant; compressible: mu(T) / rho) | laminar, rans |  |  | x | x | x | x | x | x | x |
+| `eddy_viscosity` | m^2/s | Kinematic eddy viscosity nu_t | rans |  |  |  |  | x | x | x | x | x |
+| `eddy_viscosity_ratio` | 1 | nu_t / nu | rans |  |  |  |  | x | x | x | x | x |
+| `effective_viscosity` | m^2/s | nu + nu_t (the laminar value without a turbulence model) | laminar, rans |  |  | x | x | x | x | x | x | x |
+| `mu_t` | Pa s | Dynamic eddy viscosity rho nu_t | rans |  |  |  |  | x | x | x | x | x |
+| `nu_tilde` | m^2/s | SA working variable | rans with turbulence = sa-neg |  |  |  |  | x | x | x |  |  |
+| `k` | m^2/s^2 | Turbulent kinetic energy (SST) | rans with turbulence = sst |  |  |  |  |  |  |  | x | x |
+| `omega` | 1/s | Specific dissipation rate (SST) | rans with turbulence = sst |  |  |  |  |  |  |  | x | x |
+| `blending_f1` | 1 | Menter's blending function F1 (1: k-omega near the wall, 0: k-epsilon) | rans with turbulence = sst |  |  |  |  |  |  |  | x | x |
+| `wall_distance` | m | Distance to the nearest wall used by the turbulence model | rans |  |  |  |  | x | x | x | x | x |
+| `intermittency` | 1 | Transition intermittency gamma | rans with a transition model |  |  |  |  |  | x | x |  | x |
+| `amplification_factor` | 1 | Amplification factor n of SA-AFT | rans with transition.model = aft |  |  |  |  |  |  | x |  |  |
+| `re_theta_t` | 1 | Transported transition-onset momentum-thickness Reynolds number Re_thetat of Langtry-Menter | rans with transition.model = lm |  |  |  |  |  |  |  |  | x |
+| `intermittency_effective` | 1 | Effective intermittency max(gamma, gamma_sep) on the SST production (gamma_sep > 1 marks separation-induced transition) | rans with transition.model = lm |  |  |  |  |  |  |  |  | x |
+| `residual_p` | 1 | Pressure (continuity) residual per cell volume | steady, implicit, incompressible | x |  | x |  | x | x | x | x | x |
+| `residual_u` | 1 | x-momentum residual per cell volume | steady, implicit, incompressible | x |  | x |  | x | x | x | x | x |
+| `residual_v` | 1 | y-momentum residual per cell volume | steady, implicit, incompressible | x |  | x |  | x | x | x | x | x |
+| `residual_rho` | 1 | Continuity residual per cell volume | steady, implicit, compressible |  | x |  | x |  |  |  |  |  |
+| `residual_rhou` | 1 | x-momentum residual per cell volume | steady, implicit, compressible |  | x |  | x |  |  |  |  |  |
+| `residual_rhov` | 1 | y-momentum residual per cell volume | steady, implicit, compressible |  | x |  | x |  |  |  |  |  |
+| `residual_rhoE` | 1 | Energy residual per cell volume | steady, implicit, compressible |  | x |  | x |  |  |  |  |  |
+| `residual_nu_tilde` | 1 | nu_tilde residual per cell volume | steady, implicit, turbulence = sa-neg |  |  |  |  | x | x | x |  |  |
+| `residual_k` | 1 | k residual per cell volume | steady, implicit, turbulence = sst |  |  |  |  |  |  |  | x | x |
+| `residual_omega` | 1 | omega residual per cell volume | steady, implicit, turbulence = sst |  |  |  |  |  |  |  | x | x |
+| `residual_gamma` | 1 | log-intermittency residual per cell volume | steady, implicit, transition.model = aft |  |  |  |  |  |  | x |  |  |
+| `residual_n` | 1 | Amplification-factor residual per cell volume | steady, implicit, transition.model = aft |  |  |  |  |  |  | x |  |  |
+| `residual_intermittency` | 1 | Intermittency residual per cell volume | steady, implicit, transition.model = lm |  |  |  |  |  |  |  |  | x |
+| `residual_re_theta_t` | 1 | Re_thetat residual per cell volume | steady, implicit, transition.model = lm |  |  |  |  |  |  |  |  | x |
+| `cf` | 1 | Skin-friction coefficient with attached flow positive on every side (the wall CSV keeps the sign of the wall traversal); wall cells only | wall in output.force_boundaries, laminar or rans |  |  | x | x | x | x | x | x | x |
+| `cp_wall` | 1 | Pressure coefficient at the wall; wall cells only | wall in output.force_boundaries | x | x | x | x | x | x | x | x | x |
+| `tau_wall_x` | 1 | Wall shear stress x component (non-dimensional, rho U^2); wall cells only | wall in output.force_boundaries, laminar or rans |  |  | x | x | x | x | x | x | x |
+| `tau_wall_y` | 1 | Wall shear stress y component (non-dimensional, rho U^2); wall cells only | wall in output.force_boundaries, laminar or rans |  |  | x | x | x | x | x | x | x |
+| `y_plus` | 1 | y+ of the first cell centre; wall cells only | wall in output.force_boundaries, rans |  |  |  |  | x | x | x | x | x |
 
 ### Saved-state files and housekeeping
 

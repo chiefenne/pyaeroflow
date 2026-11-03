@@ -1,4 +1,6 @@
-"""Compressible Euler equations, density-based as SU2's compressible solver (L1).
+"""Compressible Euler and laminar Navier-Stokes equations (L1).
+
+Density-based, as SU2's compressible solver.
 
 Working variables per cell: V = (p, u, v, T), the primitive variables SU2
 reconstructs (``MUSCL_FLOW``), with the density from the ideal-gas law
@@ -31,6 +33,24 @@ by MUSCL reconstruction of V with the Venkatakrishnan(-Wang) limiter. A face
 whose reconstructed state has p <= 0 or T <= 0 falls back to first order
 (SU2's non-physical reconstruction check).
 
+Viscous flux (C2, SU2 ``CNSSolver``): the residual subtracts
+
+    F_v.n = (0, tau.n, (tau.v).n + k grad T.n),
+
+tau = mu (grad v + grad v^T - 2/3 div v I) (Stokes), with the dynamic
+viscosity mu(T) of Sutherland's law (SU2 ``VISCOSITY_MODEL = SUTHERLAND``)
+or a constant, and the conductivity k = mu c_p / Pr (constant Prandtl
+number, SU2 ``PRANDTL_LAM = 0.72``), c_p = gamma R / (gamma - 1). Face
+gradients of (p, u, v, T) as in the incompressible solver (D24); mu, k and
+v at the face from the mean of the two cell states.
+
+No-slip walls (``wall`` in a laminar case): zero velocity, the pressure of
+the interior cell, and either no heat flux (adiabatic, the default; SU2
+``MARKER_HEATFLUX`` with 0) or a prescribed wall temperature (isothermal,
+SU2 ``MARKER_ISOTHERMAL``), whose heat flux follows from the one-sided
+normal temperature gradient. Slip walls and symmetry faces carry no viscous
+flux.
+
 Boundary conditions: farfield (freestream state outside, Roe flux between the
 interior and that state: the upwinding picks the incoming characteristics,
 as SU2's ``MARKER_FAR``), slip wall and symmetry (pressure flux only; SU2's
@@ -48,6 +68,8 @@ import jax.numpy as jnp
 import numpy as np
 
 from pyaeroflow.numerics import (
+    boundary_face_gradient,
+    interior_face_gradient,
     lsq_gradient,
     reconstruct,
     venkatakrishnan_wang,
@@ -92,7 +114,13 @@ class CompressibleModel(NamedTuple):
         Non-dimensional gas constant R = p_inf / (rho_inf T_inf); with the
         freestream as reference 1 / (gamma M_inf^2).
     viscosity : float
-        Dynamic viscosity; only 0 (Euler) is available.
+        Dynamic viscosity at the reference temperature T = 1 (1 / Re of the
+        reference state); 0 = Euler.
+    viscosity_law : {"sutherland", "constant"}
+    sutherland_temperature : float
+        Sutherland's constant S / T_ref (110.4 K / T_ref for air).
+    prandtl : float
+        Laminar Prandtl number.
     spatial_order : int
         1 or 2 (MUSCL reconstruction of p, u, v, T).
     limiter : {"none", "venkatakrishnan-wang", "venkatakrishnan"}
@@ -100,7 +128,7 @@ class CompressibleModel(NamedTuple):
     entropy_fix : float
         Harten's coefficient: delta = entropy_fix (|v_n| + c); 0 = off.
     viscous_gradient : str
-        Face-gradient scheme (used by the wall loads; viscous flux later).
+        Face-gradient scheme of the viscous flux and the wall loads.
     alpha : float
     density : float
         Reference density of the force coefficients (freestream, 1).
@@ -111,6 +139,9 @@ class CompressibleModel(NamedTuple):
     gamma: float = 1.4
     gas_constant: float = 1.0 / 1.4
     viscosity: float = 0.0
+    viscosity_law: str = "sutherland"
+    sutherland_temperature: float = 110.4 / 288.15
+    prandtl: float = 0.72
     spatial_order: int = 2
     limiter: str = "venkatakrishnan-wang"
     limiter_threshold: float = 0.05
@@ -172,7 +203,8 @@ def boundary_data(disc, conditions, model):
         ``pressure`` and ``temperature``; ``velocity-inlet`` ``velocity``
         and ``temperature``; ``pressure-outlet`` ``pressure``;
         ``total-pressure-inlet`` ``total_pressure``, ``total_temperature``
-        and ``flow_direction``; ``wall`` an optional ``velocity``;
+        and ``flow_direction``; ``wall`` an optional ``temperature``
+        (isothermal; stored in the T column, 0 = adiabatic);
         ``slip-wall`` and ``symmetry`` nothing. Constants or callables of
         the boundary-face centres.
     model : CompressibleModel
@@ -229,9 +261,10 @@ def boundary_data(disc, conditions, model):
 def lsq_include(conditions, n_var=4):
     """``lsq_include`` callback: boundary values enter a gradient where known.
 
-    Farfield and symmetry faces: all variables. Walls: the velocity (the
-    adiabatic wall leaves p and T to the interior). Velocity inlets: u, v, T.
-    Total-conditions inlets: u, v, T (computed from p_0, T_0). Outlets: p.
+    Farfield and symmetry faces: all variables. Walls: the velocity, and T
+    at isothermal walls (the adiabatic wall leaves p and T to the
+    interior). Velocity inlets: u, v, T. Total-conditions inlets: u, v, T
+    (computed from p_0, T_0). Outlets: p.
     """
 
     def include(slices, n_bfaces):
@@ -240,7 +273,8 @@ def lsq_include(conditions, n_var=4):
             k = KIND_NAMES[conditions[name]["type"]]
             if k == WALL:
                 mask[sl, P] = False
-                mask[sl, T] = False
+                if not conditions[name].get("temperature"):
+                    mask[sl, T] = False
             elif k in (VELOCITY_INLET, TOTAL_PRESSURE_INLET):
                 mask[sl, P] = False
             elif k == PRESSURE_OUTLET:
@@ -377,13 +411,15 @@ def boundary_state(bc, normal, w_in):
     """Boundary-face state (p, u, v, T) from the interior state ``w_in``.
 
     Farfield: the freestream. Slip wall / symmetry: interior p and T, the
-    interior velocity without its normal component. Wall: interior p and T,
-    the wall velocity. Velocity inlet: interior p, prescribed u, v, T.
-    Pressure outlet: prescribed p, interior velocity, T on the interior
-    isentrope (T_in (p_b / p_in)^((gamma - 1) / gamma)); a supersonic
-    outflow (v_n >= c) takes the interior state. Total-conditions inlet:
-    p = min(p_in, p_0), the Mach number from p_0 / p, T = T_0 / (1 + (gamma
-    - 1) M^2 / 2) and the velocity along the prescribed direction.
+    interior velocity without its normal component. Wall: interior p, the
+    wall velocity, the wall temperature if one is prescribed (T column > 0,
+    isothermal) and the interior T otherwise (adiabatic). Velocity inlet:
+    interior p, prescribed u, v, T. Pressure outlet: prescribed p, interior
+    velocity, T on the interior isentrope (T_in (p_b / p_in)^((gamma - 1) /
+    gamma)); a supersonic outflow (v_n >= c) takes the interior state.
+    Total-conditions inlet: p = min(p_in, p_0), the Mach number from
+    p_0 / p, T = T_0 / (1 + (gamma - 1) M^2 / 2) and the velocity along the
+    prescribed direction.
     """
     gamma, r_gas = bc.gamma, bc.gas_constant
     vn = w_in[:, U] * normal[:, 0] + w_in[:, V] * normal[:, 1]
@@ -393,7 +429,8 @@ def boundary_state(bc, normal, w_in):
     out = jnp.where(kind == SYMMETRY, mirrored, w_in)
     out = jnp.where(kind == FARFIELD, val, out)
     wall = w_in.at[:, U].set(val[:, U]).at[:, V].set(val[:, V])
-    out = jnp.where(kind == WALL, wall, out)
+    t_wall = jnp.where(val[:, T] > 0.0, val[:, T], w_in[:, T])
+    out = jnp.where(kind == WALL, wall.at[:, T].set(t_wall), out)
     inlet_v = wall.at[:, T].set(val[:, T])
     out = jnp.where(kind == VELOCITY_INLET, inlet_v, out)
 
@@ -432,6 +469,94 @@ def boundary_convective_flux(model, bc, normal, w_in):
     return jnp.where((kind == WALL) | (kind == SYMMETRY), wall_flux, upwind)
 
 
+# -- viscous flux (C2) ---------------------------------------------------------------
+
+
+def laminar_viscosity(model, t):
+    """Dynamic viscosity mu(T), non-dimensional (mu(1) = ``model.viscosity``).
+
+    Sutherland: mu = mu_ref T^(3/2) (1 + S) / (T + S) with T and S scaled by
+    the reference temperature.
+    """
+    if model.viscosity_law == "constant":
+        return model.viscosity * jnp.ones_like(t)
+    if model.viscosity_law != "sutherland":
+        raise ValueError(f"unknown viscosity law '{model.viscosity_law}'")
+    s = model.sutherland_temperature
+    t = jnp.maximum(t, 1e-12)
+    return model.viscosity * t**1.5 * (1.0 + s) / (t + s)
+
+
+def heat_capacity(model):
+    """c_p = gamma R / (gamma - 1), non-dimensional."""
+    return model.gamma * model.gas_constant / (model.gamma - 1.0)
+
+
+def stress(mu, grad):
+    """Viscous stress tau, shape (n, 2, 2).
+
+    For dynamic viscosities mu (n,) and face gradients grad (n, 4, 2).
+    """
+    g = grad[:, U:T, :]
+    div = g[:, 0, 0] + g[:, 1, 1]
+    tau = mu[:, None, None] * (g + jnp.swapaxes(g, 1, 2))
+    return tau - (2.0 / 3.0 * mu * div)[:, None, None] * jnp.eye(2)[None]
+
+
+def viscous_flux(model, grad, w_f, normal, heat=True):
+    """-F_v.n per unit length, shape (n, 4) (added to the convective flux).
+
+    Parameters
+    ----------
+    grad : (n, 4, 2)
+        Face gradients of (p, u, v, T).
+    w_f : (n, 4)
+        Face states: mu(T), k and the velocity of the work term.
+    normal : (n, 2)
+    heat : bool or bool array (n,)
+        False drops the heat flux (adiabatic walls).
+    """
+    mu = laminar_viscosity(model, w_f[:, T])
+    tn = jnp.einsum("nij,nj->ni", stress(mu, grad), normal)
+    work = w_f[:, U] * tn[:, 0] + w_f[:, V] * tn[:, 1]
+    k = mu * heat_capacity(model) / model.prandtl
+    q = k * jnp.einsum("nk,nk->n", grad[:, T, :], normal)
+    q = jnp.where(heat, q, 0.0)
+    return -jnp.stack((jnp.zeros_like(mu), tn[:, 0], tn[:, 1], work + q), axis=1)
+
+
+def boundary_viscous_flux(model, bc, grad, w_b, normal):
+    """-F_v.n through boundary faces (n_bfaces, 4).
+
+    Walls: stress of the face gradient, heat flux only where the wall is
+    isothermal. Slip walls and symmetry: none. Other kinds: the full flux
+    with the boundary state.
+    """
+    kind = bc.kind
+    adiabatic = (kind == WALL) & (bc.value[:, T] <= 0.0)
+    flux = viscous_flux(model, grad, w_b, normal, heat=~adiabatic)
+    return jnp.where((kind == SYMMETRY)[:, None], 0.0, flux)
+
+
+def wall_traction(model, grad, w_b, normal):
+    """tau.n on boundary faces (n, 2), for the wall loads (forces.py)."""
+    mu = laminar_viscosity(model, w_b[:, T])
+    return jnp.einsum("nij,nj->ni", stress(mu, grad), normal)
+
+
+@partial(jax.jit, static_argnums=0)
+def wall_heat_flux(model, geom, bc, w):
+    """Heat flux q_w = -k dT/dn into the fluid per boundary face (n_bfaces,).
+
+    ``n`` is the outward normal of the fluid domain (into the wall): a wall
+    hotter than the fluid has q_w > 0. Zero at adiabatic walls.
+    """
+    w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
+    grad = lsq_gradient(geom, w, w_b)
+    g_b = boundary_face_gradient(geom, w, w_b, grad, model.viscous_gradient)
+    return -boundary_viscous_flux(model, bc, g_b, w_b, geom.b_normal)[:, 3]
+
+
 # -- residual ---------------------------------------------------------------------
 
 
@@ -459,18 +584,21 @@ def limiter(model, geom, bc, w):
     return _limiter(model, geom, w, w_b, lsq_gradient(geom, w, w_b))
 
 
-def face_states(model, geom, bc, w, order, psi=None):
+def face_states(model, geom, bc, w, order, psi=None, w_b=None, grad=None):
     """Convective face states (left, right, boundary-inner) of order 1 or 2.
 
     Second order: MUSCL with the limiter (or the frozen ``psi``); faces with
     a non-physical reconstructed state (p <= 0 or T <= 0 on either side) use
-    the cell values.
+    the cell values. ``w_b`` and ``grad``: the first-order boundary states
+    and the cell gradients, if already computed.
     """
     o, n, b = geom.f_owner, geom.f_neigh, geom.b_owner
     if order != 2:
         return w[o], w[n], w[b]
-    w_b = boundary_state(bc, geom.b_normal, w[b])
-    grad = lsq_gradient(geom, w, w_b)
+    if w_b is None:
+        w_b = boundary_state(bc, geom.b_normal, w[b])
+    if grad is None:
+        grad = lsq_gradient(geom, w, w_b)
     if psi is None:
         psi = _limiter(model, geom, w, w_b, grad)
     w_l, w_r, w_in = reconstruct(geom, w, grad, psi)
@@ -485,11 +613,23 @@ def face_states(model, geom, bc, w, order, psi=None):
 def residual(model, geom, bc, w, order, params=None, psi=None):
     """Residual R(V), shape (n_cells, 4): net outflow of mass, momentum, energy.
 
+    Convective minus viscous flux (the latter if ``model.viscosity`` > 0).
     ``params`` (the scheme parameters of the problem interface) is unused.
     """
-    w_l, w_r, w_in = face_states(model, geom, bc, w, order, psi)
+    viscous = model.viscosity > 0.0
+    w_b = grad = None
+    if viscous or order == 2:
+        w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
+        grad = lsq_gradient(geom, w, w_b)
+    w_l, w_r, w_in = face_states(model, geom, bc, w, order, psi, w_b, grad)
     f_flux = _flux(model, w_l, w_r, geom.f_normal)
     b_flux = boundary_convective_flux(model, bc, geom.b_normal, w_in)
+    if viscous:
+        o, n = geom.f_owner, geom.f_neigh
+        g_f = interior_face_gradient(geom, w, grad, model.viscous_gradient, model.alpha)
+        g_b = boundary_face_gradient(geom, w, w_b, grad, model.viscous_gradient)
+        f_flux = f_flux + viscous_flux(model, g_f, 0.5 * (w[o] + w[n]), geom.f_normal)
+        b_flux = b_flux + boundary_viscous_flux(model, bc, g_b, w_b, geom.b_normal)
     return divergence(geom, f_flux, b_flux)
 
 
@@ -531,14 +671,35 @@ def non_physical_faces(model, geom, bc, w, order=2, psi=None):
 
 
 def interior_flux(model, params, w_o, w_n, normal, delta):
-    """Compact first-order flux through an interior face (for the Jacobian)."""
-    return _flux(model, w_o[None], w_n[None], normal[None])[0]
+    """Compact first-order flux through an interior face (for the Jacobian).
+
+    Viscous part: the two-point face gradient (the normal derivative of the
+    face-gradient scheme, as the incompressible solver).
+    """
+    conv = _flux(model, w_o[None], w_n[None], normal[None])[0]
+    if model.viscosity > 0.0:
+        dn = jnp.dot(delta, normal)
+        if model.viscous_gradient == "alpha-damping":
+            coeff = model.alpha / dn
+        else:
+            coeff = dn / jnp.dot(delta, delta)
+        g = (coeff * (w_n - w_o))[:, None] * normal[None, :]
+        w_f = 0.5 * (w_o + w_n)
+        conv = conv + viscous_flux(model, g[None], w_f[None], normal[None])[0]
+    return conv
 
 
 def boundary_flux(model, params, w_o, bc_kind, bc_value, normal, delta):
     """Compact first-order flux through a boundary face (for the Jacobian)."""
     bc = BoundaryData(bc_kind[None], bc_value[None], model.gamma, model.gas_constant)
-    return boundary_convective_flux(model, bc, normal[None], w_o[None])[0]
+    conv = boundary_convective_flux(model, bc, normal[None], w_o[None])[0]
+    if model.viscosity > 0.0:
+        w_b = boundary_state(bc, normal[None], w_o[None])[0]
+        dn = jnp.dot(delta, normal)
+        g = ((w_b - w_o) / dn)[:, None] * normal[None, :]
+        visc = boundary_viscous_flux(model, bc, g[None], w_b[None], normal[None])
+        conv = conv + visc[0]
+    return conv
 
 
 # -- pseudo time --------------------------------------------------------------------
@@ -551,19 +712,27 @@ def scheme_parameters(model, w, bc):
 
 @partial(jax.jit, static_argnums=0)
 def spectral_radius(model, geom, w, params=None):
-    """Sum over faces of (|v_n| + c) * length, per cell."""
+    """Sum over faces of (|v_n| + c + lambda_v) * length, per cell.
+
+    Viscous part (laminar): lambda_v = (4/3 + gamma / Pr) mu / (rho d.n), the
+    sum of SU2's two viscous eigenvalue terms over the face distance.
+    """
     n = w.shape[0]
     o, nb, b = geom.f_owner, geom.f_neigh, geom.b_owner
-    w_f = 0.5 * (w[o] + w[nb])
-    c_f = sound_speed(model.gamma, model.gas_constant, w_f)
-    lam_f = (
-        jnp.abs(jnp.einsum("fk,fk->f", w_f[:, U:T], geom.f_normal)) + c_f
-    ) * geom.f_length
-    w_b = w[b]
-    c_b = sound_speed(model.gamma, model.gas_constant, w_b)
-    lam_b = (
-        jnp.abs(jnp.einsum("fk,fk->f", w_b[:, U:T], geom.b_normal)) + c_b
-    ) * geom.b_length
+
+    def lam(w_f, normal, delta):
+        c = sound_speed(model.gamma, model.gas_constant, w_f)
+        out = jnp.abs(jnp.einsum("fk,fk->f", w_f[:, U:T], normal)) + c
+        if model.viscosity > 0.0:
+            mu = laminar_viscosity(model, w_f[:, T])
+            rho = density(model.gas_constant, w_f)
+            dn = jnp.abs(jnp.einsum("fk,fk->f", delta, normal))
+            coeff = 4.0 / 3.0 + model.gamma / model.prandtl
+            out = out + coeff * mu / (rho * dn)
+        return out
+
+    lam_f = lam(0.5 * (w[o] + w[nb]), geom.f_normal, geom.f_delta) * geom.f_length
+    lam_b = lam(w[b], geom.b_normal, geom.b_delta) * geom.b_length
     return (
         jax.ops.segment_sum(lam_f, o, num_segments=n)
         + jax.ops.segment_sum(lam_f, nb, num_segments=n)

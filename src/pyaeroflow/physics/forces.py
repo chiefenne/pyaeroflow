@@ -40,19 +40,25 @@ class WallLoads(NamedTuple):
     traction: jnp.ndarray  # (n_bfaces, 2): tau . n
 
 
-@partial(jax.jit, static_argnums=(0, 4))
-def wall_loads(model, geom, bc, w, boundary_state=boundary_state):
+@partial(jax.jit, static_argnums=(0, 4, 5))
+def wall_loads(model, geom, bc, w, boundary_state=boundary_state, traction=None):
     """Pressure and viscous traction on every boundary face.
 
     ``w`` carries all variables of the model (3, or 4 with a turbulence
     model, with the matching ``boundary_state``); the traction uses the
     molecular viscosity (the eddy viscosity vanishes at walls).
+    ``traction(model, grad_b, w_b, normal) -> tau.n``: the flow family's
+    stress (compressible flow: mu(T) of the wall state); default the
+    constant-viscosity stress of the incompressible solver.
     """
     w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
     grad = lsq_gradient(geom, w, w_b)
     g_b = boundary_face_gradient(geom, w, w_b, grad, model.viscous_gradient)
-    traction = -viscous_flux(model, g_b[:, 1:3], geom.b_normal)[:, 1:]
-    return WallLoads(w_b[:, P], traction)
+    if traction is None:
+        tau_n = -viscous_flux(model, g_b[:, 1:3], geom.b_normal)[:, 1:]
+    else:
+        tau_n = traction(model, g_b, w_b, geom.b_normal)
+    return WallLoads(w_b[:, P], tau_n)
 
 
 class Forces(NamedTuple):

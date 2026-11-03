@@ -543,6 +543,15 @@ def _consistency(data, explicit, problems, notices, path):
     if physics["model"] == "euler":
         if has_mu or has_re:
             notices.append("physics.model = euler: fluid viscosity ignored")
+    elif compressible and not (has_mu or has_re):
+        notices.append(
+            "fluid: no viscosity or reynolds_number, mu from Sutherland's law of "
+            "air at the reference temperature (mu_ref 1.716e-5 Pa s at 273.15 K)"
+        )
+    elif has_mu and has_re:
+        problems.append(
+            "fluid: exactly one of viscosity and reynolds_number is required"
+        )
     elif has_mu == has_re:
         problems.append(
             "fluid: exactly one of viscosity and reynolds_number is required"
@@ -732,8 +741,8 @@ def _flow_rules(data, boundaries, farfields, compressible, problems, notices):
 
     Incompressible: fluid.density and farfield.velocity are required, the
     pressures are gauge pressures (default 0) and the compressible keys are
-    rejected. Compressible: physics.model = euler, steady, farfield.mach is
-    required, the pressures are absolute (farfield default 101325 Pa,
+    rejected. Compressible: physics.model = euler or laminar, steady,
+    farfield.mach is required, the pressures are absolute (farfield default 101325 Pa,
     temperature 288.15 K), outlets, inlets need their pressure and
     temperature, and the reference density, velocity and temperature follow
     from the single farfield stream: rho = p / (R T), U = M sqrt(gamma R T).
@@ -767,10 +776,10 @@ def _flow_rules(data, boundaries, farfields, compressible, problems, notices):
                 b["pressure"] = 0.0
         return
 
-    if physics["model"] != "euler":
+    if physics["model"] == "rans":
         problems.append(
-            "physics.flow = compressible: only physics.model = euler is available "
-            "so far (laminar and rans are planned)"
+            "physics.flow = compressible: physics.model = rans is planned (euler "
+            "and laminar are available)"
         )
     if data["time"]["mode"] == "unsteady":
         problems.append("physics.flow = compressible: time.mode = unsteady is planned")
@@ -810,6 +819,9 @@ def _flow_rules(data, boundaries, farfields, compressible, problems, notices):
             problems.append(f"{prefix}.temperature is required")
         elif kind == "wall" and any(b.get("velocity") or ()):
             problems.append(f"{prefix}.velocity: moving walls are incompressible only")
+        if kind == "wall" and b.get("temperature") is not None:
+            if physics["model"] == "euler":
+                notices.append(f"{prefix}.temperature ignored: Euler (slip wall)")
     if len(farfields) == 1:
         b = boundaries[farfields[0]]
         if b.get("mach") is not None:

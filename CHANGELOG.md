@@ -1,6 +1,27 @@
 # Changelog
 
-## Unreleased – compressible Euler solver (L1, stages C0 and C1)
+## Unreleased – compressible Euler and laminar solver (L1, stages C0–C2)
+
+- Compressible laminar Navier-Stokes (C2): `physics.model = "laminar"` with
+  `physics.flow = "compressible"`. Viscous stress with mu(T) by Sutherland's
+  law (`fluid.viscosity_model = "sutherland"` default or `"constant"`,
+  `fluid.sutherland_temperature` 110.4 K), heat flux k grad T with
+  k = mu c_p / Pr (`fluid.prandtl` 0.72), work of the stress in the energy
+  equation, as SU2's `CNSSolver`. `fluid.viscosity` / `reynolds_number`
+  refer to the reference temperature; with neither, mu follows from
+  Sutherland's law of air at the reference temperature. `wall` is a no-slip
+  wall, adiabatic or isothermal with the new `temperature` key. Viscous
+  terms in the compact Jacobian and in the pseudo-time spectral radius. The
+  wall CSV gets `T` and `q_w` (heat flux into the fluid); the
+  `kinematic_viscosity` field is mu(T)/rho per cell. New verification case
+  `pyaeroflow.cases.flat_plate_compressible` with the compressible
+  similarity solution (C_f +0.35 %, adiabatic wall temperature within
+  0.02 %); example `naca0012_laminar_m05.toml` (M 0.5, Re 5000 on the PyAero
+  C-mesh: C_D 0.05592 vs 0.05557, separation at x/c 0.808 vs 0.808,
+  Swanson & Langer 2016) and `examples/l1_laminar.py`; `docs/validation.md`
+  §13. `physics.model = "rans"` stays rejected for compressible flow.
+- Fix: the log of a compressible run printed the "Configuration" heading
+  twice.
 
 - New flow family `physics.flow = "compressible"`: density-based Euler
   solver for an ideal gas as SU2's compressible solver. Unknowns p, u, v, T

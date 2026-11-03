@@ -49,7 +49,7 @@ SCHEMA = {
             "incompressible",
             "Flow family: incompressible (SU2 INC: artificial compressibility, "
             "constant density) or compressible (density-based, ideal gas; "
-            "physics.model = euler only so far)",
+            "physics.model = euler or laminar so far)",
             choices=("incompressible", "compressible"),
         ),
         "model": Opt(
@@ -203,11 +203,39 @@ SCHEMA = {
             "J/(kg K)",
             minimum=0.0,
         ),
-        "viscosity": Opt("float", None, "Dynamic viscosity mu", "Pa s", minimum=0.0),
+        "viscosity": Opt(
+            "float",
+            None,
+            "Dynamic viscosity mu (compressible: at the reference temperature)",
+            "Pa s",
+            minimum=0.0,
+        ),
         "reynolds_number": Opt(
             "float",
             None,
-            "Re = rho U_ref L_ref / mu; alternative to viscosity",
+            "Re = rho U_ref L_ref / mu; alternative to viscosity (compressible: "
+            "of the reference state; without both, mu follows from Sutherland's "
+            "law at the reference temperature)",
+            minimum=0.0,
+        ),
+        "viscosity_model": Opt(
+            "string",
+            "sutherland",
+            "Compressible: mu(T) by Sutherland's law (scaled to fluid.viscosity "
+            "or reynolds_number at the reference temperature) or constant",
+            choices=("sutherland", "constant"),
+        ),
+        "sutherland_temperature": Opt(
+            "float",
+            110.4,
+            "Sutherland's constant S (compressible)",
+            "K",
+            minimum=0.0,
+        ),
+        "prandtl": Opt(
+            "float",
+            0.72,
+            "Laminar Prandtl number (compressible: conductivity mu c_p / Pr)",
             minimum=0.0,
         ),
     },
@@ -802,6 +830,14 @@ SCHEMA = {
 BOUNDARY_TYPES = {
     "wall": {
         "velocity": Opt("float2", [0.0, 0.0], "Wall velocity (moving wall)", "m/s"),
+        "temperature": Opt(
+            "float",
+            None,
+            "Wall temperature (compressible laminar: isothermal wall; default "
+            "adiabatic)",
+            "K",
+            minimum=0.0,
+        ),
     },
     "symmetry": {},
     "slip-wall": {},

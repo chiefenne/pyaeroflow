@@ -1,4 +1,4 @@
-"""Compressible Euler solver (L1): flux, boundary states, Jacobians, setup."""
+"""Compressible solver (L1): Euler and laminar fluxes, boundary states, setup."""
 
 import math
 
@@ -236,16 +236,10 @@ def test_positivity_limiter_keeps_pressure_and_temperature_positive():
     np.testing.assert_allclose(out[1], du[1])  # a 50 % drop passes
 
 
-def test_compressible_problem_rejects_viscosity_and_unsteady():
+def test_compressible_problem_rejects_unsteady():
     mesh = rectangle(3, 3)
     r_gas, ff = comp.freestream_conditions(0.5)
     names = ("bottom", "top", "left", "right")
-    with pytest.raises(ValueError, match="Euler"):
-        FlowProblem(
-            mesh,
-            comp.CompressibleModel(gas_constant=r_gas, viscosity=1e-3),
-            dict.fromkeys(names, ff),
-        )
     prob = FlowProblem(
         mesh, comp.CompressibleModel(gas_constant=r_gas), dict.fromkeys(names, ff)
     )
@@ -305,7 +299,7 @@ def test_compressible_case_resolves_reference_values():
 @pytest.mark.parametrize(
     ("change", "message"),
     [
-        (lambda r: r["physics"].update(model="laminar"), "only physics.model = euler"),
+        (lambda r: r["physics"].update(model="rans"), "rans is planned"),
         (lambda r: r["boundary"]["farfield"].pop("mach"), "mach is required"),
         (lambda r: r["boundary"]["farfield"].update(velocity=1.0), "take mach"),
         (lambda r: r.update(numerics={"convective_flux": "fds"}), "convective_flux"),
@@ -373,3 +367,186 @@ def test_explicit_mode_reduces_the_residual():
     w0 = prob.initial_state(ff["velocity"], ff["pressure"])
     result = prob.solve_explicit(w0, cfl=0.8, max_iterations=400, residual_drop=2.0)
     assert result.converged
+
+
+# -- laminar Navier-Stokes (C2) ---------------------------------------------------
+
+
+def test_sutherland_viscosity():
+    model = comp.CompressibleModel(viscosity=2e-4, sutherland_temperature=0.4)
+    t = jnp.asarray([1.0, 2.0])
+    mu = np.asarray(comp.laminar_viscosity(model, t))
+    np.testing.assert_allclose(mu, [2e-4, 2e-4 * 2.0**1.5 * 1.4 / 2.4], rtol=1e-14)
+    const = model._replace(viscosity_law="constant")
+    np.testing.assert_allclose(comp.laminar_viscosity(const, t), 2e-4)
+
+
+def test_viscous_flux_of_linear_fields():
+    """Shear flow u = a y with dT/dx = b: tau_xy = mu a, heat flux k b."""
+    r_gas = comp.gas_constant_for_mach(0.5)
+    model = comp.CompressibleModel(
+        gas_constant=r_gas, viscosity=1e-3, viscosity_law="constant"
+    )
+    a, b = 2.0, 0.3
+    grad = jnp.zeros((2, 4, 2)).at[:, comp.U, 1].set(a).at[:, comp.T, 0].set(b)
+    w_f = jnp.asarray([[r_gas, 0.5, 0.0, 1.0]] * 2)
+    normal = jnp.asarray([[0.0, 1.0], [1.0, 0.0]])
+    f = np.asarray(comp.viscous_flux(model, grad, w_f, normal))
+    k = 1e-3 * comp.heat_capacity(model) / model.prandtl
+    # Face normal to y: shear stress, its work u tau_xy, no heat flux.
+    np.testing.assert_allclose(f[0], [0.0, -1e-3 * a, 0.0, -0.5 * 1e-3 * a])
+    # Face normal to x: tau_yx on the y-momentum row, heat flux k b.
+    np.testing.assert_allclose(f[1], [0.0, 0.0, -1e-3 * a, -k * b])
+    adiabatic = comp.viscous_flux(model, grad, w_f, normal, heat=False)
+    assert float(adiabatic[1, 3]) == 0.0
+
+
+def test_wall_states_adiabatic_and_isothermal():
+    r_gas = comp.gas_constant_for_mach(0.5)
+    n = jnp.asarray([[0.0, -1.0]])
+    w_in = jnp.asarray([[r_gas, 0.8, 0.1, 1.05]])
+    adiabatic = comp.boundary_state(_bc(comp.WALL, [0, 0, 0, 0], r_gas), n, w_in)
+    np.testing.assert_allclose(adiabatic[0], [r_gas, 0.0, 0.0, 1.05])
+    hot = comp.boundary_state(_bc(comp.WALL, [0, 0, 0, 1.3], r_gas), n, w_in)
+    np.testing.assert_allclose(hot[0], [r_gas, 0.0, 0.0, 1.3])
+
+
+def _viscous_box(wall_temperature=None, order=2):
+    mesh = rectangle(6, 5, cell_type="mixed", perturb=0.3, seed=4)
+    r_gas, ff = comp.freestream_conditions(0.5, 2.0)
+    model = comp.CompressibleModel(
+        gas_constant=r_gas, viscosity=1e-2, spatial_order=order
+    )
+    wall = {"type": "wall"}
+    if wall_temperature is not None:
+        wall["temperature"] = wall_temperature
+    conditions = {
+        "bottom": wall,
+        "top": ff,
+        "left": ff,
+        "right": {"type": "pressure-outlet", "pressure": r_gas},
+    }
+    return FlowProblem(mesh, model, conditions), ff
+
+
+def test_viscous_freestream_is_preserved():
+    mesh = rectangle(5, 4, cell_type="triangle", perturb=0.3, seed=2)
+    r_gas, ff = comp.freestream_conditions(0.5, 3.0)
+    model = comp.CompressibleModel(gas_constant=r_gas, viscosity=1e-3)
+    prob = FlowProblem(
+        mesh, model, dict.fromkeys(("bottom", "top", "left", "right"), ff)
+    )
+    w = prob.initial_state(ff["velocity"], ff["pressure"])
+    assert np.abs(prob.residual(w, 0.0)).max() < 1e-13
+
+
+@pytest.mark.parametrize("wall_temperature", [None, 1.2])
+def test_viscous_jvp_matches_finite_difference(wall_temperature):
+    prob, ff = _viscous_box(wall_temperature)
+    rng = np.random.default_rng(3)
+    w = prob.initial_state(ff["velocity"], ff["pressure"])
+    w = w * (1.0 + rng.uniform(-0.05, 0.05, w.shape))
+    dw = rng.standard_normal(w.shape) * 1e-2
+    psi = prob.limiter(w)
+    jv = prob.jvp(w, dw, 0.0, psi)
+    eps = 1e-6
+    fd = (
+        prob.residual(w + eps * dw, 0.0, psi=psi)
+        - prob.residual(w - eps * dw, 0.0, psi=psi)
+    ) / (2 * eps)
+    np.testing.assert_allclose(jv, fd, rtol=1e-6, atol=1e-9)
+
+
+def test_viscous_first_order_jacobian_is_close_to_exact():
+    """The compact viscous Jacobian keeps the two-point part of the face
+    gradient and drops the LSQ-gradient terms: close to dense AD, not equal.
+    """
+    prob, ff = _viscous_box(order=1)
+    rng = np.random.default_rng(0)
+    w = prob.initial_state(ff["velocity"], ff["pressure"])
+    w = w * (1.0 + rng.uniform(-0.1, 0.1, w.shape))
+    sparse = prob.jacobian(w, 0.0).toarray()
+    dense = np.asarray(
+        jax.jacfwd(
+            lambda x: comp.residual(
+                prob.model, prob.geom, prob.bc, x.reshape(w.shape), 1
+            ).ravel()
+        )(jnp.asarray(w.ravel()))
+    )
+    err = np.linalg.norm(sparse - dense) / np.linalg.norm(dense)
+    assert err < 0.05, err
+
+
+def test_adiabatic_wall_has_no_heat_flux():
+    prob, ff = _viscous_box()
+    w = prob.initial_state(ff["velocity"], ff["pressure"])
+    w[:, comp.T] *= 1.0 + 0.1 * np.sin(np.arange(w.shape[0]))
+    faces = prob.boundary_faces(["bottom"])
+    np.testing.assert_array_equal(prob.wall_heat_flux(w)[faces], 0.0)
+    hot, _ = _viscous_box(wall_temperature=1.5)
+    assert np.all(hot.wall_heat_flux(w)[faces] > 0.0)  # hot wall heats the fluid
+
+
+def test_similarity_solution():
+    from pyaeroflow.cases.flat_plate_compressible import similarity
+
+    low = similarity(0.0, sutherland=None)
+    assert low.cf_sqrt_re == pytest.approx(0.664115, abs=1e-5)
+    ad = similarity(2.0)
+    assert ad.recovery_factor == pytest.approx(math.sqrt(0.72), rel=0.01)
+    assert ad.cf_sqrt_re < low.cf_sqrt_re
+    cold = similarity(0.5, wall_temperature=1.0)
+    assert cold.heat_flux_sqrt_re < 0.0  # below T_aw: heat into the wall
+
+
+def test_compressible_flat_plate():
+    from pyaeroflow.cases.flat_plate_compressible import solve
+
+    r = solve(nx=48, ny=32)
+    assert r.converged
+    sel = (r.x > 0.3) & (r.x < 0.9)
+    cf = r.cf[sel] * np.sqrt(1.0e5 * r.x[sel])
+    assert np.mean(cf) == pytest.approx(r.reference.cf_sqrt_re, rel=0.03)
+    assert np.mean(r.wall_temperature[sel]) == pytest.approx(
+        r.reference.wall_temperature, rel=1e-3
+    )
+
+
+def _laminar_raw(**fluid):
+    ff = {"type": "farfield", "mach": 0.5}
+    return {
+        "physics": {"flow": "compressible", "model": "laminar"},
+        "mesh": {"file": "m.su2"},
+        "fluid": fluid,
+        "reference": {"length": 1.0},
+        "boundary": {"bottom": {"type": "wall"}, "top": ff, "left": ff, "right": ff},
+    }
+
+
+def test_compressible_laminar_case_setup():
+    from pyaeroflow.run import setup
+
+    raw = _laminar_raw(reynolds_number=5000.0)
+    raw["boundary"]["bottom"]["temperature"] = 300.0
+    config = resolve(raw)
+    mesh = rectangle(3, 3)
+    problem, scaling, _, _ = setup(config, mesh)
+    m = problem.model
+    assert m.viscosity == pytest.approx(1.0 / 5000.0)
+    assert m.sutherland_temperature == pytest.approx(110.4 / 288.15)
+    assert problem.conditions["bottom"]["type"] == "wall"
+    assert problem.conditions["bottom"]["temperature"] == pytest.approx(300 / 288.15)
+    # Without viscosity or Re: Sutherland's law of air at T_ref.
+    config = resolve(_laminar_raw())
+    assert any("Sutherland" in n for n in config.notices)
+    problem, scaling, _, _ = setup(config, mesh)
+    mu = problem.model.viscosity * scaling.viscosity
+    assert mu == pytest.approx(1.7894e-5, rel=1e-3)
+
+
+def test_compressible_laminar_case_rules():
+    with pytest.raises(ConfigError, match="exactly one"):
+        resolve(_laminar_raw(reynolds_number=5000.0, viscosity=1.8e-5))
+    raw = _raw()
+    raw["boundary"]["airfoil"]["temperature"] = 300.0
+    assert any("ignored" in n for n in resolve(raw).notices)  # Euler

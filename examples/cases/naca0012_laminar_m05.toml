@@ -1,0 +1,67 @@
+# NACA 0012, laminar compressible flow at M = 0.5, alpha = 0, Re = 5000
+# (physics.flow = "compressible", physics.model = "laminar", L1 stage C2).
+# Reference: Swanson & Langer, NASA/TM-2016-219003 (case 1): CD = 0.05557
+# (pressure 0.02279, friction 0.03279), separation at x/c = 0.808,
+# Sutherland viscosity, Pr = 0.72, adiabatic wall.
+# Mesh: the PyAero C-mesh of examples/meshes (100k cells). An O-grid
+# resolves the wake and its recirculation poorly: on a 256 x 128 O-grid the
+# separation disappears and CD is 9 % high (incompressible solver too).
+
+[case]
+name = "naca0012_laminar_m05"
+
+[mesh]
+file = "../meshes/naca0012_pyaero_100k_y1.su2"  # airfoil, inlet, outlet, top, bottom
+
+[physics]
+flow = "compressible"
+model = "laminar"
+
+[fluid]
+reynolds_number = 5000.0          # rho U c / mu of the freestream
+# viscosity_model = "sutherland"  # default; S = 110.4 K, Pr = 0.72
+
+[reference]
+length = 1.0                      # chord (m): the length of the Reynolds number
+
+[numerics]
+limiter = "none"                  # shock-free: unlimited second order
+
+[solver]
+max_iterations = 200
+residual_drop = 10.0
+linear_solver = { type = "pardiso" }   # remove or use "direct" without pypardiso
+
+[boundary.airfoil]
+type = "wall"                     # no-slip, adiabatic (temperature = ... K: isothermal)
+
+[boundary.inlet]
+type = "farfield"
+mach = 0.5
+angle_of_attack = 0.0             # deg
+pressure = 101325.0               # Pa, absolute
+temperature = 288.15              # K
+
+[boundary.outlet]
+type = "farfield"
+mach = 0.5
+angle_of_attack = 0.0
+pressure = 101325.0
+temperature = 288.15
+
+[boundary.top]
+type = "farfield"
+mach = 0.5
+angle_of_attack = 0.0
+pressure = 101325.0
+temperature = 288.15
+
+[boundary.bottom]
+type = "farfield"
+mach = 0.5
+angle_of_attack = 0.0
+pressure = 101325.0
+temperature = 288.15
+
+[output]
+directory = "output/naca0012_laminar_m05"
