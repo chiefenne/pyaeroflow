@@ -494,6 +494,19 @@ def interior_convective_flux(model, w_l, w_r, normal):
     return _flux(model, w_l, w_r, normal)
 
 
+def jacobian_convective_flux(model, w_l, w_r, normal):
+    """Convective flux of the compact first-order Jacobian: plain Roe.
+
+    The low-Mach correction stays out of the Jacobian (the residual and the
+    Newton-Krylov products keep it): its velocity blending removes the
+    dissipation of the velocity jump where M -> 0, so that at a stagnation
+    point the first-order Jacobian plus the pseudo-time term becomes
+    singular from CFL ~ 300 on (NACA 0012 at M 0.15, alpha 0, 449 x 129:
+    50 perturbed PARDISO pivots at CFL 1000, solutions of 1e26).
+    """
+    return _flux(model, w_l, w_r, normal)
+
+
 # -- boundary conditions ---------------------------------------------------------
 
 
@@ -776,7 +789,7 @@ def interior_flux(model, params, w_o, w_n, normal, delta):
     Viscous part: the two-point face gradient (the normal derivative of the
     face-gradient scheme, as the incompressible solver).
     """
-    conv = interior_convective_flux(model, w_o[None], w_n[None], normal[None])[0]
+    conv = jacobian_convective_flux(model, w_o[None], w_n[None], normal[None])[0]
     if model.viscosity > 0.0:
         dn = jnp.dot(delta, normal)
         if model.viscous_gradient == "alpha-damping":

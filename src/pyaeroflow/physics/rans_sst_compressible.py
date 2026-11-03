@@ -308,7 +308,7 @@ def jacobian_coefficients(model, geom, bc, w):
 
 def interior_flux(model, params, w_o, w_n, mu_t, dc, normal, delta):
     """Compact first-order flux through an interior face (for the Jacobian)."""
-    conv = comp.interior_convective_flux(
+    conv = comp.jacobian_convective_flux(
         model, w_o[None, :NK], w_n[None, :NK], normal[None]
     )[0]
     dn = jnp.dot(delta, normal)

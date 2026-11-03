@@ -595,3 +595,36 @@ def test_low_mach_correction_jacobian_and_jvp():
         - prob.residual(w - eps * dw, 0.0, psi=psi)
     ) / (2 * eps)
     np.testing.assert_allclose(jv, fd, rtol=1e-6, atol=1e-9)
+
+
+def test_low_mach_correction_stays_out_of_the_first_order_jacobian():
+    """The compact Jacobian uses plain Roe (singular at stagnation otherwise)."""
+    prob, ff = _viscous_box(order=1)
+    rng = np.random.default_rng(9)
+    w = prob.initial_state(ff["velocity"], ff["pressure"])
+    w = w * (1.0 + rng.uniform(-0.05, 0.05, w.shape))
+    plain = prob.jacobian(w, 0.0).toarray()
+    prob.model = prob.model._replace(low_mach_correction=True)
+    prob._fi = partial(comp.interior_flux, prob.model)
+    prob._pattern = None
+    np.testing.assert_array_equal(prob.jacobian(w, 0.0).toarray(), plain)
+    assert not np.allclose(
+        prob.residual(w, 0.0), FlowProblem.residual(_viscous_box(order=1)[0], w, 0.0)
+    )
+
+
+def test_reset_analysis_forgets_the_pardiso_pattern():
+    from pyaeroflow.solver import linear
+
+    class Session:
+        pattern = ("indptr", "indices")
+
+    saved = linear._SESSION["obj"]
+    try:
+        linear._SESSION["obj"] = Session()
+        linear.reset_analysis()
+        assert linear._SESSION["obj"].pattern is None
+        linear._SESSION["obj"] = None
+        linear.reset_analysis()  # no session: nothing to do
+    finally:
+        linear._SESSION["obj"] = saved

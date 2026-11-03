@@ -262,7 +262,7 @@ def residual_linearize(model, geom, bc, w, order, params=None, psi=None):
 
 def interior_flux(model, params, w_o, w_n, normal, delta):
     """Compact first-order flux through an interior face (for the Jacobian)."""
-    conv = comp.interior_convective_flux(
+    conv = comp.jacobian_convective_flux(
         model, w_o[None, :NT], w_n[None, :NT], normal[None]
     )[0]
     dn = jnp.dot(delta, normal)
