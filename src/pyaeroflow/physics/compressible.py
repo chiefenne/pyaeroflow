@@ -137,9 +137,10 @@ class CompressibleModel(NamedTuple):
     alpha : float
     density : float
         Reference density of the force coefficients (freestream, 1).
-    turbulence : {"none", "sa-neg"}
-        Turbulence model (C3): "sa-neg" adds nu_tilde as fifth variable
-        (:mod:`pyaeroflow.physics.rans_compressible`).
+    turbulence : {"none", "sa-neg", "sst"}
+        Turbulence model: "sa-neg" (C3) adds nu_tilde as fifth variable
+        (:mod:`pyaeroflow.physics.rans_compressible`), "sst" (C4) k and omega
+        as fifth and sixth (:mod:`pyaeroflow.physics.rans_sst_compressible`).
     turbulence_spatial_order : int
         1 or 2: convective states of the turbulence equation.
     prandtl_turbulent : float
@@ -172,8 +173,8 @@ class CompressibleModel(NamedTuple):
 
     @property
     def n_var(self):
-        """Number of variables: p, u, v, T (and nu_tilde with SA-neg)."""
-        return 5 if self.turbulence == "sa-neg" else 4
+        """Number of variables: p, u, v, T (and nu_tilde, or k and omega)."""
+        return {"sa-neg": 5, "sst": 6}.get(self.turbulence, 4)
 
 
 def gas_constant_for_mach(mach, gamma=1.4):
@@ -193,6 +194,14 @@ class BoundaryData(NamedTuple):
     gamma, gas_constant : float
     nu_tilde : float array, shape (n_bfaces,) or None
         Prescribed SA working variable at inflow faces (zero elsewhere).
+    turbulence : float array, shape (n_bfaces, 2) or None
+        SST (C4): prescribed (k, omega) at inflow faces; at walls (0,
+        60 / (beta_1 d1^2)), the wall omega without its factor nu_w (set by
+        the driver, see :mod:`pyaeroflow.physics.rans_sst_compressible`).
+    viscosity : tuple of float or None
+        (mu at T = 1, Sutherland's S / T_ref, 1 for Sutherland's law and 0
+        for a constant viscosity): mu(T) of boundary states (the SST wall
+        omega).
     """
 
     kind: jnp.ndarray
@@ -200,6 +209,8 @@ class BoundaryData(NamedTuple):
     gamma: float = 1.4
     gas_constant: float = 1.0 / 1.4
     nu_tilde: jnp.ndarray = None
+    turbulence: jnp.ndarray = None
+    viscosity: tuple = None
 
 
 def _evaluate(spec, x, y):
@@ -233,6 +244,7 @@ def boundary_data(disc, conditions, model):
     kind = np.zeros(nb, dtype=np.int64)
     value = np.zeros((nb, 4))
     nu_tilde = np.zeros(nb)
+    turbulence = np.zeros((nb, 2))
     missing = set(disc.boundary_slices) - set(conditions)
     extra = set(conditions) - set(disc.boundary_slices)
     if missing or extra:
@@ -274,13 +286,36 @@ def boundary_data(disc, conditions, model):
         nu_tilde[sl] = np.broadcast_to(
             _evaluate(bc.get("nu_tilde", 0.0), x, y), x.shape
         )
+        for col, key in enumerate(("k", "omega")):
+            turbulence[sl, col] = np.broadcast_to(
+                _evaluate(bc.get(key, 0.0), x, y), x.shape
+            )
     return BoundaryData(
         jnp.asarray(kind),
         jnp.asarray(value),
         float(model.gamma),
         float(model.gas_constant),
         jnp.asarray(nu_tilde),
+        jnp.asarray(turbulence),
+        viscosity_parameters(model),
     )
+
+
+def viscosity_parameters(model):
+    """(mu_ref, S, Sutherland flag) of :attr:`BoundaryData.viscosity`."""
+    return (
+        float(model.viscosity),
+        float(model.sutherland_temperature),
+        1.0 if model.viscosity_law == "sutherland" else 0.0,
+    )
+
+
+def boundary_viscosity(params, t):
+    """mu(T) from :func:`viscosity_parameters` (traced inside BoundaryData)."""
+    mu_ref, s, sutherland = params
+    t = jnp.maximum(t, 1e-12)
+    law = t**1.5 * (1.0 + s) / (t + s)
+    return mu_ref * jnp.where(sutherland > 0.5, law, jnp.ones_like(t))
 
 
 def lsq_include(conditions, n_var=4):

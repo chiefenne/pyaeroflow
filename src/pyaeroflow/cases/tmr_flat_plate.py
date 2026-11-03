@@ -103,7 +103,7 @@ def solve(
     """Run the turbulent flat plate and evaluate C_f(x) and the drag.
 
     ``mach`` (e.g. 0.2, the TMR value) runs the compressible solver (L1,
-    SA-neg only): freestream rho = U = T = 1, adiabatic plate, velocity
+    SA-neg or SST): freestream rho = U = T = 1, adiabatic plate, velocity
     inlet with T = 1, static-pressure outlet at p_inf, Sutherland's law with
     the TMR reference temperature of 540 R. C_f and C_D use q = rho U^2 / 2
     of the freestream as in the incompressible case. ``low_mach_correction``
@@ -132,7 +132,7 @@ def solve(
     mesh = plate_mesh(nx_plate, nx_front, ny, reynolds)
     if mach is not None:
         return _solve_compressible(
-            mesh, mach, nu, nt_inf, settings, coupling, low_mach_correction
+            mesh, mach, nu, turb, settings, coupling, low_mach_correction, turbulence
         )
     conditions = {
         "left": {"type": "velocity-inlet", "velocity": (u_inf, 0.0), **turb},
@@ -166,10 +166,9 @@ def solve(
 
 
 def _solve_compressible(
-    mesh, mach, nu, nt_inf, settings, coupling, low_mach_correction
+    mesh, mach, nu, turb, settings, coupling, low_mach_correction, turbulence
 ):
     r_gas, ff = comp.freestream_conditions(mach)
-    turb = {"nu_tilde": nt_inf}
     conditions = {
         "left": {
             "type": "velocity-inlet",
@@ -186,14 +185,17 @@ def _solve_compressible(
         gas_constant=r_gas,
         viscosity=nu,
         sutherland_temperature=TMR_SUTHERLAND,
-        turbulence="sa-neg",
+        turbulence=turbulence,
         coupling=coupling,
         limiter="none",  # smooth flow; as the incompressible default
         low_mach_correction=low_mach_correction,
     )
     problem = IncompressibleProblem(mesh, model, conditions)
+    k_omega = (turb["k"], turb["omega"]) if turbulence == "sst" else None
     result = problem.solve(
-        problem.initial_state((1.0, 0.0), r_gas, nu_tilde=nt_inf),
+        problem.initial_state(
+            (1.0, 0.0), r_gas, nu_tilde=turb.get("nu_tilde"), k_omega=k_omega
+        ),
         settings
         or PseudoTimeSettings(
             residual_drop=8.0,
@@ -201,7 +203,9 @@ def _solve_compressible(
             linear=LinearSettings(type="pardiso"),
         ),
     )
-    return _evaluate(problem, result, nu, TMR_REFERENCE)
+    return _evaluate(
+        problem, result, nu, TMR_REFERENCE_SST if turbulence == "sst" else TMR_REFERENCE
+    )
 
 
 def _evaluate(problem, result, nu, reference):

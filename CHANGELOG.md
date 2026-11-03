@@ -1,6 +1,26 @@
 # Changelog
 
-## Unreleased – compressible Euler, laminar and SA-neg solver (L1, stages C0–C3)
+## Unreleased – compressible Euler, laminar, SA-neg and SST solver (L1, stages C0–C4)
+
+- Compressible RANS with k-omega SST (C4): `turbulence = "sst"` with
+  `physics.flow = "compressible"`, SU2's compressible SST-2003m. Rows
+  rho k and rho omega with the mass flux of the Roe flux, diffusion
+  (mu + sigma mu_t) grad k / grad omega (two-point normal derivative), the
+  incompressible SST sources times rho with the divergence part of the
+  production (P_k = nu_t S^2 - 2/3 k div v, also with `divergence` in
+  `sst.sources`, unchanged without it) and nu = mu(T) / rho in F1 and F2;
+  unknowns k and omega (columns 5 and 6). Mean flow with mu + mu_t, the eddy
+  conductivity and the -2/3 rho k delta_ij stress. Wall omega
+  60 nu_w / (beta_1 d1^2) with nu_w of the wall-face state (compressible
+  `BoundaryData` gets `turbulence` and `viscosity`). First-order Jacobian
+  with the residual's face viscosities (as incompressible SST), destruction
+  source blocks, conservative row-scaled pseudo-time blocks, p/T positivity
+  plus SU2's SST update limiter. New module
+  `physics/rans_sst_compressible.py`; `tmr_flat_plate.solve(mach=0.2,
+  turbulence="sst")`; example `naca0012_sst_m015.toml`;
+  `docs/validation.md` §15. Fixes: the `residual_nu_tilde` field of
+  compressible SA read the energy row, and the SST `k`, `omega` and residual
+  fields now follow the problem's turbulence column.
 
 - Compressible RANS with SA-neg (C3): `physics.model = "rans"` (turbulence
   `sa-neg`) with `physics.flow = "compressible"`. The turbulence row is the
@@ -23,8 +43,8 @@
   (Rieper, SU2 `LOW_MACH_CORR`): at M 0.15 plain Roe gives +10 to +26 %
   pressure drag on the TMR 225 x 65 and 113 x 33 grids; with it NACA 0012
   on 449 x 129 is CL 1.0914, CD 0.01270 (CFL3D same h 1.0909, 0.01273). y+ and nu_t/nu outputs use the local
-  wall density and viscosity in compressible flow. SST, transition models
-  and laminar regions stay incompressible only.
+  wall density and viscosity in compressible flow. Transition models and
+  laminar regions stay incompressible only.
 
 - Compressible laminar Navier-Stokes (C2): `physics.model = "laminar"` with
   `physics.flow = "compressible"`. Viscous stress with mu(T) by Sutherland's

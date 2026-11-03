@@ -301,8 +301,12 @@ def test_compressible_case_resolves_reference_values():
     ("change", "message"),
     [
         (
-            lambda r: r["physics"].update(model="rans", turbulence="sst"),
-            "sst is planned",
+            lambda r: r["physics"].update(
+                model="rans",
+                turbulence="sst",
+                transition={"model": "lm", "turbulence_intensity": 0.01},
+            ),
+            "incompressible only",
         ),
         (lambda r: r["boundary"]["farfield"].pop("mach"), "mach is required"),
         (lambda r: r["boundary"]["farfield"].update(velocity=1.0), "take mach"),

@@ -192,11 +192,12 @@ def _dynamic_eddy_viscosity(c):
 
 
 def _turbulent_kinetic_energy(c):
-    return c.w[:, 3] * c.scaling.velocity**2
+    return c.w[:, c.problem.turbulence_column] * c.scaling.velocity**2
 
 
 def _specific_dissipation(c):
-    return c.w[:, 4] * c.scaling.velocity / c.scaling.length
+    col = c.problem.turbulence_column + 1
+    return c.w[:, col] * c.scaling.velocity / c.scaling.length
 
 
 def _blending_f1(c):
@@ -223,11 +224,14 @@ def _effective_intermittency(c):
     return c.problem.effective_intermittency(c.w)
 
 
-def _residual(column, scale=None):
+def _residual(column, scale=None, turbulence=False):
     def compute(c):
         # Residual per unit cell volume (area in 2D), non-dimensional; ``scale``
-        # undoes a row scaling of the residual.
-        r = np.asarray(c.cell_residual())[:, column] / np.asarray(c.problem.geom.area)
+        # undoes a row scaling of the residual. ``turbulence``: ``column``
+        # counts from the first turbulence column (3 incompressible, 4
+        # compressible).
+        col = column + (c.problem.turbulence_column if turbulence else 0)
+        r = np.asarray(c.cell_residual())[:, col] / np.asarray(c.problem.geom.area)
         return r if scale is None else r / scale(c)
 
     return compute
@@ -538,7 +542,7 @@ FIELDS = (
         "nu_tilde residual per cell volume",
         "steady, implicit, turbulence = sa-neg",
         _implicit_sa,
-        _residual(3),
+        _residual(0, turbulence=True),
     ),
     Field(
         "residual_k",
@@ -546,7 +550,7 @@ FIELDS = (
         "k residual per cell volume",
         "steady, implicit, turbulence = sst",
         _implicit_sst,
-        _residual(3),
+        _residual(0, turbulence=True),
     ),
     Field(
         "residual_omega",
@@ -554,7 +558,7 @@ FIELDS = (
         "omega residual per cell volume",
         "steady, implicit, turbulence = sst",
         _implicit_sst,
-        _residual(4, _nu_nd),
+        _residual(1, _nu_nd, turbulence=True),
     ),
     Field(
         "residual_gamma",
@@ -732,6 +736,10 @@ def catalogue_table():
         ("SA + BCM", Capabilities("rans", "bcm", True, True, True)),
         ("SA + AFT", Capabilities("rans", "aft", True, True, True)),
         ("SST", Capabilities("rans", "none", True, True, True, "sst")),
+        (
+            "compressible SST",
+            Capabilities("rans", "none", True, True, True, "sst", "compressible"),
+        ),
         ("SST + LM", Capabilities("rans", "lm", True, True, True, "sst")),
     )
     head = "| Field | Unit | Description | Needs | " + " | ".join(c[0] for c in cases)

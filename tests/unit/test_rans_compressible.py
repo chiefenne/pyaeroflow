@@ -264,8 +264,6 @@ def test_compressible_rans_case_setup():
 
 
 def test_compressible_rans_case_rules():
-    with pytest.raises(ConfigError, match="sst is planned"):
-        resolve(_rans_raw(turbulence="sst"))
     with pytest.raises(ConfigError, match="incompressible only"):
         resolve(_rans_raw(transition={"model": "bcm", "turbulence_intensity": 0.01}))
 

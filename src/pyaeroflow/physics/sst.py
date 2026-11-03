@@ -78,7 +78,15 @@ def eddy_viscosity(k, omega, strain, f2):
 
 
 def sources(
-    k, omega, strain, f1, f2, k_grad_omega, production_switch=1.0, gamma_eff=None
+    k,
+    omega,
+    strain,
+    f1,
+    f2,
+    k_grad_omega,
+    production_switch=1.0,
+    gamma_eff=None,
+    divergence=None,
 ):
     """Return the sources per unit volume (s_k, s_omega) of SST-2003m.
 
@@ -91,13 +99,24 @@ def sources(
     ``gamma_eff`` (Langtry-Menter, :mod:`pyaeroflow.physics.lm`) multiplies
     P_k and min(max(gamma_eff, 0.1), 1) the k destruction; P_omega keeps the
     unmodified P_k (SU2).
+
+    ``divergence`` (compressible flow, :mod:`pyaeroflow.physics.rans_sst_compressible`):
+    div v; the production is then that of the full Boussinesq stress with
+    its -2/3 rho k delta_ij part, P_k = nu_t S^2 - 2/3 k div v (SU2,
+    ``CSourcePieceWise_TurbSST``), and P_omega = gamma P_k / nu_t, i.e.
+    S^2 - 2/3 zeta div v in place of S^2, both before the limiter.
     """
     k_pos = jnp.maximum(k, 0.0)
     z = zeta(omega, strain, f2)
     nu_t = k_pos / z
     s2 = strain**2
+    p_k_raw = nu_t * s2
+    s2_w = s2
+    if divergence is not None:
+        p_k_raw = p_k_raw - 2.0 / 3.0 * k_pos * divergence
+        s2_w = s2 - 2.0 / 3.0 * z * divergence
     p_k = production_switch * jnp.maximum(
-        0.0, jnp.minimum(nu_t * s2, PROD_LIMIT * BETA_STAR * k_pos * omega)
+        0.0, jnp.minimum(p_k_raw, PROD_LIMIT * BETA_STAR * k_pos * omega)
     )
     gamma = blend(f1, GAMMA_1, GAMMA_2)
     beta = blend(f1, BETA_1, BETA_2)
@@ -105,7 +124,7 @@ def sources(
         k > 0.0,
         production_switch
         * gamma
-        * jnp.maximum(0.0, jnp.minimum(s2, PROD_LIMIT * BETA_STAR * omega * z)),
+        * jnp.maximum(0.0, jnp.minimum(s2_w, PROD_LIMIT * BETA_STAR * omega * z)),
         0.0,
     )
     cd = (1.0 - f1) * 2.0 * SIGMA_W2 * k_grad_omega / omega

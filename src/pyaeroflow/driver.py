@@ -6,7 +6,7 @@ provides the residual, Jacobian and pseudo-time term for the solvers in
 :class:`~pyaeroflow.physics.incompressible.IncompressibleModel` (SU2 INC,
 with the turbulence and transition models) or
 :class:`~pyaeroflow.physics.compressible.CompressibleModel` (density-based,
-Euler, laminar Navier-Stokes and SA-neg RANS). A flow family is a physics
+Euler, laminar Navier-Stokes, SA-neg and SST RANS). A flow family is a physics
 module with the same interface:
 ``build_boundary_data``, ``lsq_include``, ``scheme_parameters`` (the
 per-evaluation constants of the scheme that the residual, Jacobian and
@@ -29,7 +29,14 @@ from pyaeroflow.numerics.wall_distance import mesh_wall_distance, mesh_wall_norm
 from pyaeroflow.physics import compressible as comp
 from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
-from pyaeroflow.physics import lm, rans, rans_compressible, rans_sst, sst
+from pyaeroflow.physics import (
+    lm,
+    rans,
+    rans_compressible,
+    rans_sst,
+    rans_sst_compressible,
+    sst,
+)
 from pyaeroflow.solver import (
     JacobianPattern,
     PseudoTimeSettings,
@@ -206,8 +213,6 @@ class FlowProblem:
         self.compressible = self.flow is comp
         self.turbulent = model.turbulence != "none"
         if self.compressible and self.turbulent:
-            if model.turbulence == "sst":
-                raise ValueError("compressible flow: SST is planned (C4)")
             if model.transition != "none":
                 raise ValueError("compressible flow: transition models are planned")
         if self.turbulent:
@@ -279,7 +284,10 @@ class FlowProblem:
             self.pinned_cell = cell
         self.model = model
         if self.compressible:
-            self.physics = rans_compressible if self.turbulent else comp
+            self.physics = {
+                "sa-neg": rans_compressible,
+                "sst": rans_sst_compressible,
+            }.get(model.turbulence, comp)
         else:
             self.physics = {"sa-neg": rans, "sst": rans_sst}.get(
                 model.turbulence, self.flow
@@ -300,7 +308,9 @@ class FlowProblem:
         with d1 = the centroid distance, on the flat plate at every grid
         level): the 1/y^2 profile of omega is not resolved by the wall cell.
         """
-        nu = model.viscosity / model.density
+        # Compressible flow: the factor 60 / (beta_1 d1^2); nu_w of the wall
+        # state is applied in the residual (rans_sst_compressible).
+        nu = 1.0 if self.compressible else model.viscosity / model.density
         delta, normal = np.asarray(self.geom.b_delta), np.asarray(self.geom.b_normal)
         d1 = 2.0 * np.abs(np.einsum("fk,fk->f", delta, normal))
         turb = np.array(self.bc.turbulence)
@@ -498,7 +508,7 @@ class FlowProblem:
         f_args = ()
         mask = None
         if self.model.turbulence == "sst":
-            mu_f, dc_f, mu_b, dc_b = rans_sst.jacobian_coefficients(
+            mu_f, dc_f, mu_b, dc_b = self.physics.jacobian_coefficients(
                 self.model, self.geom, self.bc, w
             )
             b_args = b_args + (self.bc.turbulence, mu_b, dc_b)
@@ -719,14 +729,16 @@ class FlowProblem:
             return np.zeros(self.mesh.n_cells)
         if self.model.turbulence == "sst":
             return np.asarray(
-                rans_sst.eddy_viscosity(self.model, self.geom, self.bc, jnp.asarray(w))
+                self.physics.eddy_viscosity(
+                    self.model, self.geom, self.bc, jnp.asarray(w)
+                )
             )
         return np.asarray(self.physics.eddy_viscosity(self.model, jnp.asarray(w)))
 
     def blending_f1(self, w):
         """Menter's first SST blending function per cell (SST only)."""
         return np.asarray(
-            rans_sst.blending_f1(self.model, self.geom, self.bc, jnp.asarray(w))
+            self.physics.blending_f1(self.model, self.geom, self.bc, jnp.asarray(w))
         )
 
     def boundary_faces(self, names):
@@ -850,8 +862,8 @@ class FlowProblem:
                 if k_omega is None:
                     speed = float(np.hypot(*velocity)) or 1.0
                     k_omega = sst_default_values(nu, speed)
-                w[:, rans_sst.NK] = k_omega[0]
-                w[:, rans_sst.NW] = k_omega[1]
+                w[:, self.physics.NK] = k_omega[0]
+                w[:, self.physics.NW] = k_omega[1]
                 if self.model.transition == "lm":
                     speed = float(np.hypot(*velocity)) or 1.0
                     w[:, rans_sst.NGL] = 1.0
@@ -1089,6 +1101,13 @@ class FlowProblem:
         """
         if self.compressible:
             positivity = self._positivity_limiter()
+            if self.model.turbulence == "sst":
+                turbulence = self._sst_limiter(whole_cell=whole_cell)
+
+                def limit_sst(u, du, r=None, tau=None):
+                    return turbulence(u, positivity(u, du), r, tau)
+
+                return limit_sst
             cap = self._nu_tilde_limiter(factor)
             if cap is None:
                 return positivity
@@ -1174,8 +1193,9 @@ class FlowProblem:
         coupled update no longer fits together and can raise the residual
         at any step length.
         """
-        groups = [[rans_sst.NK, rans_sst.NW]]
-        clips = [(rans_sst.NK, SST_K_LIMITS), (rans_sst.NW, SST_OMEGA_LIMITS)]
+        nk, nw = self.physics.NK, self.physics.NW
+        groups = [[nk, nw]]
+        clips = [(nk, SST_K_LIMITS), (nw, SST_OMEGA_LIMITS)]
         guard = guard and self.model.transition == "lm"
         if self.model.transition == "lm":
             groups.append(
