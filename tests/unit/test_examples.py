@@ -17,6 +17,8 @@ GENERATED = {
     "plate_rans_96x64.su2",
     "plate_transition_96x64.su2",
     "plate_lm_120x56.su2",
+    "naca0012_euler_ogrid_192x64.su2",
+    "ramp_10deg_96x64.su2",
 }
 
 

@@ -285,22 +285,24 @@ def test_forcing_term_is_part_of_the_resume_state():
         assert callback.info["solver_state"]()["eta"] == expected
 
 
-def test_beta2_tracker_follows_the_accepted_state():
-    """beta^2 of the Jacobian and JVP is that of the accepted state, not of a
-    rejected trial that the residual evaluated last."""
+def test_parameter_tracker_follows_the_accepted_state():
+    """The scheme parameters (beta^2) of the Jacobian and JVP are those of the
+    accepted state, not of a rejected trial that the residual evaluated last."""
     from types import SimpleNamespace
 
-    from pyaeroflow.driver import IncompressibleProblem
+    from pyaeroflow.driver import FlowProblem
 
     calls = []
-    stub = SimpleNamespace(beta2=lambda w: calls.append(1) or float(np.max(w)))
-    at = IncompressibleProblem.beta2_tracker(stub)
+    stub = SimpleNamespace(
+        scheme_parameters=lambda w: calls.append(1) or float(np.max(w))
+    )
+    at = FlowProblem.parameter_tracker(stub)
     accepted = np.array([1.0, 2.0])
     assert at(accepted) == 2.0
     assert at(accepted) == 2.0  # same array: cached
     assert len(calls) == 1
     trial = np.array([np.nan, 5.0])  # a rejected trial evaluated meanwhile
-    stub.beta2(trial)
+    stub.scheme_parameters(trial)
     assert at(accepted) == 2.0  # still the accepted state's value
     assert at(trial.copy()) != 2.0 or np.isnan(at(trial.copy()))
 

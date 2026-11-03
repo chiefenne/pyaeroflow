@@ -5,8 +5,10 @@ python examples/cases/make_meshes.py
 
 from pathlib import Path
 
+from pyaeroflow.cases.oblique_shock import ramp_mesh
 from pyaeroflow.cases.tmr_flat_plate import plate_mesh
 from pyaeroflow.mesh import annulus, rectangle, write_su2
+from pyaeroflow.mesh.airfoil import airfoil_ogrid, airfoil_points
 
 HERE = Path(__file__).parent
 
@@ -38,6 +40,15 @@ def main():
         ),
         "plate_rans_96x64.su2": plate_mesh(96, 24, 64, reynolds=5.0e6),
         "plate_transition_96x64.su2": plate_mesh(96, 24, 64, reynolds=5.0e5),
+        # Compressible Euler (L1): NACA 0012 O-grid, farfield at 100 chords,
+        # and the Mach 2 compression ramp of 10 degrees.
+        "naca0012_euler_ogrid_192x64.su2": airfoil_ogrid(
+            airfoil_points(192, cut=1.0),
+            64,
+            first_spacing=1.0e-3,
+            farfield_radius=100.0,
+        ),
+        "ramp_10deg_96x64.su2": ramp_mesh(96, 64, angle=10.0),
     }
     for name, mesh in meshes.items():
         write_su2(HERE / name, mesh)

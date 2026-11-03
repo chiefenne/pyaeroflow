@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased – compressible Euler solver (L1, stages C0 and C1)
+
+- New flow family `physics.flow = "compressible"`: density-based Euler
+  solver for an ideal gas as SU2's compressible solver. Unknowns p, u, v, T
+  (rho = p / (R T)), Roe flux with Harten's entropy fix
+  (`numerics.convective_flux = "roe"`, `numerics.entropy_fix`, default
+  0.001), MUSCL with the Venkatakrishnan(-Wang) limiter and a first-order
+  fallback on faces with a non-physical reconstruction, conservative
+  pseudo-time term (dU/dV) Lambda / CFL, per-cell update scaling that keeps
+  p and T positive. Boundary types: farfield (Roe flux against the
+  freestream, sub- and supersonic), slip wall / symmetry / Euler wall,
+  static-pressure outlet, total-conditions inlet, velocity inlet, periodic.
+  Case keys: `fluid.gamma`, `fluid.gas_constant`, `farfield.mach`,
+  `farfield.temperature`, absolute `pressure`, `reference.temperature`,
+  `total_temperature`, inlet `temperature`. Non-dimensional with the
+  freestream (p_inf = 1 / (gamma M^2)); output in SI with the new fields
+  `density`, `temperature`, `mach` and the residual fields `residual_rho`,
+  `residual_rhou`, `residual_rhov`, `residual_rhoE`. Steady runs only;
+  laminar, RANS, unsteady and the vortex correction are rejected for now.
+- Verification: Mach 2 flow over a 10 degree ramp (`pyaeroflow.cases.
+  oblique_shock`, example `ramp_10deg_m2.toml`): ramp pressure within 0.03 %
+  of the exact oblique-shock ratio 1.7066, converged to machine zero with
+  the limiter active. NACA 0012 Euler examples at M 0.5 and 0.8
+  (`naca0012_euler_m05.toml`, `naca0012_euler_m08.toml`, meshes from
+  `make_meshes.py`); results in `docs/validation.md` §12.
+- Refactor (C0, no change of the incompressible results): the problem class
+  is `FlowProblem` (the old name `IncompressibleProblem` stays as an alias);
+  the flow family is a physics module chosen by the model type, and the
+  per-evaluation scheme constant that was `beta2` is the opaque
+  `scheme_parameters` (beta^2 for INC, none for compressible; `beta2()`
+  remains as an alias, `beta2_tracker` became `parameter_tracker`).
+  `fluid.density` and `farfield.velocity` are now required by the
+  incompressible rules instead of the schema. Restart files store the flow
+  family; a file of the other family is rejected.
+
 ## 1.2.0 – LM solver defaults, numerics debug log, Cauchy guard (2026-11-02)
 
 - Langtry-Menter runs (`physics.transition.model = "lm"`) get new solver

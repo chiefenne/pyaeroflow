@@ -3,7 +3,9 @@
 Internally the solver works with rho_ref = U_ref = L_ref = 1 (D51): the mesh
 is scaled by 1 / L_ref, velocities by 1 / U_ref, pressures by
 1 / (rho_ref U_ref^2), the viscosity becomes 1 / Re. Results are scaled back
-before output.
+before output. Compressible flow (L1) takes the freestream density, speed
+and temperature as references, so that p_inf = 1 / (gamma M^2) and the
+non-dimensional gas constant is R T_ref / U_ref^2 = 1 / (gamma M^2).
 """
 
 import copy
@@ -27,7 +29,7 @@ from pyaeroflow.driver import (
     INFLOW_TYPES,
     SST_DEFAULT_INTENSITY,
     SST_DEFAULT_VISCOSITY_RATIO,
-    IncompressibleProblem,
+    FlowProblem,
 )
 from pyaeroflow.housekeeping import backup_name, latest_backup
 from pyaeroflow.io import (
@@ -49,6 +51,7 @@ from pyaeroflow.io.fields import (
 )
 from pyaeroflow.mesh import Mesh, read_mesh
 from pyaeroflow.mesh.ordering import order_boundary_faces
+from pyaeroflow.physics import compressible as comp
 from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
 from pyaeroflow.physics import lm, rans, rans_sst
@@ -65,6 +68,7 @@ class Scaling(NamedTuple):
     density: float
     velocity: float
     length: float
+    temperature: float = 1.0  # compressible flow; 1 otherwise
 
     @property
     def pressure(self):
@@ -202,7 +206,7 @@ def setup(config, mesh=None):
 
     Returns
     -------
-    problem : IncompressibleProblem
+    problem : FlowProblem
     scaling : Scaling
     w0 : ndarray
         Non-dimensional initial state.
@@ -212,6 +216,8 @@ def setup(config, mesh=None):
     cfg = config.data
     if mesh is None:
         mesh = read_mesh(config.resolve_path(cfg["mesh"]["file"]), cfg["mesh"]["scale"])
+    if cfg["physics"]["flow"] == "compressible":
+        return _setup_compressible(config, mesh)
     fluid, ref, physics = cfg["fluid"], cfg["reference"], cfg["physics"]
     scaling = Scaling(
         float(ref["density"]), float(ref["velocity"]), float(ref["length"])
@@ -306,7 +312,7 @@ def setup(config, mesh=None):
         ]
     nd_mesh = _scaled_mesh(mesh, 1.0 / scaling.length)
     point = ref["pressure_point"]
-    problem = IncompressibleProblem(
+    problem = FlowProblem(
         nd_mesh,
         model,
         conditions,
@@ -343,7 +349,7 @@ def setup(config, mesh=None):
     w0 = problem.initial_state(velocity, pressure, nu_tilde, k_omega)
     if init["restart"] is not None:
         restart = config.resolve_path(init["restart"])
-        w0, n_read = load_restart(restart, mesh, w0)
+        w0, n_read = load_restart(restart, mesh, w0, flow=problem.flow.FLOW)
         source = (
             f"boundary '{init['from_boundary']}'"
             if init["from_boundary"] is not None
@@ -355,6 +361,101 @@ def setup(config, mesh=None):
         config.notices.append(note)
     problem.turbulence_values = turbulence
     return problem, scaling, w0, mesh
+
+
+def _setup_compressible(config, mesh):
+    """:func:`setup` of a compressible case (L1: Euler).
+
+    References: rho, U and T of the farfield stream (or the reference
+    section); pressures are absolute and scaled by rho_ref U_ref^2,
+    temperatures by T_ref.
+    """
+    cfg = config.data
+    fluid, ref, num = cfg["fluid"], cfg["reference"], cfg["numerics"]
+    gamma, r_si = fluid["gamma"], fluid["gas_constant"]
+    scaling = Scaling(
+        float(ref["density"]),
+        float(ref["velocity"]),
+        float(ref["length"]),
+        float(ref["temperature"]),
+    )
+    r_nd = r_si * scaling.temperature / scaling.velocity**2
+    conditions = {}
+    for name, b in cfg["boundary"].items():
+        kind = b["type"]
+        if kind == "wall":
+            kind = "slip-wall"  # Euler (D39 R5)
+        entry = {"type": kind}
+        if kind == "periodic":
+            entry["partner"] = b["partner"]
+            entry["translation"] = tuple(t / scaling.length for t in b["translation"])
+        elif kind == "farfield":
+            a = math.radians(b["angle_of_attack"])
+            speed = b["mach"] * math.sqrt(gamma * r_si * b["temperature"])
+            u = speed / scaling.velocity
+            entry["velocity"] = (u * math.cos(a), u * math.sin(a))
+            entry["pressure"] = b["pressure"] / scaling.pressure
+            entry["temperature"] = b["temperature"] / scaling.temperature
+        elif kind == "velocity-inlet":
+            entry["velocity"] = tuple(v / scaling.velocity for v in b["velocity"])
+            entry["temperature"] = b["temperature"] / scaling.temperature
+        elif kind == "pressure-outlet":
+            entry["pressure"] = b["pressure"] / scaling.pressure
+        elif kind == "total-pressure-inlet":
+            entry["total_pressure"] = b["total_pressure"] / scaling.pressure
+            entry["total_temperature"] = b["total_temperature"] / scaling.temperature
+            entry["flow_direction"] = tuple(b["flow_direction"])
+        conditions[name] = entry
+    model = comp.CompressibleModel(
+        gamma=gamma,
+        gas_constant=r_nd,
+        spatial_order=num["spatial_order"],
+        limiter=num["limiter"],
+        limiter_threshold=num["limiter_threshold"],
+        entropy_fix=num["entropy_fix"],
+        viscous_gradient=num["viscous_gradient"],
+        alpha=num["alpha"],
+    )
+    problem = FlowProblem(
+        _scaled_mesh(mesh, 1.0 / scaling.length),
+        model,
+        conditions,
+        weight_exponent=num["gradient_weight_exponent"],
+    )
+    init = cfg["initial"]
+    if init["from_boundary"] is not None:
+        src = conditions[init["from_boundary"]]
+        velocity = src["velocity"]
+        if src["type"] == "farfield":
+            pressure, temperature = src["pressure"], src["temperature"]
+        else:  # velocity inlet: pressure of the reference state
+            pressure, temperature = r_nd * src["temperature"], src["temperature"]
+    else:  # restart without an explicit initial state: the reference state
+        velocity, pressure, temperature = (1.0, 0.0), r_nd, 1.0
+    w0 = problem.initial_state(velocity, pressure, temperature=temperature)
+    if init["restart"] is not None:
+        restart = config.resolve_path(init["restart"])
+        w0, _ = load_restart(restart, mesh, w0, flow=comp.FLOW)
+        config.notices.append(
+            f"initial state from restart file {_display_path(restart)}"
+        )
+    problem.turbulence_values = {}
+    return problem, scaling, w0, mesh
+
+
+def state_scale(problem, scaling):
+    """Factors from the non-dimensional state columns to SI units."""
+    if problem.compressible:
+        return np.array(
+            [scaling.pressure, scaling.velocity, scaling.velocity, scaling.temperature]
+        )
+    scale = [scaling.pressure, scaling.velocity, scaling.velocity]
+    if problem.model.turbulence == "sst":
+        scale += [scaling.velocity**2, scaling.velocity / scaling.length]
+    elif problem.turbulent:
+        scale.append(scaling.viscosity / scaling.density)
+    scale += [1.0] * (problem.model.n_var - len(scale))  # AFT, LM: dimensionless
+    return np.array(scale)
 
 
 def _turbulence_entry(tv, mu_nd, rho_nd, scaling):
@@ -373,7 +474,9 @@ def mesh_fingerprint(mesh):
     return hashlib.sha1(data.tobytes()).hexdigest()[:16]
 
 
-def save_restart(path, mesh, w_nd, step=None, time=None, state=None):
+def save_restart(
+    path, mesh, w_nd, step=None, time=None, state=None, flow="incompressible"
+):
     """Write the non-dimensional state and the mesh fingerprint (D45).
 
     The file is written next to ``path`` and renamed, so an interrupted write
@@ -382,7 +485,8 @@ def save_restart(path, mesh, w_nd, step=None, time=None, state=None):
     ``state``: the solver state that a continuation needs (``kind`` "steady":
     CFL, residual peaks, Newton-Krylov switch, limiter, farfield vortex;
     "unsteady": the solution one step earlier and the time step), see
-    :func:`load_restart_state`.
+    :func:`load_restart_state`. ``flow`` names the flow family of the
+    state (its columns differ: p, u, v[, turbulence] or p, u, v, T).
     """
     path = Path(path)
     extra = {}
@@ -401,6 +505,7 @@ def save_restart(path, mesh, w_nd, step=None, time=None, state=None):
             fingerprint=mesh_fingerprint(mesh),
             n_cells=mesh.n_cells,
             version=__version__,
+            flow=flow,
             **extra,
         )
     os.replace(tmp, path)
@@ -419,8 +524,11 @@ class RestartWriter:
     inner limit waits for the next good one.
     """
 
-    def __init__(self, out_dir, name, mesh, output, after=0, loaded=None):
+    def __init__(
+        self, out_dir, name, mesh, output, after=0, loaded=None, flow="incompressible"
+    ):
         self.out_dir, self.name, self.mesh = out_dir, name, mesh
+        self.flow = flow
         self.every = output["restart_interval"]
         self.backup = output["restart_backup_interval"]
         self.backup_at = [
@@ -455,7 +563,13 @@ class RestartWriter:
             file = f"{self.name}.restart_{'ab'[self.written % 2]}.npz"
             self.written += 1
             save_restart(
-                self.out_dir / file, self.mesh, w, number, time, state and state()
+                self.out_dir / file,
+                self.mesh,
+                w,
+                number,
+                time,
+                state and state(),
+                self.flow,
             )
         due = False
         if self.backup and number // self.backup > self.buckets["backup"]:
@@ -467,7 +581,13 @@ class RestartWriter:
         if due:
             file = backup_name(self.name, number)
             save_restart(
-                self.out_dir / file, self.mesh, w, number, time, state and state()
+                self.out_dir / file,
+                self.mesh,
+                w,
+                number,
+                time,
+                state and state(),
+                self.flow,
             )
 
 
@@ -577,8 +697,11 @@ def _field_rows(cfg, mesh):
     return rows
 
 
-def load_restart(path, mesh, w_default):
+def load_restart(path, mesh, w_default, flow="incompressible"):
     """Read a restart file for ``mesh``; missing variables keep ``w_default``.
+
+    The file must hold a state of the same flow family (``flow``; files
+    without the entry are incompressible).
 
     A laminar restart used for a RANS case keeps the default nu_tilde, a RANS
     restart used for a laminar case drops it. The column count tells the
@@ -589,6 +712,11 @@ def load_restart(path, mesh, w_default):
     with np.load(path) as data:
         if str(data["fingerprint"]) != mesh_fingerprint(mesh):
             raise ValueError(f"restart file {path} belongs to a different mesh")
+        stored = str(data["flow"]) if "flow" in data.files else "incompressible"
+        if stored != flow:
+            raise ValueError(
+                f"restart file {path} holds a {stored} state, the case is {flow}"
+            )
         w = np.array(data["w"], dtype=float)
     n = min(w.shape[1], w_default.shape[1])
     sst_family = (5, 7)
@@ -766,14 +894,10 @@ def run_case(path, console=True, mesh=None, restart_mode="continue"):
             n_steps = int(result.history["iteration"][-1])
             t_phys = None
     restart_file = out_dir / backup_name(name, n_steps)  # the final backup (D56)
-    save_restart(restart_file, mesh, result.u, n_steps, t_phys, state)
-    scale = [scaling.pressure, scaling.velocity, scaling.velocity]
-    if problem.model.turbulence == "sst":
-        scale += [scaling.velocity**2, scaling.velocity / scaling.length]
-    elif problem.turbulent:
-        scale.append(scaling.viscosity / scaling.density)
-    scale += [1.0] * (problem.model.n_var - len(scale))  # AFT: dimensionless
-    w = result.u * np.array(scale)
+    save_restart(
+        restart_file, mesh, result.u, n_steps, t_phys, state, problem.flow.FLOW
+    )
+    w = result.u * state_scale(problem, scaling)
     return RunResult(
         config,
         mesh,
@@ -821,7 +945,7 @@ def _pseudo_time_settings(cfg):
 
 def _residual_names(problem):
     """Names of the residual columns in the log and history."""
-    names = ("p", "u", "v")
+    names = problem.flow.RESIDUAL_NAMES
     if problem.model.turbulence == "sst":
         names += ("k", "om")
     elif problem.turbulent:
@@ -926,6 +1050,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
         cfg["output"],
         after=after or 0,
         loaded=(resume or {}).get("file"),
+        flow=problem.flow.FLOW,
     )
 
     timing = {"setup": None}
@@ -1302,6 +1427,7 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         cfg["output"],
         after=after or 0,
         loaded=(resume or {}).get("file"),
+        flow=problem.flow.FLOW,
     )
     timing = {"setup": None}
     timers.reset()
@@ -1765,6 +1891,9 @@ def _mode_rows(cfg):
 def _log_setup(log, config, problem, scaling, mesh):
     cfg = config.data
     log.section("Configuration")
+    if problem.compressible:
+        _log_setup_compressible(log, config, problem, scaling, mesh)
+        return
     rows = [
         ("model", cfg["physics"]["model"]),
         ("density", f"{cfg['fluid']['density']} kg/m^3"),
@@ -1895,6 +2024,53 @@ def _log_setup(log, config, problem, scaling, mesh):
         config.notices.append(
             f"pressure pinned in cell {problem.pinned_cell} at ({c[0]:.4g}, {c[1]:.4g})"
         )
+    if config.notices:
+        log.section("Notices")
+        for note in config.notices:
+            log.write("  - " + note)
+
+
+def _log_setup_compressible(log, config, problem, scaling, mesh):
+    """Write the configuration, mesh and boundary sections (compressible)."""
+    cfg = config.data
+    fluid, num = cfg["fluid"], cfg["numerics"]
+    m = problem.model
+    log.section("Configuration")
+    rows = [
+        ("model", f"compressible {cfg['physics']['model']}"),
+        (
+            "fluid",
+            f"ideal gas, gamma {fluid['gamma']}, R {fluid['gas_constant']} J/(kg K)",
+        ),
+        (
+            "reference",
+            f"rho {scaling.density:.6g} kg/m^3, U {scaling.velocity:.6g} m/s, "
+            f"T {scaling.temperature:.6g} K, L {scaling.length} m",
+        ),
+        (
+            "non-dimensional",
+            f"R = {m.gas_constant:.6g} (= 1 / (gamma M^2) for the freestream)",
+        ),
+        (
+            "convective flux",
+            f"{num['convective_flux']}, entropy fix {num['entropy_fix']:g}, order "
+            f"{num['spatial_order']}, limiter {num['limiter']}",
+        ),
+        ("solver", cfg["solver"]["method"]),
+    ]
+    rows += _mode_rows(cfg)
+    rows += _field_rows(cfg, mesh)
+    rows.append(("resolved configuration", f"{config.name}.resolved.toml"))
+    log.table(rows)
+    log.section("Mesh")
+    scale = cfg["mesh"]["scale"]
+    log.write(
+        f"  file: {cfg['mesh']['file']}" + (f" (scale {scale})" if scale != 1 else "")
+    )
+    for line in mesh.summary().splitlines():
+        log.write("  " + line)
+    log.section("Boundary conditions")
+    log.table([(name, _describe_boundary(b)) for name, b in cfg["boundary"].items()])
     if config.notices:
         log.section("Notices")
         for note in config.notices:

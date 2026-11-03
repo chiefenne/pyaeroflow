@@ -1,8 +1,20 @@
-"""Set up and solve an incompressible flow problem (Python API, D41).
+"""Set up and solve a flow problem (Python API, D41).
 
-:class:`IncompressibleProblem` binds a mesh, a model and boundary conditions
-and provides the residual, Jacobian and pseudo-time term for the solvers in
-:mod:`pyaeroflow.solver`.
+:class:`FlowProblem` binds a mesh, a model and boundary conditions and
+provides the residual, Jacobian and pseudo-time term for the solvers in
+:mod:`pyaeroflow.solver`. The model selects the flow family (L1):
+:class:`~pyaeroflow.physics.incompressible.IncompressibleModel` (SU2 INC,
+with the turbulence and transition models) or
+:class:`~pyaeroflow.physics.compressible.CompressibleModel` (density-based,
+Euler). A flow family is a physics module with the same interface:
+``build_boundary_data``, ``lsq_include``, ``scheme_parameters`` (the
+per-evaluation constants of the scheme that the residual, Jacobian and
+pseudo-time term take frozen; beta^2 of the artificial compressibility for
+INC, none for the compressible solver), ``residual``, ``residual_jvp``,
+``residual_linearize``, ``limiter``, ``boundary_state``, ``interior_flux``,
+``boundary_flux``, ``time_term_blocks``, ``explicit_update`` and the
+constants ``FLOW``, ``POSITIVE_COLUMNS`` and ``RESIDUAL_NAMES``.
+:class:`IncompressibleProblem` is the older name of :class:`FlowProblem`.
 """
 
 from functools import partial
@@ -13,6 +25,7 @@ import numpy as np
 
 from pyaeroflow.numerics import build_geometry, lsq_gradient
 from pyaeroflow.numerics.wall_distance import mesh_wall_distance, mesh_wall_normal
+from pyaeroflow.physics import compressible as comp
 from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
 from pyaeroflow.physics import lm, rans, rans_sst, sst
@@ -40,12 +53,20 @@ SST_MAX_UPDATE = 0.99
 # with AddClippedSolution after every update), non-dimensional here.
 SST_K_LIMITS = (1.0e-10, 1.0e10)
 SST_OMEGA_LIMITS = (1.0e-4, 1.0e15)
+# Compressible flow: an update may lower p or T by at most this fraction of
+# the current value (the cell's update is scaled), so that they stay positive.
+COMPRESSIBLE_MAX_DROP = 0.8
 
 
 def sst_default_values(nu, speed):
     """Default SST (k, omega) for the inflow speed (Tu 0.1 %, nu_t/nu = 1)."""
     k = 1.5 * (SST_DEFAULT_INTENSITY * max(speed, 1e-12)) ** 2
     return sst.freestream(SST_DEFAULT_VISCOSITY_RATIO, k, nu)
+
+
+def flow_module(model):
+    """Physics module of the model's flow family (incompressible or compressible)."""
+    return comp if isinstance(model, comp.CompressibleModel) else inc
 
 
 def _inflow_speed(bc):
@@ -88,7 +109,7 @@ class FarfieldVortex:
 # in the freestream, which would swamp the boundary-layer statistics.
 GAMMA_DIAGNOSTICS_DISTANCE = 0.05
 
-# Per-iteration transition diagnostics of :meth:`IncompressibleProblem.solve`:
+# Per-iteration transition diagnostics of :meth:`FlowProblem.solve`:
 # cells with gamma > 0.01 (within GAMMA_DIAGNOSTICS_DISTANCE of a wall),
 # area-weighted sum of gamma, cells whose model
 # intermittency changed by more than 0.05 since the last accepted iteration,
@@ -118,18 +139,20 @@ def _apply_linear(lin, dw):
     return lin(dw)
 
 
-class IncompressibleProblem:
-    """An incompressible flow case on a mesh.
+class FlowProblem:
+    """A flow case on a mesh.
 
     Parameters
     ----------
     mesh : Mesh
-    model : IncompressibleModel
+    model : IncompressibleModel or CompressibleModel
+        The model's type selects the flow family (:func:`flow_module`).
         If ``model.pin`` is None and no boundary fixes the pressure level
         (pressure outlet or farfield), the pressure of the cell nearest
         ``pressure_point`` is pinned to ``pin_pressure`` (D39 R2).
     boundary_conditions : dict of str to dict
-        See :func:`pyaeroflow.physics.incompressible.boundary_data`. Periodic
+        See :func:`pyaeroflow.physics.incompressible.boundary_data` or
+        :func:`pyaeroflow.physics.compressible.boundary_data`. Periodic
         pairs are given as ``{"type": "periodic", "partner": name,
         "translation": (dx, dy)}`` on one of the two boundaries.
     weight_exponent : float
@@ -178,7 +201,14 @@ class IncompressibleProblem:
                 f"unknown boundaries {sorted(unknown)}"
             )
         self.mesh = mesh
+        self.flow = flow_module(model)
+        self.compressible = self.flow is comp
         self.turbulent = model.turbulence != "none"
+        if self.compressible:
+            if self.turbulent:
+                raise ValueError("compressible flow: turbulence models are planned")
+            if model.viscosity > 0.0:
+                raise ValueError("compressible flow: only the Euler equations so far")
         if self.turbulent:
             if model.turbulence not in TURBULENCE_MODELS:
                 raise ValueError(f"unknown turbulence model '{model.turbulence}'")
@@ -204,7 +234,7 @@ class IncompressibleProblem:
                 name: {**defaults.get(name, {}), **bc} for name, bc in regular.items()
             }
         self.disc = build_geometry(
-            mesh, weight_exponent, periodic, inc.lsq_include(regular, model.n_var)
+            mesh, weight_exponent, periodic, self.flow.lsq_include(regular, model.n_var)
         )
         self.geom = self.disc.geom
         if self.turbulent:
@@ -226,7 +256,7 @@ class IncompressibleProblem:
                 self.geom = self.geom._replace(
                     wall_normal=jnp.asarray(mesh_wall_normal(mesh, nearest))
                 )
-        self.bc = inc.boundary_data(self.disc, regular, model.density)
+        self.bc = self.flow.build_boundary_data(self.disc, regular, model)
         if model.turbulence == "sst":
             self._set_wall_omega(model)
             if model.transition == "lm":
@@ -247,7 +277,9 @@ class IncompressibleProblem:
             model = model._replace(pin=(cell, float(pin_pressure)))
             self.pinned_cell = cell
         self.model = model
-        self.physics = {"sa-neg": rans, "sst": rans_sst}.get(model.turbulence, inc)
+        self.physics = {"sa-neg": rans, "sst": rans_sst}.get(
+            model.turbulence, self.flow
+        )
         self._pattern = None  # Jacobian sparsity, built at the first assembly
         self._fi = partial(self.physics.interior_flux, model)
         self._fb = partial(self.physics.boundary_flux, model)
@@ -342,7 +374,7 @@ class IncompressibleProblem:
         """Reject a prescribed net inflow without a pressure boundary (D39 R3)."""
         if any(bc["type"] in PRESSURE_FIXING for bc in self.conditions.values()):
             return
-        v = np.asarray(self.bc.value)[:, 1:]
+        v = np.asarray(self.bc.value)[:, 1:3]
         n = np.asarray(self.geom.b_normal)
         flux = np.sum(np.einsum("fk,fk->f", v, n) * np.asarray(self.geom.b_length))
         scale = np.sum(
@@ -356,30 +388,34 @@ class IncompressibleProblem:
 
     # -- solver interface ---------------------------------------------------
 
-    def beta2(self, w):
-        """Artificial compressibility beta^2 for the current state."""
-        return inc.beta_squared(self.model, np.asarray(w)[:, :3], self.bc)
+    def scheme_parameters(self, w):
+        """Scheme parameters of the state ``w`` (beta^2 for INC, 0 otherwise)."""
+        return self.flow.scheme_parameters(self.model, w, self.bc)
 
-    def beta2_tracker(self):
-        """Return ``at(w)``: beta^2 of the state ``w``, cached for the last array.
+    # Older name (INC): the artificial compressibility beta^2.
+    beta2 = scheme_parameters
 
-        The residual takes beta^2 of the state it is evaluated at, including
-        rejected trial states. The Jacobian, the pseudo-time term and the
-        Jacobian-vector products belong to the accepted state, so they must
-        use its beta^2, not the one a rejected trial left behind. The solver
-        passes the same array object to all three during one iteration.
+    def parameter_tracker(self):
+        """Return ``at(w)``: scheme parameters of ``w``, cached for the last array.
+
+        The residual takes the parameters (beta^2) of the state it is
+        evaluated at, including rejected trial states. The Jacobian, the
+        pseudo-time term and the Jacobian-vector products belong to the
+        accepted state, so they must use its parameters, not the ones a
+        rejected trial left behind. The solver passes the same array object
+        to all three during one iteration.
         """
-        cache = {"w": None, "beta2": None}
+        cache = {"w": None, "params": None}
 
         def at(w):
             if w is not cache["w"]:
-                cache["w"], cache["beta2"] = w, self.beta2(w)
-            return cache["beta2"]
+                cache["w"], cache["params"] = w, self.scheme_parameters(w)
+            return cache["params"]
 
         return at
 
-    def residual(self, w, beta2, order=None, psi=None, gamma=None):
-        """R(w) for the current beta^2, spatial order and frozen limiter.
+    def residual(self, w, params, order=None, psi=None, gamma=None):
+        """R(w) for the scheme parameters, spatial order and frozen limiter.
 
         ``gamma`` is a given transition intermittency (see :meth:`solve`).
         """
@@ -392,13 +428,13 @@ class IncompressibleProblem:
                 self.bc,
                 jnp.asarray(w),
                 order,
-                beta2,
+                params,
                 psi,
                 **extra,
             )
         )
 
-    def jvp(self, w, dw, beta2, psi=None, gamma=None):
+    def jvp(self, w, dw, params, psi=None, gamma=None):
         """Exact dR/dw @ dw of the second-order residual (``jax.jvp``)."""
         extra = {} if gamma is None else {"gamma": gamma}
         return np.asarray(
@@ -409,13 +445,13 @@ class IncompressibleProblem:
                 jnp.asarray(w),
                 jnp.asarray(dw),
                 self.model.spatial_order,
-                beta2,
+                params,
                 psi,
                 **extra,
             )
         )
 
-    def linearize(self, w, beta2, psi=None, gamma=None):
+    def linearize(self, w, params, psi=None, gamma=None):
         """Return ``apply(dw) -> dR/dw(w) @ dw`` linearized once at ``w``.
 
         ``jax.linearize`` stores the intermediates of the residual and the
@@ -430,7 +466,7 @@ class IncompressibleProblem:
             self.bc,
             jnp.asarray(w),
             self.model.spatial_order,
-            beta2,
+            params,
             psi,
             **extra,
         )
@@ -444,7 +480,7 @@ class IncompressibleProblem:
         """Limiter values of the state ``w``, shape (n_cells, n_var)."""
         return self.physics.limiter(self.model, self.geom, self.bc, jnp.asarray(w))
 
-    def jacobian(self, w, beta2):
+    def jacobian(self, w, params):
         """First-order Jacobian, with the pinned row replaced if any.
 
         With a turbulence model the cell-local source Jacobian is added and,
@@ -479,14 +515,14 @@ class IncompressibleProblem:
             pin = (self.model.pin[0] * self.model.n_var + inc.P,)
         if self._pattern is None:
             self._pattern = self._structural_pattern(
-                w, beta2, b_args, f_args, mask, src
+                w, params, b_args, f_args, mask, src
             )
         return first_order_jacobian(
             self.geom,
             self._fi,
             self._fb,
             w,
-            params=beta2,
+            params=params,
             b_args=b_args,
             block_mask=mask,
             pattern=self._pattern,
@@ -495,7 +531,7 @@ class IncompressibleProblem:
             pin_rows=pin,
         )
 
-    def _structural_pattern(self, w, beta2, b_args, f_args, mask, src):
+    def _structural_pattern(self, w, params, b_args, f_args, mask, src):
         """Jacobian pattern on the structurally non-zero block entries (C2).
 
         The structure is the union of the non-zero entries over the current
@@ -508,11 +544,14 @@ class IncompressibleProblem:
         rng = np.random.default_rng(12345)
         w0 = np.asarray(w)
         states = [w0]
+        # Mean-flow columns shifted, except the positive ones (compressible
+        # p and T), which are scaled like the turbulence variables.
+        shifted = [c for c in range(3) if c not in self.flow.POSITIVE_COLUMNS]
         for _ in range(2):
             x = w0 * (1.0 + 0.3 * rng.uniform(-1.0, 1.0, w0.shape))
-            x[:, :3] = w0[:, :3] + 0.3 * rng.standard_normal(w0[:, :3].shape) * (
-                np.abs(w0[:, :3]).max(axis=0) + 1.0e-3
-            )
+            x[:, shifted] = w0[:, shifted] + 0.3 * rng.standard_normal(
+                w0[:, shifted].shape
+            ) * (np.abs(w0[:, shifted]).max(axis=0) + 1.0e-3)
             states.append(x)
         diag = []
         for x in states:
@@ -520,7 +559,7 @@ class IncompressibleProblem:
             diag.append(
                 np.asarray(
                     self.physics.time_term_blocks(
-                        self.model, self.geom, xj, beta2, 10.0
+                        self.model, self.geom, xj, params, 10.0
                     )
                 )
             )
@@ -535,7 +574,7 @@ class IncompressibleProblem:
             self._fi,
             self._fb,
             [jnp.asarray(x) for x in states],
-            beta2,
+            params,
             b_args,
             f_args,
             block_mask=mask,
@@ -543,7 +582,7 @@ class IncompressibleProblem:
         )
         return JacobianPattern(self.geom, self.model.n_var, masks)
 
-    def time_term(self, w, beta2, cfl, transition_cfl_max=None):
+    def time_term(self, w, params, cfl, transition_cfl_max=None):
         """Block-diagonal pseudo-time matrix Gamma_i Lambda_i / CFL.
 
         With ``transition_cfl_max`` (Langtry-Menter) the gamma and Re_thetat
@@ -551,7 +590,7 @@ class IncompressibleProblem:
         step for the transition equations, as their own solver has in SU2.
         """
         blocks = np.asarray(
-            self.physics.time_term_blocks(self.model, self.geom, w, beta2, cfl)
+            self.physics.time_term_blocks(self.model, self.geom, w, params, cfl)
         )
         if (
             transition_cfl_max is not None
@@ -563,13 +602,13 @@ class IncompressibleProblem:
             blocks[:, rows, :] *= cfl / transition_cfl_max
         return block_diagonal(blocks)
 
-    def explicit_update(self, w, r, beta2, cfl):
+    def explicit_update(self, w, r, params, cfl):
         """Explicit increment CFL / Lambda_i * Gamma_i^-1 R_i."""
         if self.turbulent:
             raise NotImplementedError("explicit mode is not available with RANS")
         return np.asarray(
-            inc.explicit_update(
-                self.model, self.geom, jnp.asarray(w), jnp.asarray(r), beta2, cfl
+            self.flow.explicit_update(
+                self.model, self.geom, jnp.asarray(w), jnp.asarray(r), params, cfl
             )
         )
 
@@ -687,6 +726,8 @@ class IncompressibleProblem:
         )
         if faces.size == 0:
             raise ValueError("the vortex correction needs a farfield boundary")
+        if self.compressible:
+            raise ValueError("the vortex correction is incompressible only")
         if boundaries is None:
             boundaries = [
                 n
@@ -734,9 +775,16 @@ class IncompressibleProblem:
         self.bc = self.bc._replace(value=jnp.asarray(value))
 
     def initial_state(
-        self, velocity=(0.0, 0.0), pressure=0.0, nu_tilde=None, k_omega=None
+        self,
+        velocity=(0.0, 0.0),
+        pressure=0.0,
+        nu_tilde=None,
+        k_omega=None,
+        temperature=1.0,
     ):
         """Uniform initial field, shape (n_cells, n_var); nu_tilde default 3 nu.
+
+        Compressible flow: (p, u, v, T) with the given ``temperature``.
 
         The SA-AFT columns start at gamma_tilde = 0 and n = 0 (freestream).
         SST takes ``k_omega`` = (k, omega); default Tu = 0.1 % of the given
@@ -747,6 +795,8 @@ class IncompressibleProblem:
         w[:, inc.P] = pressure
         w[:, inc.U] = velocity[0]
         w[:, inc.V] = velocity[1]
+        if self.compressible:
+            w[:, comp.T] = temperature
         if self.turbulent:
             nu = self.model.viscosity / self.model.density
             if self.model.turbulence == "sst":
@@ -839,7 +889,12 @@ class IncompressibleProblem:
         """
         w0 = self.initial_state() if w0 is None else w0
         resume = resume or {}
-        state = {"beta2": self.beta2(w0), "psi": None, "gamma": None, "model": None}
+        state = {
+            "params": self.scheme_parameters(w0),
+            "psi": None,
+            "gamma": None,
+            "model": None,
+        }
         if resume.get("psi") is not None:
             state["psi"] = jnp.asarray(resume["psi"])
         if vortex is not None and resume.get("vortex_gamma") is not None:
@@ -859,17 +914,17 @@ class IncompressibleProblem:
                 if resume.get("gamma") is not None:
                     state["gamma"] = jnp.asarray(resume["gamma"])
         uses_limiter = self.model.limiter != "none" and self.model.spatial_order == 2
-        beta2_at = self.beta2_tracker()
+        params_at = self.parameter_tracker()
 
         def residual(w):
-            state["beta2"] = self.beta2(w)
+            state["params"] = self.scheme_parameters(w)
             return self.residual(
-                w, state["beta2"], psi=state["psi"], gamma=state["gamma"]
+                w, state["params"], psi=state["psi"], gamma=state["gamma"]
             )
 
         def residual_startup(w):
-            state["beta2"] = self.beta2(w)
-            return self.residual(w, state["beta2"], order=1, gamma=state["gamma"])
+            state["params"] = self.scheme_parameters(w)
+            return self.residual(w, state["params"], order=1, gamma=state["gamma"])
 
         def transition_step(it, w):
             """Advance the lagged intermittency, record the diagnostics."""
@@ -950,17 +1005,17 @@ class IncompressibleProblem:
 
         result = solve_steady(
             residual,
-            lambda w: self.jacobian(w, beta2_at(w)),
-            lambda w, cfl: self.time_term(w, beta2_at(w), cfl, transition_cfl_max),
+            lambda w: self.jacobian(w, params_at(w)),
+            lambda w, cfl: self.time_term(w, params_at(w), cfl, transition_cfl_max),
             w0,
             settings or PseudoTimeSettings(),
             residual_startup=residual_startup,
             callback=on_iteration,
             jvp=lambda w, dw: self.jvp(
-                w, dw, beta2_at(w), state["psi"], state["gamma"]
+                w, dw, params_at(w), state["psi"], state["gamma"]
             ),
             linearize=lambda w: self.linearize(
-                w, beta2_at(w), state["psi"], state["gamma"]
+                w, params_at(w), state["psi"], state["gamma"]
             ),
             limit_step=self._step_limiter(
                 nu_tilde_step_limit,
@@ -984,11 +1039,32 @@ class IncompressibleProblem:
         descent guard of gamma unless ``gamma_guard`` is False); SA the
         nu_tilde cap of ``factor`` (None = no cap).
         """
+        if self.compressible:
+            return self._positivity_limiter()
         if self.model.turbulence == "sst":
             return self._sst_limiter(
                 clip=clip, guard=gamma_guard, stats=guard_stats, whole_cell=whole_cell
             )
         return self._nu_tilde_limiter(factor)
+
+    def _positivity_limiter(self, max_drop=COMPRESSIBLE_MAX_DROP):
+        """Compressible flow: p and T stay positive.
+
+        Per cell the whole update is scaled by min(1, max_drop / ratio), with
+        ratio the larger relative decrease -dp / p, -dT / T; increases are left
+        to the line search. With ``max_drop`` < 1 a full step keeps at least
+        1 - max_drop of the old values, so that no trial state of the line
+        search has a negative pressure or temperature.
+        """
+        cols = list(self.flow.POSITIVE_COLUMNS)
+
+        def limit_step(u, du, r=None, tau=None):
+            val = np.maximum(u[:, cols], 1e-300)
+            drop = (np.maximum(-du[:, cols], 0.0) / val).max(axis=1)
+            scale = np.minimum(1.0, max_drop / np.maximum(drop, 1e-300))
+            return du * scale[:, None]
+
+        return limit_step
 
     def _sst_limiter(
         self,
@@ -1140,7 +1216,7 @@ class IncompressibleProblem:
             near,
             np.abs(
                 self.residual(
-                    w, state["beta2"], psi=state["psi"], gamma=state["gamma"]
+                    w, state["params"], psi=state["psi"], gamma=state["gamma"]
                 )[:, rans.NT]
             ),
             0.0,
@@ -1154,6 +1230,8 @@ class IncompressibleProblem:
 
     def mass(self):
         """Diagonal of the mass matrix: rho * area on u, v; area on turbulence."""
+        if self.compressible:
+            raise NotImplementedError("unsteady compressible flow is planned")
         area = np.asarray(self.geom.area)
         rho = self.model.density
         diag = [0.0, rho, rho] + [1.0] * (self.model.n_var - 3)
@@ -1181,22 +1259,22 @@ class IncompressibleProblem:
         then uses the inner residual). ``resume`` continues an earlier run
         (``step`` and ``u_previous``, see :func:`solve_unsteady`).
         """
-        beta2_at = self.beta2_tracker()
+        params_at = self.parameter_tracker()
 
         def residual(w):
-            return self.residual(w, self.beta2(w))
+            return self.residual(w, self.scheme_parameters(w))
 
         return solve_unsteady(
             residual,
-            lambda w: self.jacobian(w, beta2_at(w)),
-            lambda w, cfl: self.time_term(w, beta2_at(w), cfl),
+            lambda w: self.jacobian(w, params_at(w)),
+            lambda w, cfl: self.time_term(w, params_at(w), cfl),
             self.mass(),
             w0,
             settings,
             callback=callback,
             inner_callback=inner_callback,
-            jvp=lambda w, dw: self.jvp(w, dw, beta2_at(w)),
-            linearize=lambda w: self.linearize(w, beta2_at(w)),
+            jvp=lambda w, dw: self.jvp(w, dw, params_at(w)),
+            linearize=lambda w: self.linearize(w, params_at(w)),
             limit_step=self._step_limiter(
                 nu_tilde_step_limit, transition_clip, gamma_guard
             ),
@@ -1208,18 +1286,22 @@ class IncompressibleProblem:
     ):
         """Explicit Runge-Kutta reference mode (D25)."""
         w0 = self.initial_state() if w0 is None else w0
-        state = {"beta2": self.beta2(w0)}
+        state = {"params": self.scheme_parameters(w0)}
 
         def residual(w):
-            state["beta2"] = self.beta2(w)
-            return self.residual(w, state["beta2"])
+            state["params"] = self.scheme_parameters(w)
+            return self.residual(w, state["params"])
 
         return solve_explicit(
             residual,
-            lambda w, r, cfl: self.explicit_update(w, r, state["beta2"], cfl),
+            lambda w, r, cfl: self.explicit_update(w, r, state["params"], cfl),
             w0,
             cfl=cfl,
             max_iterations=max_iterations,
             residual_drop=residual_drop,
             callback=callback,
         )
+
+
+# Older name of :class:`FlowProblem` (the incompressible solver came first).
+IncompressibleProblem = FlowProblem
