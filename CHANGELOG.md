@@ -21,6 +21,14 @@
   `docs/validation.md` §15. Fixes: the `residual_nu_tilde` field of
   compressible SA read the energy row, and the SST `k`, `omega` and residual
   fields now follow the problem's turbulence column.
+- Fix of the compressible alpha 0 dead stop (449 x 129, SA and SST): the
+  first-order Jacobian no longer carries the low-Mach correction
+  (`compressible.jacobian_convective_flux`, plain Roe; the residual keeps
+  it), which made J + V/dtau singular near stagnation at CFL of a few
+  hundred, and a rejected pseudo-time step makes the PARDISO session analyse
+  the pattern again (`linear.reset_analysis`) instead of reusing the
+  pivoting of the bad matrix. alpha 0 now runs on but converges slowly
+  (open, `docs/validation.md` §15).
 
 - Compressible RANS with SA-neg (C3): `physics.model = "rans"` (turbulence
   `sa-neg`) with `physics.flow = "compressible"`. The turbulence row is the
