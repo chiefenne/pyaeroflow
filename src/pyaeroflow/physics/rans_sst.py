@@ -209,11 +209,11 @@ def limiter(model, geom, bc, w):
 
 
 _cell_quantities_remat = jax.checkpoint(cell_quantities, static_argnums=(0,))
-_sst_sources_remat = jax.checkpoint(sst.sources)
+_sst_sources_remat = jax.checkpoint(sst.sources, static_argnums=(9,))
 
 
-def _lm_sources_remat(*args, positive):
-    return jax.checkpoint(partial(lm.sources, positive=positive))(*args)
+def _lm_sources_remat(*args, positive, smooth=0.0):
+    return jax.checkpoint(partial(lm.sources, positive=positive, smooth=smooth))(*args)
 
 
 @partial(jax.jit, static_argnums=(0, 4))
@@ -280,12 +280,24 @@ def residual(model, geom, bc, w, order, beta2, psi=None, gamma=None):
     g_eff = None
     if model.transition == "lm":
         args = _lm_arguments(model, geom, w, grad, strain)
-        g_eff = lm.effective_intermittency(*args[:9])
-        s_g, s_t = _lm_sources_remat(*args, positive=model.lm_positive_jacobian)
+        smooth = model.lm_jacobian_smoothing
+        g_eff = lm.effective_intermittency(*args[:9], smooth=smooth)
+        s_g, s_t = _lm_sources_remat(
+            *args, positive=model.lm_positive_jacobian, smooth=smooth
+        )
         r = r.at[:, NGL].add(-geom.area * s_g)
         r = r.at[:, NRT].add(-geom.area * s_t)
     s_k, s_w = _sst_sources_remat(
-        w[:, NK], _omega(w), strain, f1, f2, kgw, switch, g_eff
+        w[:, NK],
+        _omega(w),
+        strain,
+        f1,
+        f2,
+        kgw,
+        switch,
+        g_eff,
+        None,
+        model.lm_jacobian_smoothing if model.transition == "lm" else 0.0,
     )
     r = r.at[:, NK].add(-geom.area * s_k)
     r = r.at[:, NW].add(-geom.area * s_w)
@@ -410,10 +422,11 @@ def source_blocks(model, geom, bc, w):
     blocks = jnp.zeros((w.shape[0], n_var, n_var))
     if model.transition == "lm":
         args = _lm_arguments(model, geom, w, grad, strain)
+        smooth = model.lm_jacobian_smoothing
         d_fac = lm.destruction_factor(lm.effective_intermittency(*args[:9]))
 
         def cell(g, t, *rest):
-            return jnp.stack(lm.sources(g, t, *rest))
+            return jnp.stack(lm.sources(g, t, *rest, smooth=smooth))
 
         d_g = jax.vmap(
             jax.grad(lambda *x: cell(*x)[0], argnums=0),

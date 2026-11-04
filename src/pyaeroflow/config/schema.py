@@ -108,6 +108,20 @@ SCHEMA = {
                 "step is a quasi-Newton step. The first-order Jacobian always does "
                 "this. false: exact linearization (the state before 1.1)",
             ),
+            "jacobian_smoothing": Opt(
+                "float",
+                0.0,
+                "model = lm: width w of smooth switches in the Newton-Krylov "
+                "Jacobian and the preconditioner. The max / min / clip of the "
+                "onset (F_onset, F_onset1-3), separation (gamma_sep), blending "
+                "(F_thetat, gamma_eff, k destruction) and Re_thetat^eq "
+                "functions get the slope of 0.5 (a + b +- sqrt((a-b)^2 + w^2)), "
+                "and sqrt(gamma F_onset) that of sqrt(max(x, 0) + w^2), bounded "
+                "by 1/(2w). The residual and the converged solution are "
+                "unchanged; the step is a quasi-Newton step. Try 0.05-0.2; "
+                "0 = exact switches",
+                minimum=0.0,
+            ),
             "mode": Opt(
                 "string",
                 "none",

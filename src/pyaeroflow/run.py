@@ -297,6 +297,11 @@ def setup(config, mesh=None):
         lm_positive_jacobian=bool(
             rans and tr_cfg["model"] == "lm" and tr_cfg["positive_jacobian"]
         ),
+        lm_jacobian_smoothing=(
+            float(tr_cfg["jacobian_smoothing"])
+            if rans and tr_cfg["model"] == "lm"
+            else 0.0
+        ),
     )
     regions = None
     if rans and physics["transition"]["mode"] == "prescribed":
@@ -2056,6 +2061,16 @@ def _mode_rows(cfg):
                 "(physics.transition.positive_jacobian = false)",
             )
         )
+        if tr.get("jacobian_smoothing"):
+            rows.append(
+                (
+                    "switch linearization",
+                    f"smooth, width {tr['jacobian_smoothing']:g}: max/min/clip "
+                    "and sqrt of the LM onset, separation and blending "
+                    "functions have smooth derivatives, the residual is "
+                    "unchanged (physics.transition.jacobian_smoothing)",
+                )
+            )
         if tr.get("cfl_max") is not None:
             rows.append(
                 (

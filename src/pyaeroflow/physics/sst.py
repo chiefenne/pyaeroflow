@@ -17,6 +17,8 @@ Langtry (2003) and the NASA TMR page "SST-2003m" (the cross diffusion as a sourc
 
 import jax.numpy as jnp
 
+from pyaeroflow.physics.lm import destruction_factor
+
 SIGMA_K1, SIGMA_K2 = 0.85, 1.0
 SIGMA_W1, SIGMA_W2 = 0.5, 0.856
 BETA_1, BETA_2 = 0.075, 0.0828
@@ -85,6 +87,7 @@ def sources(
     production_switch=1.0,
     gamma_eff=None,
     divergence=None,
+    gamma_smooth=0.0,
 ):
     """Return the sources per unit volume (s_k, s_omega) of SST-2003m.
 
@@ -96,7 +99,9 @@ def sources(
 
     ``gamma_eff`` (Langtry-Menter, :mod:`pyaeroflow.physics.lm`) multiplies
     P_k and min(max(gamma_eff, 0.1), 1) the k destruction; P_omega keeps the
-    unmodified P_k.
+    unmodified P_k. ``gamma_smooth`` > 0 gives that clip the smooth
+    derivative of :func:`pyaeroflow.physics.lm.destruction_factor` (value
+    unchanged).
 
     ``divergence`` (compressible flow, :mod:`pyaeroflow.physics.rans_sst_compressible`):
     div v; the production is then that of the full Boussinesq stress with
@@ -128,7 +133,7 @@ def sources(
     cd = (1.0 - f1) * 2.0 * SIGMA_W2 * k_grad_omega / omega
     d_k = BETA_STAR * k * omega
     if gamma_eff is not None:
-        d_k = jnp.clip(gamma_eff, 0.1, 1.0) * d_k
+        d_k = destruction_factor(gamma_eff, gamma_smooth) * d_k
         s_k = gamma_eff * p_k - d_k
     else:
         s_k = p_k - d_k

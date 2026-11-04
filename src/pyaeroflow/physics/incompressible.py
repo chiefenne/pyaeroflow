@@ -117,6 +117,10 @@ class IncompressibleModel(NamedTuple):
         derivatives of the gamma source that lower the diagonal of the gamma
         equation (``positive`` of :func:`pyaeroflow.physics.lm.sources`); the
         residual is the same.
+    lm_jacobian_smoothing : float
+        Langtry-Menter: width of the smooth switches in the derivatives of
+        the sources (``smooth`` of :func:`pyaeroflow.physics.lm.sources`);
+        0 is the exact linearization. The residual is the same.
     """
 
     density: float = 1.0
@@ -136,6 +140,7 @@ class IncompressibleModel(NamedTuple):
     turbulence_intensity: float = 0.0  # freestream Tu in percent (BCM, AFT)
     critical_amplification: float = None  # AFT N_crit; None: from Tu
     lm_positive_jacobian: bool = True  # LM: positive linearization of the gamma source
+    lm_jacobian_smoothing: float = 0.0  # LM: width of the smooth switch derivatives
 
     @property
     def n_var(self):

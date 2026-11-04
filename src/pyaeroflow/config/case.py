@@ -638,7 +638,7 @@ def _consistency(data, explicit, problems, notices, path):
         if applied:
             notices.append("Langtry-Menter defaults: " + ", ".join(applied))
     else:
-        for key in ("clip", "newton_guard", "positive_jacobian"):
+        for key in ("clip", "newton_guard", "positive_jacobian", "jacobian_smoothing"):
             if f"physics.transition.{key}" in explicit:
                 notices.append(f"physics.transition.{key} ignored: model != lm")
 
