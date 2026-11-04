@@ -1,4 +1,4 @@
-"""TMR NACA 0012 C-grid (PLOT3D 2D, formatted) -> SU2, with optional refinement.
+"""TMR NACA 0012 C-grid (PLOT3D 2D, formatted) -> .su2, with optional refinement.
 
 The TMR family (farfield at 500 chords) is nested: each grid is every other
 point of the next finer one. Only the 225x65 and 113x33 grids are real files
@@ -95,7 +95,7 @@ def refine(x, y):
 
 
 def to_su2(x, y, path):
-    """Write the C-grid as SU2 (wake cut merged); markers airfoil, farfield."""
+    """Write the C-grid as a .su2 mesh (wake cut merged); markers airfoil, farfield."""
     ni, nj = x.shape
     nw = wake_split(x, y)
     te_lo = nw - 1

@@ -150,7 +150,7 @@ def test_first_order_jacobian_diagonal_blocks_are_close_to_exact():
     """Mean-flow block and the k-k, omega-omega blocks: close to dense AD.
 
     The compact fluxes freeze mu_t and the diffusion coefficients, the source
-    blocks keep only the destruction (SU2), so only these blocks are compared.
+    blocks keep only the destruction, so only these blocks are compared.
     """
     prob, ff = _box(order=1, coupling="coupled")
     w = _perturbed(prob, ff, 4)

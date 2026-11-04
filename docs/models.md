@@ -40,7 +40,7 @@ weakness it is listed in [§11](validation.md#sec-11) there.
 - **Convergence:** `solver.cfl.control = "growth"` is the setting for LM and
   recommended for any transition model if the `ser` control of the AFT and BCM example cases creeps (the default is `growth`);
   `solver.convergence = { fields = ["cd"] }` ends a run when the force has
-  settled (SU2's Cauchy criterion). Steady runs can fail near a bubble burst:
+  settled. Steady runs can fail near a bubble burst:
   E387 α −2° and 8° with SA-AFT did not settle, see §11 of the validation page
   for the cause and the likely remedy (a time-accurate run).
 

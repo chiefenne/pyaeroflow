@@ -10,8 +10,8 @@ configuration with every default.
 ## 1. Principles
 
 - **Format:** TOML 1.0, read with the standard library (`tomllib`).
-- **Names:** literature terminology and established acronyms (D26). SU2
-  option names are not copied.
+- **Names:** literature terminology and established acronyms (D26). Option
+  names of other codes are not copied.
   - Keys are `snake_case`.
   - String values are lowercase with hyphens, e.g. `"sa-neg"`,
     `"venkatakrishnan-wang"`.
@@ -79,7 +79,7 @@ The same concept in other tools:
 
 | Tool | Term |
 |------|------|
-| SU2 | marker (`MARKER_TAG`) |
+| `.su2` mesh file | marker (`MARKER_TAG`) |
 | OpenFOAM | patch |
 | Ansys Fluent | boundary zone |
 | Gmsh | physical group (physical curve in 2D) |
@@ -210,9 +210,9 @@ file (either byte order). Formats 1 and 3 are rejected; export the mesh as
 
 | Key | Type | Default | Description | # |
 |-----|------|---------|-------------|---|
-| `flow` | `"incompressible"` \| `"compressible"` | `"incompressible"` | Flow family (L1). `"incompressible"`: SU2 INC formulation, constant density (D5). `"compressible"`: density-based solver for an ideal gas, unknowns p, u, v, T (and ν̃ with SA-neg, k and ω with SST), Roe flux; `model = "euler"`, `"laminar"` or `"rans"` (SA-neg or SST), steady runs, see [Compressible flow](#compressible-flow) | L1 |
+| `flow` | `"incompressible"` \| `"compressible"` | `"incompressible"` | Flow family (L1). `"incompressible"`: artificial-compressibility formulation (Economon 2020), constant density (D5). `"compressible"`: density-based solver for an ideal gas, unknowns p, u, v, T (and ν̃ with SA-neg, k and ω with SST), Roe flux; `model = "euler"`, `"laminar"` or `"rans"` (SA-neg or SST), steady runs, see [Compressible flow](#compressible-flow) | L1 |
 | `model` | `"euler"` \| `"laminar"` \| `"rans"` | req. | Governing equations | D10 |
-| `turbulence` | `"sa-neg"` \| `"sst"` | `"sa-neg"` if `model = "rans"` | Turbulence model: `"sa-neg"` Spalart–Allmaras, negative variant (NASA TMR); `"sst"` Menter k-ω SST, version SST-2003m as in SU2 (see [k-ω SST](#k-ω-sst)). The transition models `"bcm"` and `"aft"` need `"sa-neg"`, `"lm"` needs `"sst"` | D11, D12, L2 |
+| `turbulence` | `"sa-neg"` \| `"sst"` | `"sa-neg"` if `model = "rans"` | Turbulence model: `"sa-neg"` Spalart–Allmaras, negative variant (NASA TMR); `"sst"` Menter k-ω SST, version SST-2003m (NASA TMR) (see [k-ω SST](#k-ω-sst)). The transition models `"bcm"` and `"aft"` need `"sa-neg"`, `"lm"` needs `"sst"` | D11, D12, L2 |
 | `mean_pressure_gradient` | [float, float] | – | Driving force for periodic channels: constant mean pressure gradient (dp/dx, dp/dy) in Pa/m, applied as a momentum source | D39 |
 
 `[physics.transition]`, only for `model = "rans"`:
@@ -220,10 +220,10 @@ file (either byte order). Formats 1 and 3 are rejected; export the mesh as
 | Key | Type | Default | Description | # |
 |-----|------|---------|-------------|---|
 | `mode` | `"none"` \| `"prescribed"` | `"none"` | `"none"` = fully turbulent | D15 |
-| `model` | `"none"` \| `"bcm"` \| `"aft"` \| `"lm"` | `"none"` | Transition model (L3). `"lm"`: Langtry–Menter γ-Re_θ on SST (SST-2003m-LM2009 as in SU2), see [Langtry–Menter γ-Re_θ](#langtrymenter-γ-re_θ); needs `turbulence = "sst"`. `"aft"`: SA-AFT2019b (Coder; NASA TMR `aft_transition_3eqn`, equations in `docs/aft_design.md` §5): two more transport equations, for the log-intermittency γ̃ = ln γ and the amplification factor ñ (the transported e^N envelope), so 6 unknowns per cell. ñ grows once the vorticity Reynolds number exceeds its critical value from the local shape factor; onset where ñ passes N_crit; the only change to SA is f_t2 = 1.2 (1 − e^γ̃). Freestream and inflow ñ = 0, γ̃ = 0; zero gradient at walls. Needs a laminar freestream, ν̃/ν ≈ 0.1 (`turbulence = { nu_tilde_ratio = 0.1 }`; a notice outside 0.05–0.5). Output: `intermittency` (= e^γ̃) and `amplification_factor` in the VTU, residual columns `gam` and `n` in the log. `"bcm"`: the algebraic intermittency of Cakmakcioglu, Bas, Mura & Kaynak (2020 revision, as in SU2) multiplies the SA production: γ = 1 − exp(−√T₁ − √T₂) with T₁ from the vorticity Reynolds number d²Ω/ν against Menter's critical Re_θ(Tu) and T₂ = 50 ν_t/ν; SA runs without the f_t2 term (SA-noft2-BCM). Combines with `mode = "prescribed"` (both factors multiply). Needs a laminar freestream: inflow `turbulence = { nu_tilde_ratio = 0.1 }` or `{ turbulent_viscosity_ratio = 2.8e-7, intensity = … }` — with the fully turbulent value 3 the second term makes γ = 0.96 everywhere (a notice says so). Output: `intermittency` field in the VTU, `nu_t_ratio_max` in the wall CSV, transition locations in the summary | L3 |
-| `clip` | bool | `true` | `model = "lm"`: after every update clip γ to [1e-4, 5] and Re_θt to [1e-4, 1e15], as SU2 does (`CTransLMSolver`, `AddClippedSolution`). `false` leaves both unclipped: one cell can then fall by 99 % per iteration to γ = 1e-142, where the derivative of √γ in the onset term is about 1e70, and the γ residual stalls (320k SD7003, `docs/validation.md` §10). Ignored (with a notice) for other models | L3 |
+| `model` | `"none"` \| `"bcm"` \| `"aft"` \| `"lm"` | `"none"` | Transition model (L3). `"lm"`: Langtry–Menter γ-Re_θ on SST (SST-2003m-LM2009, NASA TMR), see [Langtry–Menter γ-Re_θ](#langtrymenter-γ-re_θ); needs `turbulence = "sst"`. `"aft"`: SA-AFT2019b (Coder; NASA TMR `aft_transition_3eqn`, equations in `docs/aft_design.md` §5): two more transport equations, for the log-intermittency γ̃ = ln γ and the amplification factor ñ (the transported e^N envelope), so 6 unknowns per cell. ñ grows once the vorticity Reynolds number exceeds its critical value from the local shape factor; onset where ñ passes N_crit; the only change to SA is f_t2 = 1.2 (1 − e^γ̃). Freestream and inflow ñ = 0, γ̃ = 0; zero gradient at walls. Needs a laminar freestream, ν̃/ν ≈ 0.1 (`turbulence = { nu_tilde_ratio = 0.1 }`; a notice outside 0.05–0.5). Output: `intermittency` (= e^γ̃) and `amplification_factor` in the VTU, residual columns `gam` and `n` in the log. `"bcm"`: the algebraic intermittency of Cakmakcioglu, Bas, Mura & Kaynak (2020 revision) multiplies the SA production: γ = 1 − exp(−√T₁ − √T₂) with T₁ from the vorticity Reynolds number d²Ω/ν against Menter's critical Re_θ(Tu) and T₂ = 50 ν_t/ν; SA runs without the f_t2 term (SA-noft2-BCM). Combines with `mode = "prescribed"` (both factors multiply). Needs a laminar freestream: inflow `turbulence = { nu_tilde_ratio = 0.1 }` or `{ turbulent_viscosity_ratio = 2.8e-7, intensity = … }` — with the fully turbulent value 3 the second term makes γ = 0.96 everywhere (a notice says so). Output: `intermittency` field in the VTU, `nu_t_ratio_max` in the wall CSV, transition locations in the summary | L3 |
+| `clip` | bool | `true` | `model = "lm"`: after every update clip γ to [1e-4, 5] and Re_θt to [1e-4, 1e15]. `false` leaves both unclipped: one cell can then fall by 99 % per iteration to γ = 1e-142, where the derivative of √γ in the onset term is about 1e70, and the γ residual stalls (320k SD7003, `docs/validation.md` §10). Ignored (with a notice) for other models | L3 |
 | `newton_guard` | bool | `false` | `model = "lm"`: descent guard of the γ update. A Newton update that would end below the clip floor while the residual asks for a larger γ (same sign as the update) is replaced by the explicit local step −R Δt/A at CFL 1 of that cell; the clip and the k/ω limiter apply afterwards. At the floor the √γ of the production has the derivative 50 and turns the diagonal of a shear-layer cell negative, so the exact Newton step points away from the root and the clip freezes the cell with a residual of hundreds (eight cells held the γ residual of the 320k SD7003 at 10⁻⁵·⁴, see [Langtry–Menter γ-Re_θ](#langtrymenter-γ-re_θ)). Treats the symptom: on the T3A start-up it fired in 100–800 cells per iteration and the run was slightly worse than plain Newton, so it is off by default; with `positive_jacobian` it rarely fires. The log Summary counts the firings. Ignored (with a notice) for other models | L3 |
-| `cfl_max` | float | none | `model = "lm"`: largest pseudo-time CFL of the γ and Re_θt equations in the implicit modes; the flow and k/ω rows keep the solver CFL (`solver.cfl`). Like the separate transition solver of SU2 with its own CFL. On the 320k SD7003 α 2 continuation the full Newton step at CFL ≥ 2560 cut the p and v residuals 5–15× but raised the γ residual 10–50× and Re_θt 2–13×, so the line search cut every step to 1/4 and the flow crept. A cap of about 1000 keeps the γ update in the range where it worked. Default: no cap. Ignored for other models | L3 |
+| `cfl_max` | float | none | `model = "lm"`: largest pseudo-time CFL of the γ and Re_θt equations in the implicit modes; the flow and k/ω rows keep the solver CFL (`solver.cfl`). Like a segregated transition solver with its own CFL. On the 320k SD7003 α 2 continuation the full Newton step at CFL ≥ 2560 cut the p and v residuals 5–15× but raised the γ residual 10–50× and Re_θt 2–13×, so the line search cut every step to 1/4 and the flow crept. A cap of about 1000 keeps the γ update in the range where it worked. Default: no cap. Ignored for other models | L3 |
 | `positive_jacobian` | bool | `true` | `model = "lm"`: the Newton–Krylov Jacobian leaves out the derivatives of the γ source that lower the diagonal of the γ equation (the √γ of the production, the destruction derivative below γ = 0.01); the residual and so the converged state are unchanged, the step is a quasi-Newton step. The first-order Jacobian always does this. Removes the cause of the floor cells: on the T3A start-up (Newton–Krylov from iteration 5, 60 iterations) the residual fell 2.4 orders against 1.2 with the exact linearization and the γ residual 1.3 orders further. `false`: the exact linearization of 1.0. Ignored (with a notice) for other models | L3 |
 | `turbulence_intensity` | float | inflow table | Freestream turbulence intensity Tu as a fraction (0.001 = 0.1 %) for the transition model (for `"aft"` only used for N_crit; ignored by `"lm"`, which takes Tu from the local k); default: the `intensity` of an inflow turbulence table. Free flight 0.0005–0.001, wind tunnels 0.001–0.01, the T3A plate 0.033. The model's critical Re_θ = 803.73 (100 Tu + 0.6067)^−1.027 is printed in the log | L3 |
 | `critical_amplification` | float | from `turbulence_intensity` | N_crit of `model = "aft"`. Default: Mack's relation with Drela's limit, N_crit = −8.43 − 2.4 ln(τ/100), τ = 2.5 tanh(100 Tu / 2.5) (8.15 at Tu = 0.1 %). Set it directly to match an XFOIL run (Coder used 10.3 for the Schubauer–Klebanoff plate, 9 for the S809, 7.2 for the NLF(1)-0416); `turbulence_intensity` is then not needed | L3 |
@@ -243,12 +243,11 @@ file (either byte order). Formats 1 and 3 are rejected; export the mesh as
 | `viscosity_model` | string | `"sutherland"` | Compressible flow: μ(T) by Sutherland's law, μ = μ_ref (T/T_ref)^{3/2} (T_ref + S)/(T + S), scaled to `viscosity` or `reynolds_number` at the reference temperature, or `"constant"` | L1 |
 | `sutherland_temperature` | float | `110.4` | Compressible flow: Sutherland's constant S in K | L1 |
 | `prandtl` | float | `0.72` | Compressible flow: laminar Prandtl number; conductivity k = μ c_p / Pr | L1 |
-| `prandtl_turbulent` | float | `0.9` | Compressible RANS: turbulent Prandtl number; eddy conductivity μ_t c_p / Pr_t (SU2 `PRANDTL_TURB`) | L1 |
+| `prandtl_turbulent` | float | `0.9` | Compressible RANS: turbulent Prandtl number; eddy conductivity μ_t c_p / Pr_t | L1 |
 
 Exactly one of `viscosity` and `reynolds_number` is required, except for
 `model = "euler"`. A compressible laminar case may give neither: μ then
-follows from Sutherland's law of air (SU2's μ_ref = 1.716·10⁻⁵ Pa·s at
-273.15 K, S = 110.4 K) at the reference temperature, i.e. the Reynolds
+follows from Sutherland's law of air at the reference temperature, i.e. the Reynolds
 number from the farfield pressure, temperature and Mach number. Non-dimensional setup: `density = 1.0`, reference velocity
 and length `1.0`, `reynolds_number = Re` → μ = 1/Re.
 
@@ -284,7 +283,7 @@ dependence: P7). Types marked "inflow" take a `turbulence` table
 | `"wall"` | No-slip wall. Optional `velocity = [u, v]` for a moving wall (e.g. cavity lid). Compressible laminar flow: adiabatic, or isothermal with `temperature` (K); a slip wall with `model = "euler"` |
 | `"slip-wall"` | Identical to `"symmetry"`: zero normal velocity, no shear stress |
 | `"symmetry"` | Symmetry plane: zero normal velocity, no shear stress |
-| `"farfield"` | `velocity` (magnitude, m/s), `angle_of_attack` (deg, default 0), `pressure` (Pa, default 0); inflow: `turbulence`. Compressible flow: `mach` instead of `velocity` (required), `pressure` absolute (default 101325 Pa), `temperature` (K, default 288.15); the Roe flux between the interior and the freestream state picks the incoming characteristics (SU2 `MARKER_FAR`), so the same type serves sub- and supersonic in- and outflow. Several farfield boundaries with the same values (e.g. PyAero's `inlet`, `outlet`, `top`, `bottom`) count as one freestream for the defaults of `reference.velocity`, `reference.angle_of_attack`, `initial.from_boundary` and the Cp reference pressure |
+| `"farfield"` | `velocity` (magnitude, m/s), `angle_of_attack` (deg, default 0), `pressure` (Pa, default 0); inflow: `turbulence`. Compressible flow: `mach` instead of `velocity` (required), `pressure` absolute (default 101325 Pa), `temperature` (K, default 288.15); the Roe flux between the interior and the freestream state picks the incoming characteristics, so the same type serves sub- and supersonic in- and outflow. Several farfield boundaries with the same values (e.g. PyAero's `inlet`, `outlet`, `top`, `bottom`) count as one freestream for the defaults of `reference.velocity`, `reference.angle_of_attack`, `initial.from_boundary` and the Cp reference pressure |
 | `"velocity-inlet"` | `velocity = [u, v]` in m/s; inflow: `turbulence`. Compressible flow: also `temperature` (K, required); the pressure comes from the interior |
 | `"total-pressure-inlet"` | `total_pressure` (Pa, gauge), `flow_direction = [d_x, d_y]` (normalised internally); the velocity magnitude follows from p_total − p = ½ρ|v|² with the interior pressure; inflow: `turbulence`. Compressible flow: `total_pressure` absolute and `total_temperature` (K, required); p from the interior, M from p₀/p, T = T₀/(1 + (γ−1)M²/2) |
 | `"pressure-outlet"` | `pressure` (Pa, default 0). Compressible flow: absolute, required; the temperature follows the interior isentrope, a supersonic outflow takes the interior state |
@@ -295,7 +294,7 @@ dependence: P7). Types marked "inflow" take a `turbulence` table
 
 `turbulence = "sst"` solves two equations, for the turbulent kinetic energy k
 and the specific dissipation rate ω (5 unknowns per cell; log residual
-columns `k` and `om`). Formulation and constants are SU2's SST-2003m
+columns `k` and `om`). Formulation and constants are those of SST-2003m
 (Menter, Kuntz & Langtry 2003; NASA TMR "SST-2003m"):
 
 - ν_t = a₁k / max(a₁ω, S F₂), S the strain-rate magnitude;
@@ -304,7 +303,7 @@ columns `k` and `om`). Formulation and constants are SU2's SST-2003m
 - σ_k, σ_ω, β, γ blended with F₁ between (0.85, 0.5, 0.075, γ₁) and
   (1.0, 0.856, 0.0828, γ₂), γᵢ = βᵢ/β* − σ_ωᵢ κ²/√β*, β* = 0.09, a₁ = 0.31;
 - walls: k = 0, ω = 60 ν / (β₁ d₁²) with d₁ the height of the wall cell
-  (twice the wall distance of its centroid; SU2's first mesh spacing);
+  (twice the wall distance of its centroid; the first mesh spacing);
   inflow: the prescribed k and ω; outflow, symmetry: zero gradient.
 
 Numerics that differ from SA: k and ω diffuse with the two-point normal
@@ -313,9 +312,9 @@ derivative (the least-squares gradient of the 1/y² profile of ω makes the
 is solved multiplied by ν so that its residual has the scale of the k
 residual (the log column `om` and the `residual_omega` field are ν times
 and 1 times the ω residual); every update of k and ω is scaled per cell so
-that neither drops by more than 99 % (SU2's under-relaxation), so
+that neither drops by more than 99 %, so
 `solver.nu_tilde_step_limit` does not apply; the first-order Jacobian uses the
-residual's face viscosities and SU2's implicit source part (destruction
+residual's face viscosities and the implicit source part (destruction
 only), Newton–Krylov the exact Jacobian-vector product.
 
 Turbulence input: form b needs `intensity` with SST (k = 1.5 (Tu U)²,
@@ -332,9 +331,8 @@ Langtry–Menter transport equations for the intermittency γ and the
 transition-onset momentum-thickness Reynolds number Re_θt (7 unknowns per
 cell; log residual columns `gam` and `ret`). Formulation, constants and
 limits are those of the NASA TMR page "langtrymenter_4eqn" (SST-2003-LM2009,
-Langtry & Menter 2009, F_turb of Menter, Langtry & Völker 2006) and of SU2
-(`CSourcePieceWise_TransLM` with the `MENTER_LANGTRY` correlations, SU2's
-default for SST); on the SST-2003m base the model is SST-2003m-LM2009:
+Langtry & Menter 2009, F_turb of Menter, Langtry & Völker 2006), with the
+Langtry–Menter 2009 correlations; on the SST-2003m base the model is SST-2003m-LM2009:
 
 - P_γ = F_length c_a1 S (γ F_onset)^½ (1 − c_e1 γ), E_γ = c_a2 Ω γ F_turb
   (c_e2 γ − 1), onset from Re_V = d² S/ν against Re_θc(Re_θt), F_length and
@@ -427,14 +425,14 @@ in that run and keep them.
 `physics.flow = "compressible"` (L1, so far `model = "euler"`, `"laminar"`
 or `"rans"` with SA-neg or SST, steady, implicit or explicit pseudo-time; RANS
 implicit only) solves the Euler, laminar Navier–Stokes or RANS equations of
-an ideal gas in the density-based form of SU2's compressible solver:
+an ideal gas in density-based form:
 
-- Unknowns per cell: p, u, v, T (the primitive variables SU2 reconstructs),
+- Unknowns per cell: p, u, v, T (the reconstructed primitive variables),
   ρ = p/(R T); residual rows: mass, x- and y-momentum, energy (log columns
   `rho`, `rhou`, `rhov`, `rhoE`).
 - Roe flux with Harten's entropy fix, MUSCL reconstruction of p, u, v, T with
   the Venkatakrishnan(-Wang) limiter. A face whose reconstructed state has
-  p ≤ 0 or T ≤ 0 is computed at first order (SU2's non-physical check). The
+  p ≤ 0 or T ≤ 0 is computed at first order. The
   pseudo-time term uses the conservative time derivative, (∂U/∂V) Λ/CFL with
   the spectral radius Σ(|v_n| + c)L.
 - Every update is scaled per cell so that p and T drop by at most 80 %
@@ -449,7 +447,7 @@ an ideal gas in the density-based form of SU2's compressible solver:
   `initial.velocity` (start from the farfield or a restart). Restart files
   carry the flow family; one of the other family is rejected.
 - C_p uses the farfield pressure, q = ½ ρ∞ U∞².
-- Laminar (`model = "laminar"`, stage C2, SU2 `CNSSolver`): viscous stress
+- Laminar (`model = "laminar"`, stage C2): viscous stress
   with μ(T) (`fluid.viscosity_model`, Sutherland by default), heat flux
   k ∇T with k = μ c_p / Pr (`fluid.prandtl`, 0.72), the work of the viscous
   stress in the energy equation; face gradients as in the incompressible
@@ -471,7 +469,7 @@ an ideal gas in the density-based form of SU2's compressible solver:
   `turbulence` table (default ν̃/ν = 3) refers to the ν of that boundary's
   state. `solver.nu_tilde_step_limit` and `solver.turbulence_coupling` work
   as for incompressible SA.
-- RANS with `turbulence = "sst"` (stage C4, SU2's compressible SST-2003m):
+- RANS with `turbulence = "sst"` (stage C4, the compressible SST-2003m):
   ∂(ρk)/∂t + ∇·(ρvk) = ρP_k − β*ρkω + ∇·((μ + σ_k μ_t)∇k) and
   ∂(ρω)/∂t + ∇·(ρvω) = ρP_ω − βρω² + ∇·((μ + σ_ω μ_t)∇ω) + ρCD_kω, the
   sources of the incompressible SST times ρ with the divergence part of the
@@ -485,8 +483,7 @@ an ideal gas in the density-based form of SU2's compressible solver:
   state. The inflow `turbulence` table (default Tu 0.1 %, μ_t/μ = 1; TMR:
   `{ turbulent_viscosity_ratio = 0.009, intensity = 5.164e-4 }` at M 0.15)
   refers to the ν and the speed of that boundary's state. Every update keeps
-  p, T, k and ω positive (SU2's 99 % cut and k/ω clipping, as incompressible
-  SST). Example `examples/cases/naca0012_sst_m015.toml`.
+  p, T, k and ω positive. Example `examples/cases/naca0012_sst_m015.toml`.
 
 ```toml
 # NACA 0012, M = 0.8, alpha = 1.25 deg, inviscid (AGARD-AR-211 case 1)
@@ -543,7 +540,7 @@ Exactly one of three input forms:
 | a | `kinetic_energy`, `length_scale`, optional `c_mu` | m²/s², m, – | k and the k-ε length scale ℓ (size of the energy-carrying eddies). `c_mu` defaults to 0.09 |
 | c | `nu_tilde_ratio` | – | SA only: ν̃/ν, the notation of NASA TMR |
 
-Default, if no `turbulence` table is given: ν̃/ν = 3 (NASA TMR, SU2 default);
+Default, if no `turbulence` table is given: ν̃/ν = 3 (NASA TMR);
 SST: Tu = 0.1 %, ν_t/ν = 1.
 The resolved configuration writes it in form b as
 `turbulent_viscosity_ratio = 0.2104`.
@@ -580,9 +577,9 @@ Needed for force and moment coefficients, and for `fluid.reynolds_number`.
 
 | Key | Type | Default | Description | # |
 |-----|------|---------|-------------|---|
-| `convective_flux` | `"fds"` \| `"roe"` | by `physics.flow` | `"fds"` (incompressible): flux-difference splitting with low-speed preconditioning. `"roe"` (compressible): Roe's approximate Riemann solver (SU2 `ROE`) | D21, L1 |
-| `entropy_fix` | float | `0.001` | Roe flux: Harten's entropy fix in its smooth form, \|λ\| → (λ² + δ²)/(2δ) below δ = `entropy_fix` (\|v_n\| + c) of the Roe state (SU2 `ENTROPY_FIX_COEFF`); `0` = off | L1 |
-| `low_mach_correction` | bool | `false` | Compressible flow: Rieper's low-Mach correction of the Roe flux (SU2 `LOW_MACH_CORR`), face velocities blended by z = min(max(M_L, M_R), 1); recommended below about M 0.3 (RANS at M 0.15: without it the pressure drag is 10–26 % high). Residual only: the first-order Jacobian takes the plain Roe flux | L1 |
+| `convective_flux` | `"fds"` \| `"roe"` | by `physics.flow` | `"fds"` (incompressible): flux-difference splitting with low-speed preconditioning. `"roe"` (compressible): Roe's approximate Riemann solver | D21, L1 |
+| `entropy_fix` | float | `0.001` | Roe flux: Harten's entropy fix in its smooth form, \|λ\| → (λ² + δ²)/(2δ) below δ = `entropy_fix` (\|v_n\| + c) of the Roe state; `0` = off | L1 |
+| `low_mach_correction` | bool | `false` | Compressible flow: Rieper's low-Mach correction of the Roe flux, face velocities blended by z = min(max(M_L, M_R), 1); recommended below about M 0.3 (RANS at M 0.15: without it the pressure drag is 10–26 % high). Residual only: the first-order Jacobian takes the plain Roe flux | L1 |
 | `spatial_order` | `1` \| `2` | `2` | 1: piecewise constant; 2: MUSCL reconstruction | D21 |
 | `limiter` | `"venkatakrishnan-wang"` \| `"venkatakrishnan"` \| `"none"` | `"venkatakrishnan-wang"` | Slope limiter. `"venkatakrishnan"`: the classic form with the local threshold ε² = (K h)³, h = √(cell area) — use it for high-Reynolds-number boundary layers on curved walls (airfoils), where the global-range threshold of `"venkatakrishnan-wang"` leaves the thin wall cells unlimited and the reconstruction diverges | D23 |
 | `limiter_threshold` | float | `0.05` | Wang's ε′ (suggested range 0.01–0.20), or K of the local threshold | D23 |
@@ -591,9 +588,9 @@ Needed for force and moment coefficients, and for `fluid.reynolds_number`.
 | `gradient_weight_exponent` | float | `1.0` | q in weights 1/d^q; default to be confirmed by verification | D22 |
 | `viscous_gradient` | `"alpha-damping"` \| `"edge-correction"` | `"alpha-damping"` | Face-gradient scheme | D24 |
 | `alpha` | float | `4/3` | α-damping coefficient | D24 |
-| `turbulence_spatial_order` | `1` \| `2` | `1` | SA convection (SU2 default: first order) | |
+| `turbulence_spatial_order` | `1` \| `2` | `1` | SA convection (default: first order) | |
 | `first_order_iterations` | int | `0` | Iterations at first order before switching to `spatial_order` | D36 |
-| `beta_factor` | float | `4.1` | Artificial compressibility β² = `beta_factor`·max|v|² (SU2 default) | D5 |
+| `beta_factor` | float | `4.1` | Artificial compressibility β² = `beta_factor`·max|v|² (default 4.1, Economon 2020) | D5 |
 
 ### `[solver]`
 
@@ -601,16 +598,16 @@ Needed for force and moment coefficients, and for `fluid.reynolds_number`.
 |-----|------|---------|-------------|---|
 | `method` | `"implicit"` \| `"explicit-rk"` | `"implicit"` | `"explicit-rk"`: reference/debugging mode | D25 |
 | `max_iterations` | int | `10000` | Pseudo-time iterations (steady) | |
-| `whole_cell_relaxation` | bool | `false` | SST: a cell whose k–ω update the positivity limiter scales (an update that would lower k or ω by more than 99 %) gets the same scale on all its variables, so that its coupled update stays consistent. Independently of this, k and ω are always clipped to SU2's limits after an update (k ∈ [1e-10, 1e10], ω ∈ [1e-4, 1e15], non-dimensional) | L3 |
+| `whole_cell_relaxation` | bool | `false` | SST: a cell whose k–ω update the positivity limiter scales (an update that would lower k or ω by more than 99 %) gets the same scale on all its variables, so that its coupled update stays consistent. Independently of this, k and ω are always clipped to the limits after an update (k ∈ [1e-10, 1e10], ω ∈ [1e-4, 1e15], non-dimensional) | L3 |
 | `line_search_merit` | string | `all`; `no_transition` with LM | Residuals whose RMS the line search, the step acceptance (`cfl.reject_factor`) and the SER CFL control judge: `all`, or `no_transition` (leaves out the Langtry–Menter γ and Re_θt rows). The raw Re_θt residual is largest in the big outer cells (C-mesh outlet, O-grid farfield), where Re_θt^eq follows tiny velocity gradients; with `all` it held 75–99 % of the RMS and cut nearly every good flow step to 1/4. SD7003 39k O-grid, LM, α 2 from scratch, 120 iterations: `all` stalled at 0.01 orders with CL 0.30; `no_transition` reached 6.3 orders and CL 0.3907 (constant from iteration 80). The convergence measure (`residual_drop`) still covers all equations. Default `no_transition` with `physics.transition.model = "lm"` (see [Langtry–Menter γ-Re_θ](#langtrymenter-γ-re_θ)) | D54 |
 | `refactor_interval` | int | `3` | Reuse the factorized first-order system (lagged pseudo-time matrix, Newton–Krylov preconditioner) for up to n iterations; it is rebuilt earlier after a rejected update, when the CFL has grown fourfold since the factorization, or after a Newton step that needed more than 15 GMRES iterations. The factorization is 70 % of an iteration at 100k cells; 1 = every iteration | D25 |
 | `residual_drop` | float | `8.0` | Convergence: orders of magnitude of residual reduction, measured per equation relative to each residual's own peak and applied to the worst equation (D54); equations whose peak is below 10⁻¹² of the largest (round-off) are ignored | D54 |
-| `convergence` | table | `{ fields = [], cauchy_elements = 100, cauchy_eps = 1e-10, start_iteration = 0, min_residual_drop = 0.1 }` | Force-based convergence as SU2's `CONV_FIELD` (Cauchy criterion), steady implicit runs: with `fields = ["cd"]` (any of `cl`, `cd`, `cm`; needs `output.force_boundaries`) the run also ends as converged when, for every listed coefficient, the mean of the Cauchy elements over the last `cauchy_elements` accepted iterations is below `cauchy_eps`. A Cauchy element is the relative difference of the coefficient between two consecutive iterations, \|C_n − C_(n−1)\| / \|C_n\| (as SU2; before the next release the change was absolute, so an old `cauchy_eps` of 1e-5 for C_D ≈ 0.02 is about 5e-4 now). A coefficient near zero, such as C_L at α = 0, gives large elements and rarely meets the criterion. Elements count from `start_iteration`, and a restart starts a fresh window. **Guard (`min_residual_drop`, default 0.1 orders):** forces that stand still do not prove convergence, so an iteration enters the window only if its residual drop (the `drop` column of the log: the worst equation relative to its own peak) is at least `min_residual_drop`, and an iteration below it empties the window. A run whose residual sits at its peak cannot end on frozen forces: SD7003 LM at α = 4° (restarted from α = 2°, every Newton step cut by the line search, `drop` 0.00 throughout) met the plain criterion on five frozen digits of C_L and C_D after 164 iterations with the residual 3 × above its start. When the forces are steady but the guard holds the stop back, the log says so once (`Cauchy criterion on … is met … but not applied`) and the summary repeats it if the run ends that way. `min_residual_drop = 0` is SU2's plain criterion. Whichever comes first, this or `residual_drop`, ends the run; the log notes the Cauchy case (`Cauchy criterion met on …`) and the summary names the criterion. Empty `fields` = residual drop only (default). Not used by unsteady runs (see `[time.convergence]`) | L3 |
+| `convergence` | table | `{ fields = [], cauchy_elements = 100, cauchy_eps = 1e-10, start_iteration = 0, min_residual_drop = 0.1 }` | Force-based convergence (Cauchy criterion), steady implicit runs: with `fields = ["cd"]` (any of `cl`, `cd`, `cm`; needs `output.force_boundaries`) the run also ends as converged when, for every listed coefficient, the mean of the Cauchy elements over the last `cauchy_elements` accepted iterations is below `cauchy_eps`. A Cauchy element is the relative difference of the coefficient between two consecutive iterations, \|C_n − C_(n−1)\| / \|C_n\| (before the next release the change was absolute, so an old `cauchy_eps` of 1e-5 for C_D ≈ 0.02 is about 5e-4 now). A coefficient near zero, such as C_L at α = 0, gives large elements and rarely meets the criterion. Elements count from `start_iteration`, and a restart starts a fresh window. **Guard (`min_residual_drop`, default 0.1 orders):** forces that stand still do not prove convergence, so an iteration enters the window only if its residual drop (the `drop` column of the log: the worst equation relative to its own peak) is at least `min_residual_drop`, and an iteration below it empties the window. A run whose residual sits at its peak cannot end on frozen forces: SD7003 LM at α = 4° (restarted from α = 2°, every Newton step cut by the line search, `drop` 0.00 throughout) met the plain criterion on five frozen digits of C_L and C_D after 164 iterations with the residual 3 × above its start. When the forces are steady but the guard holds the stop back, the log says so once (`Cauchy criterion on … is met … but not applied`) and the summary repeats it if the run ends that way. `min_residual_drop = 0` is the plain Cauchy criterion. Whichever comes first, this or `residual_drop`, ends the run; the log notes the Cauchy case (`Cauchy criterion met on …`) and the summary names the criterion. Empty `fields` = residual drop only (default). Not used by unsteady runs (see `[time.convergence]`) | L3 |
 | `cfl` | table | `{ start = 10.0, max = 1.0e10, max_approximate = 1.0e3, growth_factor = 2.0, cut_factor = 0.1, reject_factor = 10.0, explicit = 1.0, control = "growth", ser_exponent = 1.0, ser_growth_min = 1.2, ser_ratio_min = 0.3, ser_ratio_max = 2.0, ser_gmres_hold = 10, ser_gmres_reduce = 30, polar_reset = false }` | Pseudo-time CFL number: SER control with at least `growth_factor` per accepted iteration. `max_approximate` caps the CFL while the Newton–Krylov switch is pending: a pseudo-time step at a very large CFL is a Newton step with the approximate first-order Jacobian and diverges for the second-order residual; `max` applies once Newton–Krylov is on (and throughout when it is disabled). An update is rejected (and the CFL multiplied by `cut_factor`) if the linear solve fails, the update is not finite, or the residual grows by more than `reject_factor`. `explicit` is the CFL of the explicit Runge–Kutta mode. `control = "ser"` switches to proportional SER (D55): the CFL is multiplied by (‖R_old‖/‖R_new‖)^`ser_exponent` of the RMS norm, at least `ser_growth_min` while it falls, clipped to [`ser_ratio_min`, `ser_ratio_max`]; in the Newton–Krylov phase a step with `ser_gmres_hold` or more GMRES iterations does not raise the CFL and one with more than `ser_gmres_reduce` halves it (this replaces the adaptive cap); the `ser_*` keys are ignored with `control = "growth"`. `polar_reset = true`: in `pyaeroflow polar` every angle after the first restarts the CFL ramp at `start` (the Newton–Krylov switch and the limiter are kept) instead of continuing at the CFL of the previous angle; use it where the new angle moves a laminar bubble (SST-LM SD7003, α 4° → 6° at the carried CFL 1e5: 260–300 GMRES iterations per Newton step). With `physics.transition.model = "lm"` the default of `max` is 2000 (see [Langtry–Menter γ-Re_θ](#langtrymenter-γ-re_θ)) | D35, D55 |
 | `newton_krylov` | table | `{ enabled = true, switch_at_residual_drop = 2.0, switch_at_iteration = none, linear_tolerance = 1e-2, restart = 50, max_iterations = 200, cfl_adapt_iterations = 60, variable_scaling = false, linearize = true }`; LM: `cfl_adapt_iterations = 150, variable_scaling = true` | Switch from approximate-Jacobian iterations to Newton–Krylov once the residual has dropped by the given orders (the switch latches), or at `switch_at_iteration` at the latest (the approximate-Jacobian iteration stalls one to three orders below the start, so a relative switch alone can miss; airfoil cases use 40); GMRES on the exact Jacobian (`jax.jvp`) preconditioned by the factorized first-order system. Newton safeguards (D54): a step that raises the residual is halved up to twice before it is rejected (line search; the note column of the log shows the fraction kept, `step 1/2` or `step 1/4`, and the summary counts the iterations whose step was cut), the GMRES tolerance follows the nonlinear progress (Eisenstat–Walker forcing, between `linear_tolerance` and 0.5), and the CFL is capped adaptively — a step needing `cfl_adapt_iterations` (60) or more GMRES iterations quarters the cap, one needing a quarter of that or fewer lets it grow, in between the cap is held; with steps of 20–50 GMRES iterations the CFL then stays near 1e3 (SD7003 LM at α = 0), and `cfl_adapt_iterations = 200` lets it grow up to 50. `variable_scaling = true` measures the GMRES error of each variable relative to its size (unknowns du_j / s_j, s = 1 for p, u, v and the field RMS for the turbulence and transition variables): SciPy's GMRES is left-preconditioned and otherwise minimizes the error in raw units, so with Re_θt ≈ 1000 and k ≈ 1e-3 it solves the Re_θt rows and leaves the others; on the 320k SD7003 LM case 95 % of the γ residual stayed in the linear model and the γ update blew up (Python API `nk_variable_scaling`). Default false, true with `physics.transition.model = "lm"`; `cfl_adapt_iterations` defaults to 150 with LM (Python API `nk_forcing`, `line_search_steps`) | D25 |
 | `linear_solver` | table | `{ type = "direct", tolerance = 1e-6, restart = 50, max_iterations = 500, ilu_drop_tolerance = 1e-5, ilu_fill_factor = 20, ordering = "mmd-at-plus-a" }` | `"direct"`: sparse LU (SciPy SuperLU, single-threaded, always available). `"pardiso"`: Intel MKL PARDISO through the optional `pypardiso` package (multithreaded, x86 only). `"umfpack"`: UMFPACK through the optional `scikit-umfpack` package. Both optional solvers are installed with `conda install -c conda-forge pypardiso scikit-umfpack`; a missing package is reported at the first factorization. Measured on a 295k-cell airfoil mesh (8-core Intel): factorization 20 s (SuperLU), 13.5 s (UMFPACK), 5.8 s (PARDISO), the whole run 1.9× faster with PARDISO, identical results. `"gmres-ilu"`: GMRES with an incomplete LU; the ILU options set its accuracy and memory. Measured on a 100k-cell airfoil mesh, SciPy's ILU is not cheaper than the exact LU at any useful accuracy (drop 1e-4 costs the same; fill 5 / drop 1e-3 leaves a relative residual of 0.8), so `"direct"` stays the choice. Both also precondition Newton–Krylov. `ordering`: SuperLU column ordering, `"mmd-at-plus-a"` (least fill for the mean-flow Jacobian) or `"colamd"` | D32 |
 | `nu_tilde_step_limit` | float | – | SA (ignored with SST, whose updates are always under-relaxed), implicit and unsteady (every inner iteration): cap every update of ν̃ to this multiple of max(\|ν̃\|, ν) in each cell before the line search (`1` = at most double the value per step); the mean-flow update is untouched. Off by default. Stops a Newton step from multiplying ν̃ in one boundary-layer cell, which the line search cannot see because ν̃ is a small part of the overall residual norm (E387 α = 8, SER: ν̃ residual jumps of 2 orders every 100 to 150 iterations) | D54, D57 |
-| `turbulence_coupling` | `"segregated"` \| `"coupled"` | `"segregated"` | First-order Jacobian of RANS runs: `"segregated"` drops the mean-flow/turbulence coupling blocks (mean flow and ν̃ updated from the same state, as in SU2's segregated solver), `"coupled"` keeps them. The Newton–Krylov phase uses the exact coupled Jacobian-vector products in both. On the flat plate the coupled Jacobian needs more iterations and a 100× larger LU fill with the default ordering: use `linear_solver.ordering = "colamd"` with it | D34 |
+| `turbulence_coupling` | `"segregated"` \| `"coupled"` | `"segregated"` | First-order Jacobian of RANS runs: `"segregated"` drops the mean-flow/turbulence coupling blocks (mean flow and ν̃ updated from the same state, as in a segregated solver), `"coupled"` keeps them. The Newton–Krylov phase uses the exact coupled Jacobian-vector products in both. On the flat plate the coupled Jacobian needs more iterations and a 100× larger LU fill with the default ordering: use `linear_solver.ordering = "colamd"` with it | D34 |
 
 ### `[time]`
 
@@ -623,7 +620,7 @@ Needed for force and moment coefficients, and for `fluid.reynolds_number`.
 | `inner_iterations` | int | `50` | Maximum pseudo-time iterations per time step | D37 |
 | `inner_residual_drop` | float | `3.0` | Inner convergence per time step: orders of magnitude relative to the unsteady residual of the previous solution | D37 |
 | `inner_cfl` | float | `1e4` | Starting pseudo-time CFL of the inner iterations (the physical time term stabilises the inner system; the SER control of `[solver].cfl` applies from there) | D37 |
-| `convergence` | table | `{ fields = [], cauchy_elements = 100, cauchy_eps = 1e-3, start_step = 0, window_start_step = 0, window_function = "square" }` | Convergence of a periodic or decaying unsteady run on the time-averaged force coefficients, as SU2's windowed Cauchy criterion (`WINDOW_CAUCHY_CRIT = YES`). `fields` (any of `cl`, `cd`, `cm`; needs `output.force_boundaries`; SU2 `CONV_WINDOW_FIELD`, there `TAVG_DRAG` etc.) are averaged over the time steps from `window_start_step` (`WINDOW_START_ITER`) to the last step of the run (`end_time / time_step`), weighted by `window_function` (`square` = plain mean, `hann`, `hann_square`, `bump`; `WINDOW_FUNCTION`); the average is Σ w C / Σ w. A Cauchy element is the relative change of this time average between two consecutive steps; they count from `window_start_step + start_step` (`CONV_WINDOW_STARTITER`). The run ends after the current step (with the final backup and result files, as the `.stop` control file) when the mean of the last `cauchy_elements` elements (`CONV_WINDOW_CAUCHY_ELEMS`) is below `cauchy_eps` (`CONV_WINDOW_CAUCHY_EPS`) for every listed coefficient. The log notes `Cauchy criterion met on the time average of …` and the summary names the criterion. A restart starts a fresh window, from the step after the restart at the earliest. Empty `fields` = run to `end_time` (default). The inner iterations of a step keep their own `inner_residual_drop`. Not reloadable with `.read_toml_N` | L3 |
+| `convergence` | table | `{ fields = [], cauchy_elements = 100, cauchy_eps = 1e-3, start_step = 0, window_start_step = 0, window_function = "square" }` | Convergence of a periodic or decaying unsteady run on the time-averaged force coefficients (windowed Cauchy criterion, window functions after Krakos et al. 2012). `fields` (any of `cl`, `cd`, `cm`; needs `output.force_boundaries`) are averaged over the time steps from `window_start_step` to the last step of the run (`end_time / time_step`), weighted by `window_function` (`square` = plain mean, `hann`, `hann_square`, `bump`); the average is Σ w C / Σ w. A Cauchy element is the relative change of this time average between two consecutive steps; they count from `window_start_step + start_step`. The run ends after the current step (with the final backup and result files, as the `.stop` control file) when the mean of the last `cauchy_elements` elements is below `cauchy_eps` for every listed coefficient. The log notes `Cauchy criterion met on the time average of …` and the summary names the criterion. A restart starts a fresh window, from the step after the restart at the earliest. Empty `fields` = run to `end_time` (default). The inner iterations of a step keep their own `inner_residual_drop`. Not reloadable with `.read_toml_N` | L3 |
 
 The other `[solver]` settings (CFL control, Newton–Krylov, linear solver) apply to the inner iterations as well; Newton–Krylov is used from the first inner iteration. Unsteady runs write one log line and one history row per time step (step, time, inner iterations used, inner residual drop reached, residuals, GMRES iterations, coefficients); `output.verbosity = "detailed"` adds the inner iteration lines. Fields are written every `output.interval` time steps as `<name>_<step>.vtu`, collected in `<name>.pvd` (ParaView time series), plus the final `<name>.vtu`.
 

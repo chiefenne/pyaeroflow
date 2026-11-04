@@ -47,7 +47,7 @@ type = "symmetry"
 type = "wall"
 
 [numerics]
-turbulence_spatial_order = 1      # upwind SA convection (SU2 default)
+turbulence_spatial_order = 1      # upwind SA convection (first order, default)
 
 [solver]
 residual_drop = 8.0

@@ -4,7 +4,7 @@ State per cell: (p, u, v, T, nu_tilde). The mean flow is that of
 :mod:`pyaeroflow.physics.compressible` with the effective viscosity
 mu + mu_t, mu_t = rho nu_tilde f_v1, in the stress and the conductivity
 c_p (mu / Pr + mu_t / Pr_t) in the heat flux (Boussinesq without the
-2/3 rho k term, as SU2 for SA).
+2/3 rho k term, as usual for SA).
 
 The turbulence row is the conservative compressible form of SA-neg of the
 NASA Turbulence Modeling Resource (SA page, "compressible" form; the

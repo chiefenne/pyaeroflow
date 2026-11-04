@@ -19,7 +19,7 @@ def test_abs_preconditioned_jacobian_matches_eigendecomposition():
     n = np.array([np.cos(th), np.sin(th)])
     u, v = 0.7, -0.4
     vn = u * n[0] + v * n[1]
-    # Flux Jacobian with d(rho)/dp = 1/beta^2 (SU2) and the preconditioner.
+    # Flux Jacobian with d(rho)/dp = 1/beta^2 (Economon 2020) and the preconditioner.
     a = np.array(
         [
             [vn / beta2, rho * n[0], rho * n[1]],

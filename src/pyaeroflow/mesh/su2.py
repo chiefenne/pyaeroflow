@@ -1,4 +1,4 @@
-"""Reader and writer for 2D SU2 native mesh files (``.su2``), requirement D43.
+"""Reader and writer for 2D ``.su2`` mesh files (as PyAero writes them), D43.
 
 Supported: ``NDIME= 2`` with triangles (type 5) and quadrilaterals (type 9);
 boundary markers made of line elements (type 3). Keywords may appear in any
@@ -100,11 +100,11 @@ def write_su2(path, mesh):
     """Write a mesh as a 2D ``.su2`` file (triangles, quadrilaterals only).
 
     Boundary-face sets become markers. Polygon cells with more than four
-    nodes have no SU2 element type and raise ``MeshError``.
+    nodes have no ``.su2`` element type and raise ``MeshError``.
     """
     counts = mesh.cell_n_nodes
     if np.any(counts > 4):
-        raise MeshError("SU2 files support triangles and quadrilaterals only")
+        raise MeshError(".su2 files support triangles and quadrilaterals only")
     lines = ["NDIME= 2", f"NELEM= {mesh.n_cells}"]
     for i in range(mesh.n_cells):
         nodes = mesh.cell(i)

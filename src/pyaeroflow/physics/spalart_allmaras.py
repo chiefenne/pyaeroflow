@@ -13,7 +13,7 @@ with nu_t written for nu_tilde. The eddy viscosity is nu_tilde f_v1 for
 nu_tilde >= 0 and 0 otherwise.
 
 Transition (L3, first step): the algebraic BCM model of Cakmakcioglu, Bas,
-Mura & Kaynak (2020 revision, as implemented in SU2) multiplies the
+Mura & Kaynak (2020 revision) multiplies the
 production term by an intermittency gamma_BC built from the vorticity
 Reynolds number and the freestream turbulence intensity; it is used with
 the f_t2 term switched off (SA-noft2-BCM).

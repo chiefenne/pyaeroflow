@@ -47,7 +47,7 @@ SCHEMA = {
         "flow": Opt(
             "string",
             "incompressible",
-            "Flow family: incompressible (SU2 INC: artificial compressibility, "
+            "Flow family: incompressible (artificial compressibility, "
             "constant density) or compressible (density-based, ideal gas; "
             "physics.model = euler or laminar so far)",
             choices=("incompressible", "compressible"),
@@ -62,7 +62,7 @@ SCHEMA = {
             "string",
             None,
             "Turbulence model (rans): sa-neg (Spalart-Allmaras, negative "
-            "variant) or sst (Menter k-omega SST-2003m as in SU2); default sa-neg",
+            "variant) or sst (Menter k-omega SST-2003m, NASA TMR); default sa-neg",
             choices=("sa-neg", "sst"),
         ),
         "transition": {
@@ -70,7 +70,7 @@ SCHEMA = {
                 "bool",
                 True,
                 "model = lm: clip gamma to [1e-4, 5] and Re_thetat to [1e-4, "
-                "1e15] after every update, as SU2 does; false leaves them "
+                "1e15] after every update; false leaves them "
                 "unclipped (a cell can then run to gamma = 1e-142 and stall "
                 "the gamma residual)",
             ),
@@ -92,7 +92,7 @@ SCHEMA = {
                 "model = lm: largest pseudo-time CFL number of the gamma and "
                 "Re_thetat equations (implicit modes); the flow and k-omega rows "
                 "keep the solver CFL. Like a segregated transition solver with "
-                "its own CFL in SU2: at a high CFL the Newton update of gamma "
+                "its own CFL: at a high CFL the Newton update of gamma "
                 "overshoots (the full step raised the gamma residual 10-50x on "
                 "the 320k SD7003 at CFL >= 2560) and the line search then cuts "
                 "the good flow update to a quarter as well. Default: no cap",
@@ -121,7 +121,7 @@ SCHEMA = {
                 "(Cakmakcioglu et al., 2020 revision, with SA-noft2); aft = "
                 "SA-AFT2019b (Coder: transport equations for the amplification "
                 "factor and the log-intermittency); lm = Langtry-Menter gamma-Re_theta "
-                "on SST (SST-2003m-LM2009 as in SU2, Tu from the inflow k); "
+                "on SST (SST-2003m-LM2009, NASA TMR, Tu from the inflow k); "
                 "combines with mode = prescribed",
                 choices=("none", "bcm", "aft", "lm"),
             ),
@@ -326,15 +326,15 @@ SCHEMA = {
             "float",
             0.001,
             "Roe flux: Harten's entropy fix, delta = entropy_fix (|v_n| + c) "
-            "(SU2 ENTROPY_FIX_COEFF); 0 = off",
+            "(Harten 1983); 0 = off",
             minimum=0.0,
         ),
         "low_mach_correction": Opt(
             "bool",
             False,
             "Roe flux (compressible): Rieper's low-Mach correction of the "
-            "face velocities, z = min(max(M_L, M_R), 1), as SU2 "
-            "LOW_MACH_CORR; reduces the excess pressure dissipation of the "
+            "face velocities, z = min(max(M_L, M_R), 1) (Rieper 2011); "
+            "reduces the excess pressure dissipation of the "
             "Roe scheme at low Mach numbers (about M < 0.3)",
         ),
         "spatial_order": Opt(
@@ -455,7 +455,7 @@ SCHEMA = {
             "fields": Opt(
                 "string_list",
                 [],
-                "Cauchy convergence on force coefficients, as SU2's CONV_FIELD: "
+                "Cauchy convergence on force coefficients: "
                 "the run also stops (converged) when every listed coefficient "
                 "(cl, cd, cm) has changed by less than cauchy_eps (relative "
                 "change between iterations) on average over the last "
@@ -464,20 +464,20 @@ SCHEMA = {
             "cauchy_elements": Opt(
                 "int",
                 100,
-                "Iterations in the Cauchy window (SU2 CONV_CAUCHY_ELEMS)",
+                "Iterations in the Cauchy window",
                 minimum=2,
             ),
             "cauchy_eps": Opt(
                 "float",
                 1.0e-10,
                 "Cauchy tolerance on the mean relative change of a coefficient "
-                "per iteration, |C_n - C_(n-1)| / |C_n| (SU2 CONV_CAUCHY_EPS)",
+                "per iteration, |C_n - C_(n-1)| / |C_n|",
                 minimum=0.0,
             ),
             "start_iteration": Opt(
                 "int",
                 0,
-                "Cauchy values count only from this iteration (SU2 CONV_STARTITER)",
+                "Cauchy values count only from this iteration",
                 minimum=0,
             ),
             "min_residual_drop": Opt(
@@ -487,7 +487,7 @@ SCHEMA = {
                 "window only if its residual drop (the drop column of the log: "
                 "the worst equation relative to its own peak, in orders) is at "
                 "least this; forces that stand still while the residual sits at "
-                "its peak do not stop the run. 0 = SU2's plain criterion",
+                "its peak do not stop the run. 0 = the plain Cauchy criterion",
                 minimum=0.0,
             ),
         },
@@ -707,8 +707,7 @@ SCHEMA = {
                 "string_list",
                 [],
                 "Cauchy convergence of the windowed time average of force "
-                "coefficients (cl, cd, cm), as SU2's WINDOW_CAUCHY_CRIT with "
-                "CONV_WINDOW_FIELD: the run stops after the current step when "
+                "coefficients (cl, cd, cm): the run stops after the current step when "
                 "every listed time-averaged coefficient has changed by less "
                 "than cauchy_eps on average over the last cauchy_elements "
                 "steps; empty = off (the run goes to end_time)",
@@ -716,35 +715,34 @@ SCHEMA = {
             "cauchy_elements": Opt(
                 "int",
                 100,
-                "Steps in the Cauchy window (SU2 CONV_WINDOW_CAUCHY_ELEMS)",
+                "Steps in the Cauchy window",
                 minimum=2,
             ),
             "cauchy_eps": Opt(
                 "float",
                 1.0e-3,
                 "Cauchy tolerance on the mean relative change of the time "
-                "average per step (SU2 CONV_WINDOW_CAUCHY_EPS)",
+                "average per step",
                 minimum=0.0,
             ),
             "start_step": Opt(
                 "int",
                 0,
                 "Steps to wait after window_start_step before the Cauchy "
-                "elements count (SU2 CONV_WINDOW_STARTITER)",
+                "elements count",
                 minimum=0,
             ),
             "window_start_step": Opt(
                 "int",
                 0,
-                "Time step from which the coefficients are averaged "
-                "(SU2 WINDOW_START_ITER)",
+                "Time step from which the coefficients are averaged",
                 minimum=0,
             ),
             "window_function": Opt(
                 "string",
                 "square",
                 "Weights of the time average over the steps from "
-                "window_start_step to the last step (SU2 WINDOW_FUNCTION)",
+                "window_start_step to the last step",
                 choices=("square", "hann", "hann_square", "bump"),
             ),
         },

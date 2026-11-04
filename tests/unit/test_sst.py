@@ -17,7 +17,7 @@ from pyaeroflow.run import load_restart, mesh_fingerprint, run_case, turbulence_
 jax.config.update("jax_enable_x64", True)
 
 
-def test_constants_are_those_of_su2():
+def test_constants_are_those_of_sst_2003m():
     assert sst.GAMMA_1 == pytest.approx(0.5532, abs=1e-4)
     assert sst.GAMMA_2 == pytest.approx(0.4404, abs=1e-4)
     assert sst.blend(1.0, sst.BETA_1, sst.BETA_2) == sst.BETA_1
@@ -107,7 +107,7 @@ def test_wall_values_initial_state_and_jvp():
 def test_first_order_jacobian_matches_residual_diagonal():
     """The compact Jacobian's turbulence diagonal has the residual's magnitude.
 
-    It uses the residual's face viscosities (SU2 practice); a k / omega
+    It uses the residual's face viscosities; a k / omega
     estimate is orders of magnitude off in a laminar boundary layer.
     """
     p = _plate_problem()

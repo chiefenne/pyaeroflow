@@ -425,7 +425,7 @@ SST-Vm and SST-2003m coincide, vorticity = strain rate):
 
 The solution is grid-converged. It depends on the wall value of ω, which a
 cell-centred scheme does not resolve (ω ~ 1/y²): with d₁ = the wall-cell
-height (the default, SU2's first mesh spacing on the same points) C_f(0.97)
+height (the default, the first mesh spacing on the same points) C_f(0.97)
 is 0.002689 (TMR 0.0026907), with d₁ = the centroid distance (ω_wall four
 times larger) 0.002630 at 192 × 96, about 2 % lower at every grid level: the
 TMR value confirms the wall-cell height.
@@ -524,8 +524,8 @@ a reference here.
 ## 10. Langtry–Menter γ-Re_θ on SST (SST-2003m-LM2009)
 
 Model and numerics: `docs/configuration.md`, section "Langtry–Menter
-γ-Re_θ" (TMR "langtrymenter_4eqn" and SU2's `MENTER_LANGTRY`
-implementation, local Tu and dU/ds; the Newton–Krylov step uses the exact
+γ-Re_θ" (TMR "langtrymenter_4eqn" with the Langtry–Menter 2009
+correlations, local Tu and dU/ds; the Newton–Krylov step uses the exact
 JVP with `positive_jacobian = false` and the positive linearization of the γ
 source by default since 1.1).
 
@@ -621,12 +621,11 @@ The shear layer triggers through γ_sep at x/c 0.45–0.5 (γ_eff up to 2, k
 growing by four orders by 0.65) and the bubble closes; the pressure plateau
 and the turbulent C_f of about 0.003 after reattachment (XFOIL 0.0047) are in
 the picture. Reattachment is 0.04–0.11 late and
-C_D is 3 % above the highest LES/DNS value. Without the solution limits of
-SU2 the γ residual stalled at 10⁻⁵·⁴ although all others converged: one cell
+C_D is 3 % above the highest LES/DNS value. Without solution limits on
+γ and Re_θt the γ residual stalled at 10⁻⁵·⁴ although all others converged: one cell
 in the turbulent layer (x/c 0.843) had fallen to γ = 10⁻¹⁴² (the 99 % step
 limiter, 70 iterations) and the derivative of √γ there is about 10⁷⁰. With γ
-clipped to [10⁻⁴, 5] and Re_θt to [10⁻⁴, 10¹⁵] after every update (SU2,
-`CTransLMSolver`), a restart from iteration 2000 converged in 36 Newton–Krylov
+clipped to [10⁻⁴, 5] and Re_θt to [10⁻⁴, 10¹⁵] after every update, a restart from iteration 2000 converged in 36 Newton–Krylov
 iterations to 7.3 orders (all residuals 10⁻¹⁰ to 10⁻¹⁶, γ residual peak
 6·10⁻⁵ against 550) at the same forces: C_L 0.59307, C_D 0.022761,
 C_M 0.039252. A restart from the old iteration 2500 state instead left the
@@ -637,9 +636,9 @@ state (C_L 0.43–0.49) because that state held the dead cell.
 C_p and C_f of the converged 320k run (upper side solid, lower dashed) against
 the fully turbulent SST and SA-neg runs on the 39k grid and XFOIL: separation
 at x/c 0.19, C_f < 0 up to 0.71 (shaded: LES/DNS bands).
-The clip is on by default as in SU2 and can be turned off with
+The clip is on by default and can be turned off with
 `physics.transition.clip = false`. `solver.convergence.fields = ["cd"]`
-adds SU2's force-based (Cauchy) criterion to the residual drop, so a run like
+adds the force-based (Cauchy) criterion to the residual drop, so a run like
 this one can end when C_D has settled instead of at a fixed residual drop.
 
 ### SD7003, Re 6·10⁴: SST-LM polar on the 320k PyAero mesh
@@ -746,7 +745,7 @@ them.
 | SA-AFT2019b | T3B (Tu 6 %, bypass), [§8](#sec-8) | cannot transition before Re_x = 1.3·10⁵ (Re_θ0 = 237) | no bypass mechanism by construction; not run | SST-LM (bypass at the leading edge) |
 | SST-LM | SD7003, Re 6·10⁴, α = 4°, [§10](#sec-10) | bubble too long: reattachment at x/c 0.71 against 0.60–0.67 (LES/DNS), C_D 3 % above the highest LES/DNS value; C_L and C_M inside the bands | transition is triggered in the LES/DNS window (γ_sep from x/c 0.45, ν_t/ν > 1 at 0.468); the turbulent shear layer after transition reattaches too slowly. Not diagnosed further (candidates: freestream decay of k and ω without sustaining terms, SST eddy viscosity in the separated layer) | SA-AFT (reattachment 0.644, inside the band) for low-Re laminar separation bubbles |
 | SA-AFT2019b | E387, Re 2·10⁵, α = −2°, [§8](#sec-8) | no steady solution found: rerun from the converged α = 0° state with growth CFL (cap 10⁵) and the Cauchy criterion on C_L/C_D (2026-10-27) stays in the Newton–Krylov phase at CFL 10–200 (every step above ~150 fails or is rejected); residuals of p, u, v, ν̃ flat at 10⁻⁶·⁶–10⁻⁹·³, γ 10⁻³–10⁻⁴, ñ 10⁻⁴·⁸; C_L drifts from 0.148 to 0.161 over iterations 83–313 and the drift grows (10⁻⁴ per iteration), C_D 0.0089 → 0.0095 | transition moving slowly over many iterations, as Coder (2019) reports for AFT; not diagnosed further | forces at α = −2° are indicative only (the 2000-iteration polar value C_L 0.163 lies on the same drift). A time-accurate (BDF2) run is the likely remedy, as in §7 for BCM at α = 8°; not tried |
-| SA-AFT2019b | E387, Re 2·10⁵, α = 8°, [§8](#sec-8) | not converged in 2000 iterations of the polar (SER CFL); not rerun | near the leading-edge bubble burst (XFOIL: transition at x/c 0.045); the BCM solution at α = 8° was a limit cycle (C_L 1.11–1.23, period about 0.25 c/U, `docs/e387_alpha8_ser_stall.md`), so a steady solution may not exist | forces at α = 8° are not reference values; a time-accurate run with cycle-averaged forces is the likely remedy (as SU2 users do for unsteady separation); not tried for AFT |
+| SA-AFT2019b | E387, Re 2·10⁵, α = 8°, [§8](#sec-8) | not converged in 2000 iterations of the polar (SER CFL); not rerun | near the leading-edge bubble burst (XFOIL: transition at x/c 0.045); the BCM solution at α = 8° was a limit cycle (C_L 1.11–1.23, period about 0.25 c/U, `docs/e387_alpha8_ser_stall.md`), so a steady solution may not exist | forces at α = 8° are not reference values; a time-accurate run with cycle-averaged forces is the likely remedy (common practice for unsteady separation); not tried for AFT |
 | SST-LM | SD7003, Re 6·10⁴, polar α = 0–10°, [§10](#sec-10) | C_D too high from α = 4° (+29 % at 4°, +41 % at 8°, +55 % at 9° against SA-AFT; pressure drag), C_L 5–11 % low at 8°–9°; five of seven points not converged by a criterion (γ residual at the clip floor, forces settled to 4–5 digits) | late reattachment as at α = 4°; the γ residual stalls because eight cells at the clip floor get Newton updates that point away from the root (√γ production derivative, §10), so only the force criterion could end a run; `positive_jacobian` (default from 1.1, `docs/configuration.md`) removes the cause: at α = 4° the restart converged in 13 Newton–Krylov iterations at unchanged forces; the polar has not been rerun with it | SA-AFT for drag and stall angle; LM for the low-α lift (0°, 2° close to XFOIL) |
 | SA-AFT, SST-LM | turbulent C_f after reattachment (E387, SD7003) | 35–50 % below XFOIL | baseline turbulence model recovering from the bubble; open, not specific to the transition models | – |
 
@@ -885,8 +884,8 @@ in the cloud sandbox (4 cores, PARDISO).
 **Low-Mach correction.** At M 0.15 the plain Roe flux is too dissipative:
 on the TMR 113 × 33 grid at α 10° the pressure drag is 26 % above INC
 (C_Dp 0.0355 vs 0.0281) and the lift 2 % below; on 225 × 65 the pressure
-drag is +10 %. `numerics.low_mach_correction = true` (Rieper's correction,
-SU2 `LOW_MACH_CORR`) removes this: C_Dp 0.0173 on 113 × 33 and 0.0090 on
+drag is +10 %. `numerics.low_mach_correction = true` (Rieper's correction)
+removes this: C_Dp 0.0173 on 113 × 33 and 0.0090 on
 225 × 65, close to what the finer grids and CFL3D give, and the run converges
 in far fewer iterations. It is off by default and recommended below about
 M 0.3. All results below use it unless noted.
@@ -950,7 +949,7 @@ the dead stop and its fix). SST is section 15; RAE 2822 is the next stage.
 ## 15. Compressible k-ω SST RANS (L1 stage C4)
 
 `physics.model = "rans"` with `physics.flow = "compressible"` and
-`turbulence = "sst"`: SU2's compressible SST-2003m (rows ρk and ρω with the
+`turbulence = "sst"`: the compressible SST-2003m (rows ρk and ρω with the
 Roe mass flux, diffusion (μ + σμ_t)∇k, the incompressible sources times ρ
 with −⅔k∇·v in the production, −⅔ρkδ_ij in the stress, wall ω
 60ν_w/(β₁d₁²) with ν_w of the wall state; see
@@ -1008,7 +1007,8 @@ ordering and pivoting of its first analysis, so after the bad matrix every
 later factorization failed, while a fresh solver solved the CFL 1 matrix to
 10⁻¹⁵. The Jacobian now takes the plain Roe flux
 (`compressible.jacobian_convective_flux`; the residual keeps the
-correction, as SU2 does with its first-order approximate Jacobian) and a
+correction; an approximate first-order Jacobian of the plain flux is a
+common choice) and a
 rejected step makes PARDISO analyse the pattern again
 (`linear.reset_analysis`). Afterwards α 0° runs on, but slowly: the line
 search takes ¼ steps for most iterations, CFL settles at 200–250 and the
@@ -1117,7 +1117,12 @@ need their volume, page or paper number checked.
 - Knoll, D. A., Keyes, D. E. (2004): Jacobian-free Newton–Krylov methods: a
   survey of approaches and applications. J. Comput. Phys. 193, 357–397
   (Eisenstat–Walker forcing, `pseudo_time.py`).
-- Economon, T. D., Palacios, F., Copeland, S. R., Lukaczyk, T. W., Alonso, J.
-  J. (2016): SU2: an open-source suite for multiphysics simulation and design.
-  AIAA J. 54(3), 828–846. The source of the INC formulation, the SST and LM
-  implementations and the convergence criteria followed here.
+- Economon, T. D. (2020): Simulation and adjoint-based design for variable
+  density incompressible flows with heat transfer. AIAA J. 58(2), 757–769 †.
+  The artificial-compressibility formulation of the incompressible solver.
+- Rieper, F. (2011): A low-Mach number fix for Roe's approximate Riemann
+  solver. J. Comput. Phys. 230(13), 5263–5287 †.
+- Krakos, J. A., Wang, Q., Hall, S. R., Darmofal, D. L. (2012): Sensitivity
+  analysis of limit cycle oscillations. J. Comput. Phys. 231(8), 3228–3245 †.
+  Windowed time averages (Hann, Hann-squared, bump) of the unsteady Cauchy
+  criterion.

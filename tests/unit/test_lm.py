@@ -177,7 +177,7 @@ def test_step_limiter_groups():
     np.testing.assert_allclose(out[:, rans_sst.NK], du[:, rans_sst.NK])  # apart
 
 
-def test_step_limiter_clips_gamma_and_re_theta_like_su2():
+def test_step_limiter_clips_gamma_and_re_theta():
     p, k_omega = _lm_plate()
     w = p.initial_state((1.0, 0.0), k_omega=k_omega)
     n = len(w)
@@ -338,7 +338,7 @@ def test_configuration_block_names_the_transition_clip():
         },
     }
     rows = dict(_mode_rows(resolve(raw)))
-    assert rows["gamma, Re_thetat"].startswith("clipped as in SU2: gamma [0.0001, 5]")
+    assert rows["gamma, Re_thetat"].startswith("clipped: gamma [0.0001, 5]")
     assert rows["gamma Newton step"].startswith("plain Newton")
     assert rows["gamma linearization"].startswith("positive")
     raw["physics"]["transition"]["clip"] = False

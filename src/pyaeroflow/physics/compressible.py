@@ -1,9 +1,9 @@
 """Compressible Euler and laminar Navier-Stokes equations (L1).
 
-Density-based, as SU2's compressible solver.
+Density-based.
 
-Working variables per cell: V = (p, u, v, T), the primitive variables SU2
-reconstructs (``MUSCL_FLOW``), with the density from the ideal-gas law
+Working variables per cell: V = (p, u, v, T), the primitive variables that
+are reconstructed (MUSCL), with the density from the ideal-gas law
 rho = p / (R T). The residual R(V) is the net outflow of the conservative
 fluxes
 
@@ -19,42 +19,41 @@ uses the conservative time derivative,
 so that the pseudo-time blocks are dU/dV Lambda_i / CFL with the spectral
 radius Lambda_i = sum over faces of (|v_n| + c) L.
 
-Non-dimensionalisation (as SU2's ``FREESTREAM_VEL_EQ_ONE``): rho, |v| and T
+Non-dimensionalisation: rho, |v| and T
 of the freestream are 1, the reference length is the chord. Then
 p_inf = 1 / (gamma M_inf^2) and the non-dimensional gas constant is
 R = p_inf / (rho_inf T_inf) = 1 / (gamma M_inf^2) (see
 :func:`gas_constant_for_mach`).
 
 Convective flux (D21 for this solver): Roe's approximate Riemann solver
-(SU2 ``ROE``) with Harten's entropy fix in its smooth form,
+(Roe 1981) with Harten's entropy fix in its smooth form,
 |lambda| -> (lambda^2 + delta^2) / (2 delta) for |lambda| < delta,
 delta = ``entropy_fix`` (|v_n| + c) of the Roe-averaged state. Second order
 by MUSCL reconstruction of V with the Venkatakrishnan(-Wang) limiter. A face
 whose reconstructed state has p <= 0 or T <= 0 falls back to first order
-(SU2's non-physical reconstruction check).
+(non-physical reconstruction check).
 
-Viscous flux (C2, SU2 ``CNSSolver``): the residual subtracts
+Viscous flux (C2): the residual subtracts
 
     F_v.n = (0, tau.n, (tau.v).n + k grad T.n),
 
 tau = mu (grad v + grad v^T - 2/3 div v I) (Stokes), with the dynamic
-viscosity mu(T) of Sutherland's law (SU2 ``VISCOSITY_MODEL = SUTHERLAND``)
+viscosity mu(T) of Sutherland's law
 or a constant, and the conductivity k = mu c_p / Pr (constant Prandtl
-number, SU2 ``PRANDTL_LAM = 0.72``), c_p = gamma R / (gamma - 1). Face
+number, Pr = 0.72), c_p = gamma R / (gamma - 1). Face
 gradients of (p, u, v, T) as in the incompressible solver (D24); mu, k and
 v at the face from the mean of the two cell states.
 
 No-slip walls (``wall`` in a laminar case): zero velocity, the pressure of
-the interior cell, and either no heat flux (adiabatic, the default; SU2
-``MARKER_HEATFLUX`` with 0) or a prescribed wall temperature (isothermal,
-SU2 ``MARKER_ISOTHERMAL``), whose heat flux follows from the one-sided
+the interior cell, and either no heat flux (adiabatic, the default) or a
+prescribed wall temperature (isothermal), whose heat flux follows from the one-sided
 normal temperature gradient. Slip walls and symmetry faces carry no viscous
 flux.
 
 Boundary conditions: farfield (freestream state outside, Roe flux between the
-interior and that state: the upwinding picks the incoming characteristics,
-as SU2's ``MARKER_FAR``), slip wall and symmetry (pressure flux only; SU2's
-``MARKER_EULER``), static-pressure outlet (prescribed p, entropy and
+interior and that state: the upwinding picks the incoming characteristics),
+slip wall and symmetry (pressure flux only), static-pressure outlet
+(prescribed p, entropy and
 velocity from the interior; supersonic outflow extrapolates everything),
 total-conditions inlet (p_0, T_0 and flow direction; p from the interior)
 and velocity inlet (u, v, T prescribed, p from the interior).
@@ -89,7 +88,7 @@ FLOW = "compressible"
 P, U, V, T = 0, 1, 2, 3
 # Columns that must stay positive (step limiter, structural Jacobian samples).
 POSITIVE_COLUMNS = (P, T)
-# Names of the residual rows (log and history), as SU2's conservative rows.
+# Names of the residual rows (log and history): the conservative rows.
 RESIDUAL_NAMES = ("rho", "rhou", "rhov", "rhoE")
 
 __all__ = [
@@ -128,8 +127,8 @@ class CompressibleModel(NamedTuple):
     entropy_fix : float
         Harten's coefficient: delta = entropy_fix (|v_n| + c); 0 = off.
     low_mach_correction : bool
-        Rieper's low-Mach correction of the Roe flux on interior faces (SU2
-        ``LOW_MACH_CORR``): the face velocities are blended towards their
+        Rieper's low-Mach correction of the Roe flux on interior faces
+        (Rieper 2011): the face velocities are blended towards their
         mean by z = min(max(M_L, M_R), 1), which scales the velocity-jump
         dissipation with the local Mach number.
     viscous_gradient : str
@@ -144,7 +143,7 @@ class CompressibleModel(NamedTuple):
     turbulence_spatial_order : int
         1 or 2: convective states of the turbulence equation.
     prandtl_turbulent : float
-        Turbulent Prandtl number of the eddy heat flux (SU2 ``PRANDTL_TURB``).
+        Turbulent Prandtl number of the eddy heat flux.
     pin, transition, coupling :
         Interface of the problem class: no pin, no transition model, the
         mean-flow/turbulence coupling of the first-order Jacobian.
@@ -404,7 +403,7 @@ def roe_flux(gamma, gas_constant, entropy_fix, w_l, w_r, normal):
 
     F = (F_L + F_R) / 2 - sum_k |lambda_k| alpha_k r_k / 2 with the
     Roe-averaged state (Blazek, Computational Fluid Dynamics, 3rd ed.,
-    sec. 4.3.3; SU2 ``CUpwRoe_Flow``).
+    sec. 4.3.3).
     """
     nx, ny = normal[:, 0], normal[:, 1]
     r_l, r_r = density(gas_constant, w_l), density(gas_constant, w_r)
@@ -465,7 +464,7 @@ def _flux(model, w_l, w_r, normal):
 
 
 def low_mach_states(gamma, gas_constant, w_l, w_r):
-    """Rieper's low-Mach correction of the face states (SU2 ``LOW_MACH_CORR``).
+    """Rieper's low-Mach correction of the face states (Rieper 2011).
 
     u_L* = (1 + z)/2 u_L + (1 - z)/2 u_R and u_R* likewise, with
     z = min(max(M_L, M_R), 1) (Rieper, J. Comput. Phys. 230, 2011): the
@@ -611,7 +610,7 @@ def viscous_flux(model, grad, w_f, normal, heat=True, mu_t=None):
 
     With an eddy viscosity ``mu_t`` (n,) (RANS, C3) the stress uses
     mu + mu_t and the conductivity c_p (mu / Pr + mu_t / Pr_t) (Boussinesq,
-    without the 2/3 rho k term, as SU2 for SA).
+    without the 2/3 rho k term, as usual for SA).
 
     Parameters
     ----------
@@ -827,7 +826,7 @@ def face_eigenvalue(model, w_f, normal, delta, mu_t=None):
     """|v_n| + c + lambda_v per face for face states w_f (n, >= 4).
 
     Viscous part: lambda_v = (4/3 (mu + mu_t) + gamma (mu / Pr + mu_t / Pr_t))
-    / (rho |d.n|), SU2's two viscous eigenvalue terms over the face distance;
+    / (rho |d.n|), the two viscous eigenvalue terms over the face distance;
     ``mu_t`` (n,) is the eddy viscosity (RANS), None = laminar.
     """
     c = sound_speed(model.gamma, model.gas_constant, w_f)
