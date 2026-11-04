@@ -1067,10 +1067,31 @@ is limited by the round-off floor; use `residual_drop` 8-9 for low-Mach Euler.
 SLAU2 shows a long acoustic start-up transient from the freestream (tracked
 separately with the slow alpha 0 start-up).
 
-Default: for `model = "euler"` without `low_mach_correction`, `convective_flux`
-defaults to `slau2`; the example cases of sections 12 and 16 that quote Roe
-numbers set `convective_flux = "roe"` explicitly. Laminar and RANS keep Roe
-by default until the TMR NACA 0012 (SA, SST) and RAE 2822 comparisons are done.
+TMR NACA 0012, M 0.15, Re 6e6, alpha 10 (PARDISO; Roe rows use
+`low_mach_correction`; 449 Roe rows are from sections 14 and 15):
+
+| Grid | Model | Flux | Residual drop | CL | CD |
+|---|---|---|---|---|---|
+| 225 x 65 | SA-neg | Roe + Rieper | 1.7 (400 it) | 1.0856 | 0.01507 |
+| 225 x 65 | SA-neg | SLAU2 | 7.0 (360 it) | 1.0726 | 0.01604 |
+| 225 x 65 | SST | Roe + Rieper | 1.8 (400 it) | 1.0931 | 0.01715 |
+| 225 x 65 | SST | SLAU2 | 5.5 (400 it) | 1.0627 | 0.01579 |
+| 449 x 129 | SA-neg | Roe + Rieper | | 1.0914 | 0.01270 |
+| 449 x 129 | SA-neg | SLAU2 | 3.1 (400 it) | 1.0922 | 0.012748 |
+| 449 x 129 | SST | Roe + Rieper | (1200 it, drifting) | 1.0818 | 0.01280 |
+| 449 x 129 | SST | SLAU2 | 4.9 (596 it) | 1.0800 | 0.012824 |
+
+CFL3D: SA 225 1.0838 / 0.01449, SA 449 1.0909 / 0.01273; TMR SST 897
+1.0778 / 0.01236. On 449 SLAU2 reproduces Roe + Rieper within 0.2 % and the
+CFL3D values within 0.15 %; on 225 it converges 4-5 orders further (the
+frozen limiter stalls the Roe runs) but its pressure drag is higher (SA CD
++6 % vs Roe on this coarse grid).
+
+Default: `convective_flux` defaults to `slau2` for every compressible model;
+it stays `roe` when `numerics.low_mach_correction = true` is set. The Roe
+examples that quote Roe numbers (`naca0012_euler_m05/m08`, `ramp_10deg_m2`,
+`naca0012_laminar_m05`) set `convective_flux = "roe"` explicitly. Not yet
+run with SLAU2: RAE 2822 and laminar flow.
 
 ## References
 

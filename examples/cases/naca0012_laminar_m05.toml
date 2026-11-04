@@ -26,6 +26,7 @@ length = 1.0                      # chord (m): the length of the Reynolds number
 
 [numerics]
 limiter = "none"                  # shock-free: unlimited second order
+convective_flux = "roe"           # default is slau2; Roe gives the documented numbers
 
 [solver]
 max_iterations = 200

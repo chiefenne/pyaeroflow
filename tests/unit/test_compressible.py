@@ -285,6 +285,14 @@ def _raw(**farfield):
     }
 
 
+def test_default_flux_slau2_unless_low_mach_correction():
+    num = resolve(_raw(angle_of_attack=1.0)).data["numerics"]
+    assert num["convective_flux"] == "slau2"
+    raw = _raw(angle_of_attack=1.0)
+    raw["numerics"] = {"low_mach_correction": True}
+    assert resolve(raw).data["numerics"]["convective_flux"] == "roe"
+
+
 def test_compressible_case_resolves_reference_values():
     config = resolve(_raw(angle_of_attack=1.25))
     ref = config.data["reference"]

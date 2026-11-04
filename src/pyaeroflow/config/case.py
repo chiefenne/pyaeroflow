@@ -754,9 +754,9 @@ def _flow_rules(data, boundaries, farfields, compressible, problems, notices):
     if flux is None:
         if not compressible:
             num["convective_flux"] = "fds"
-        elif physics["model"] == "euler" and not num["low_mach_correction"]:
-            # SLAU2 is Mach independent where Roe is not (validation 16);
-            # viscous cases keep Roe until the TMR comparison is done
+        elif not num["low_mach_correction"]:
+            # SLAU2 is Mach independent where Roe is not and converges better
+            # on the TMR NACA 0012 cases (validation 16)
             num["convective_flux"] = "slau2"
         else:
             num["convective_flux"] = "roe"
