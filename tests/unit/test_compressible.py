@@ -293,7 +293,7 @@ def test_compressible_case_resolves_reference_values():
     assert ref["density"] == pytest.approx(101325.0 / (287.058 * 288.15))
     assert ref["velocity"] == pytest.approx(0.8 * math.sqrt(1.4 * 287.058 * 288.15))
     assert ref["temperature"] == 288.15
-    assert config.data["numerics"]["convective_flux"] == "roe"
+    assert config.data["numerics"]["convective_flux"] == "slau2"
     assert config.data["initial"]["from_boundary"] == "farfield"
 
 
