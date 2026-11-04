@@ -1,0 +1,83 @@
+# RAE 2822 case 6 (AGARD AR-138; NASA TMR 2DRAE case): transonic RANS with a
+# shock on the upper surface. Corrected conditions of Cook, McDonald and
+# Firmin: M = 0.729, alpha = 2.31 deg, Re = 6.5e6 (based on chord).
+# k-omega SST, compressible (physics.flow = "compressible", L1).
+# Experiment (wind-tunnel corrected): CL 0.743, CD 0.0127 (values from memory,
+# check against the TMR page before quoting); RANS codes give CL about 0.80 to
+# 0.82 at these free-air conditions, shock at x/c about 0.7.
+# Mesh: ../meshes/RAE2822_C10_W25_320k_cells.su2, a C-type PyAero mesh (320 k
+# cells, tunnel 10 chords above/below, 25 chords wake); boundary faces:
+# Airfoil, Inlet, Outlet, Top, Bottom (capitalised).
+# Companion: rae2822_case6_roe.toml (same case, Roe flux).
+
+[case]
+name = "rae2822_case6_slau2"
+
+[mesh]
+file = "../meshes/RAE2822_C10_W25_320k_cells.su2"
+
+[physics]
+flow = "compressible"
+model = "rans"
+turbulence = "sst"
+
+[fluid]
+reynolds_number = 6.5e6           # rho U c / mu of the freestream (Sutherland mu(T))
+
+[reference]
+length = 1.0                      # chord (m)
+moment_center = [0.25, 0.0]       # quarter chord
+
+[initial]
+from_boundary = "Inlet"
+
+[numerics]
+limiter = "venkatakrishnan-wang"  # shock on the upper surface
+convective_flux = "slau2"
+limiter_freeze = { after_residual_drop = 1.5, after_iterations = 40, release = false }
+
+[solver]
+residual_drop = 7.0
+max_iterations = 2000
+cfl = { control = "ser" }
+newton_krylov = { switch_at_residual_drop = 1.5, switch_at_iteration = 40 }
+linear_solver = { type = "pardiso" }   # remove or use "direct" without pypardiso
+
+[boundary.Airfoil]
+type = "wall"                     # no-slip, adiabatic
+
+[boundary.Inlet]
+type = "farfield"
+mach = 0.729
+angle_of_attack = 2.31            # deg
+pressure = 101325.0               # Pa, absolute
+temperature = 300.0               # K
+turbulence = { turbulent_viscosity_ratio = 0.009, intensity = 5.164e-4 }
+
+[boundary.Outlet]
+type = "farfield"
+mach = 0.729
+angle_of_attack = 2.31
+pressure = 101325.0
+temperature = 300.0
+turbulence = { turbulent_viscosity_ratio = 0.009, intensity = 5.164e-4 }
+
+[boundary.Top]
+type = "farfield"
+mach = 0.729
+angle_of_attack = 2.31
+pressure = 101325.0
+temperature = 300.0
+turbulence = { turbulent_viscosity_ratio = 0.009, intensity = 5.164e-4 }
+
+[boundary.Bottom]
+type = "farfield"
+mach = 0.729
+angle_of_attack = 2.31
+pressure = 101325.0
+temperature = 300.0
+turbulence = { turbulent_viscosity_ratio = 0.009, intensity = 5.164e-4 }
+
+[output]
+directory = "output/rae2822_case6_slau2"
+force_boundaries = ["Airfoil"]

@@ -1091,7 +1091,7 @@ Default: `convective_flux` defaults to `slau2` for every compressible model;
 it stays `roe` when `numerics.low_mach_correction = true` is set. The Roe
 examples that quote Roe numbers (`naca0012_euler_m05/m08`, `ramp_10deg_m2`,
 `naca0012_laminar_m05`) set `convective_flux = "roe"` explicitly. Not yet
-run with SLAU2: RAE 2822 and laminar flow.
+run with SLAU2: laminar flow; RAE 2822 case 6 files are `examples/cases/rae2822_case6_roe.toml` and `rae2822_case6_slau2.toml` (user runs).
 
 ## References
 
