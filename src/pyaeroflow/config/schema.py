@@ -318,9 +318,10 @@ SCHEMA = {
             "string",
             None,
             "Convective flux: fds (incompressible, flux-difference splitting "
-            "with low-speed preconditioning) or roe (compressible, Roe with "
-            "Harten's entropy fix); default by physics.flow",
-            choices=("fds", "roe"),
+            "with low-speed preconditioning), or compressible: roe (Roe with "
+            "Harten's entropy fix) or slau2 (Kitamura and Shima 2013, "
+            "all-speed, no tuning parameter); default by physics.flow",
+            choices=("fds", "roe", "slau2"),
         ),
         "entropy_fix": Opt(
             "float",
@@ -329,12 +330,21 @@ SCHEMA = {
             "(Harten 1983); 0 = off",
             minimum=0.0,
         ),
+        "jacobian_flux": Opt(
+            "string",
+            "auto",
+            "Flux of the first-order Jacobian (compressible): auto = the "
+            "convective flux (slau2 or roe), roe = always plain Roe. Only "
+            "changes the preconditioner and the Newton step, not the "
+            "converged solution",
+            choices=("auto", "roe"),
+        ),
         "low_mach_correction": Opt(
             "bool",
             False,
-            "Roe flux (compressible): Rieper's low-Mach correction of the "
-            "face velocities, z = min(max(M_L, M_R), 1) (Rieper 2011); "
-            "reduces the excess pressure dissipation of the "
+            "Roe flux (compressible; not used by slau2): Rieper's low-Mach "
+            "correction of the face velocities, z = min(max(M_L, M_R), 1) "
+            "(Rieper 2011); reduces the excess pressure dissipation of the "
             "Roe scheme at low Mach numbers (about M < 0.3)",
         ),
         "spatial_order": Opt(

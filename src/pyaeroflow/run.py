@@ -422,6 +422,8 @@ def _setup_compressible(config, mesh):
         limiter_threshold=num["limiter_threshold"],
         entropy_fix=num["entropy_fix"],
         low_mach_correction=num["low_mach_correction"],
+        convective_flux=num["convective_flux"],
+        jacobian_flux=num["jacobian_flux"],
         viscous_gradient=num["viscous_gradient"],
         alpha=num["alpha"],
         turbulence=turb_model,
@@ -2223,8 +2225,12 @@ def _log_setup_compressible(log, config, problem, scaling, mesh):
     rows += [
         (
             "convective flux",
-            f"{num['convective_flux']}, entropy fix {num['entropy_fix']:g}"
-            + (", low-Mach correction" if num["low_mach_correction"] else "")
+            (
+                "slau2"
+                if num["convective_flux"] == "slau2"
+                else f"{num['convective_flux']}, entropy fix {num['entropy_fix']:g}"
+                + (", low-Mach correction" if num["low_mach_correction"] else "")
+            )
             + f", order "
             f"{num['spatial_order']}, limiter {num['limiter']}",
         ),

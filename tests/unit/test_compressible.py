@@ -628,3 +628,76 @@ def test_reset_analysis_forgets_the_pardiso_pattern():
         linear.reset_analysis()  # no session: nothing to do
     finally:
         linear._SESSION["obj"] = saved
+
+
+# -- SLAU2 flux ---------------------------------------------------------------------
+
+
+def test_slau2_flux_is_consistent():
+    r_gas, w, normal = _states(20, seed=11)
+    f = comp.slau2_flux(GAMMA, r_gas, w, w, normal)
+    np.testing.assert_allclose(
+        f, comp.physical_flux(GAMMA, r_gas, w, normal), rtol=1e-12, atol=1e-13
+    )
+
+
+def test_slau2_flux_is_conservative():
+    r_gas, w, normal = _states(20, seed=12)
+    w_r = w[::-1]
+    f = comp.slau2_flux(GAMMA, r_gas, w, w_r, normal)
+    g = comp.slau2_flux(GAMMA, r_gas, w_r, w, -normal)
+    np.testing.assert_allclose(f, -g, rtol=1e-12, atol=1e-13)
+
+
+def test_slau2_flux_is_nearly_upwind_in_supersonic_flow():
+    """Supersonic: pressure flux exactly upwind, mass flux upwind up to the jump.
+
+    SLAU2 is not exactly upwind for a finite density jump (the mean normal
+    velocity weights both densities), so a small jump is used.
+    """
+    r_gas = comp.gas_constant_for_mach(2.0)
+    w_l = jnp.asarray([[r_gas, 1.0, 0.1, 1.0]])
+    w_r = w_l * 1.001
+    n = jnp.asarray([[1.0, 0.0]])
+    f = comp.slau2_flux(GAMMA, r_gas, w_l, w_r, n)
+    np.testing.assert_allclose(f, comp.physical_flux(GAMMA, r_gas, w_l, n), rtol=5e-3)
+    f = comp.slau2_flux(GAMMA, r_gas, w_l, w_r, -n)
+    np.testing.assert_allclose(f, comp.physical_flux(GAMMA, r_gas, w_r, -n), rtol=5e-3)
+
+
+def test_slau2_flux_keeps_a_stationary_contact():
+    """Equal p and zero velocity, different T: only the pressure flux."""
+    r_gas = comp.gas_constant_for_mach(0.5)
+    w_l = jnp.asarray([[r_gas, 0.0, 0.0, 1.0]])
+    w_r = jnp.asarray([[r_gas, 0.0, 0.0, 2.0]])
+    n = jnp.asarray([[0.6, 0.8]])
+    f = comp.slau2_flux(GAMMA, r_gas, w_l, w_r, n)
+    np.testing.assert_allclose(f, [[0.0, 0.6 * r_gas, 0.8 * r_gas, 0.0]], atol=1e-14)
+
+
+def test_slau2_flux_is_finite_and_differentiable_at_rest():
+    import jax
+
+    r_gas = comp.gas_constant_for_mach(0.5)
+    w = jnp.asarray([[r_gas, 0.0, 0.0, 1.0]])
+    n = jnp.asarray([[1.0, 0.0]])
+    jac = jax.jacfwd(lambda a, b: comp.slau2_flux(GAMMA, r_gas, a, b, n))(w, w)
+    assert np.all(np.isfinite(jac[0]))
+    assert np.all(np.isfinite(jac[1]))
+
+
+def test_slau2_dispatch_and_jacobian_flux():
+    """Residual flux is SLAU2; the Jacobian flux follows jacobian_flux."""
+    r_gas, w, normal = _states(10, seed=13)
+    model = comp.CompressibleModel(gas_constant=r_gas, convective_flux="slau2")
+    w_r = w[::-1]
+    ref = comp.slau2_flux(model.gamma, r_gas, w, w_r, normal)
+    f = comp.interior_convective_flux(model, w, w_r, normal)
+    np.testing.assert_allclose(f, ref)
+    np.testing.assert_allclose(
+        comp.jacobian_convective_flux(model, w, w_r, normal), ref
+    )
+    model = model._replace(jacobian_flux="roe")
+    roe = comp.roe_flux(model.gamma, r_gas, model.entropy_fix, w, w_r, normal)
+    f = comp.jacobian_convective_flux(model, w, w_r, normal)
+    np.testing.assert_allclose(f, roe)

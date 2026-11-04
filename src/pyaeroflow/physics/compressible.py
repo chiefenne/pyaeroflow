@@ -126,6 +126,12 @@ class CompressibleModel(NamedTuple):
     limiter_threshold : float
     entropy_fix : float
         Harten's coefficient: delta = entropy_fix (|v_n| + c); 0 = off.
+    jacobian_flux : {"auto", "roe"}
+        Flux of the first-order Jacobian: "auto" follows ``convective_flux``
+        (SLAU2 for slau2, plain Roe for Roe), "roe" always plain Roe.
+    convective_flux : {"roe", "slau2"}
+        Interior-face flux: Roe (Harten entropy fix) or SLAU2 (Kitamura and
+        Shima 2013). Boundary faces always use Roe.
     low_mach_correction : bool
         Rieper's low-Mach correction of the Roe flux on interior faces
         (Rieper 2011): the face velocities are blended towards their
@@ -160,6 +166,8 @@ class CompressibleModel(NamedTuple):
     limiter_threshold: float = 0.05
     entropy_fix: float = 0.001
     low_mach_correction: bool = False
+    convective_flux: str = "roe"
+    jacobian_flux: str = "auto"
     viscous_gradient: str = "alpha-damping"
     alpha: float = 4.0 / 3.0
     density: float = 1.0
@@ -457,6 +465,66 @@ def roe_flux(gamma, gas_constant, entropy_fix, w_l, w_r, normal):
     return 0.5 * (f_l + f_r - diss)
 
 
+def slau2_flux(gamma, gas_constant, w_l, w_r, normal):
+    """SLAU2 flux per unit length between primitive states (n, 4).
+
+    Simple Low-dissipation AUSM, second version (Shima and Kitamura, AIAA J.
+    49, 2011; Kitamura and Shima, J. Comput. Phys. 245, 2013): the mass flux
+    m = [rho_L (V_L + |V|+) + rho_R (V_R - |V|-) - chi dp / c] / 2 carries a
+    pressure-difference term scaled by chi = (1 - min(1, M_bar))^2, the
+    pressure flux is the AUSM+ split pressure plus a term that scales with
+    the velocity magnitude sqrt((|v_L|^2 + |v_R|^2) / 2). F = m+ Psi_L +
+    m- Psi_R + p N with Psi = (1, u, v, H). No tuning parameter, all speeds.
+    """
+    nx, ny = normal[:, 0], normal[:, 1]
+    r_l, r_r = density(gas_constant, w_l), density(gas_constant, w_r)
+    c_l = sound_speed(gamma, gas_constant, w_l)
+    c_r = sound_speed(gamma, gas_constant, w_r)
+    c = 0.5 * (c_l + c_r)
+    q2_l = w_l[:, U] ** 2 + w_l[:, V] ** 2
+    q2_r = w_r[:, U] ** 2 + w_r[:, V] ** 2
+    vn_l = w_l[:, U] * nx + w_l[:, V] * ny
+    vn_r = w_r[:, U] * nx + w_r[:, V] * ny
+    p_l, p_r = w_l[:, P], w_r[:, P]
+    # eps keeps the derivative of the root finite at rest
+    v_bar = jnp.sqrt(0.5 * (q2_l + q2_r) + 1e-30)
+    m_bar = jnp.minimum(1.0, v_bar / c)
+    chi = (1.0 - m_bar) ** 2
+    m_l, m_r = vn_l / c, vn_r / c
+    g = -jnp.maximum(jnp.minimum(m_l, 0.0), -1.0) * jnp.minimum(
+        jnp.maximum(m_r, 0.0), 1.0
+    )
+    vn_mean = (r_l * jnp.abs(vn_l) + r_r * jnp.abs(vn_r)) / (r_l + r_r)
+    vn_plus = (1.0 - g) * vn_mean + g * jnp.abs(vn_l)
+    vn_minus = (1.0 - g) * vn_mean + g * jnp.abs(vn_r)
+    mdot = 0.5 * (
+        r_l * (vn_l + vn_plus) + r_r * (vn_r - vn_minus) - chi * (p_r - p_l) / c
+    )
+
+    def split(m, sign):
+        """AUSM+ pressure split beta of Mach number m (sign = +1 or -1)."""
+        poly = 0.25 * (2.0 - sign * m) * (1.0 + sign * m) ** 2
+        return jnp.where(jnp.abs(m) < 1.0, poly, 0.5 * (1.0 + sign * jnp.sign(m)))
+
+    b_l, b_r = split(m_l, 1.0), split(m_r, -1.0)
+    p_face = (
+        0.5 * (p_l + p_r)
+        + 0.5 * (b_l - b_r) * (p_l - p_r)
+        + v_bar * (b_l + b_r - 1.0) * 0.5 * (r_l + r_r) * c
+    )
+    g1 = gamma / (gamma - 1.0)
+    h_l = g1 * p_l / r_l + 0.5 * q2_l
+    h_r = g1 * p_r / r_r + 0.5 * q2_r
+    m_up = 0.5 * (mdot + jnp.abs(mdot))
+    m_dn = 0.5 * (mdot - jnp.abs(mdot))
+    psi_l = jnp.stack((jnp.ones_like(h_l), w_l[:, U], w_l[:, V], h_l), axis=1)
+    psi_r = jnp.stack((jnp.ones_like(h_r), w_r[:, U], w_r[:, V], h_r), axis=1)
+    pressure = jnp.stack(
+        (jnp.zeros_like(p_face), nx, ny, jnp.zeros_like(p_face)), axis=1
+    )
+    return m_up[:, None] * psi_l + m_dn[:, None] * psi_r + p_face[:, None] * pressure
+
+
 def _flux(model, w_l, w_r, normal):
     return roe_flux(
         model.gamma, model.gas_constant, model.entropy_fix, w_l, w_r, normal
@@ -488,13 +556,21 @@ def low_mach_states(gamma, gas_constant, w_l, w_r):
 
 def interior_convective_flux(model, w_l, w_r, normal):
     """Roe flux through interior faces, with the low-Mach correction if set."""
+    if model.convective_flux == "slau2":
+        return slau2_flux(model.gamma, model.gas_constant, w_l, w_r, normal)
     if model.low_mach_correction:
         w_l, w_r = low_mach_states(model.gamma, model.gas_constant, w_l, w_r)
     return _flux(model, w_l, w_r, normal)
 
 
 def jacobian_convective_flux(model, w_l, w_r, normal):
-    """Convective flux of the compact first-order Jacobian: plain Roe.
+    """Convective flux of the compact first-order Jacobian.
+
+    Plain Roe, or SLAU2 if ``convective_flux = "slau2"`` and ``jacobian_flux
+    = "auto"``. Measured on the 12k NACA 0012 Euler O-grid with SLAU2
+    residuals: the SLAU2 Jacobian converges at M 0.8 (64 iterations, Roe 92)
+    but stalls at M 0.5 (CL 0.128 instead of 0.176); the Roe Jacobian
+    converges at M 0.5 (CL 0.1762) but not at M 0.8.
 
     The low-Mach correction stays out of the Jacobian (the residual and the
     Newton-Krylov products keep it): its velocity blending removes the
@@ -503,6 +579,8 @@ def jacobian_convective_flux(model, w_l, w_r, normal):
     singular from CFL ~ 300 on (NACA 0012 at M 0.15, alpha 0, 449 x 129:
     50 perturbed PARDISO pivots at CFL 1000, solutions of 1e26).
     """
+    if model.convective_flux == "slau2" and model.jacobian_flux == "auto":
+        return slau2_flux(model.gamma, model.gas_constant, w_l, w_r, normal)
     return _flux(model, w_l, w_r, normal)
 
 

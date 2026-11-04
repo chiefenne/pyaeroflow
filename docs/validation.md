@@ -1020,6 +1020,31 @@ start from a converged INC solution or a CFL ramp are the candidates.
 
 [↑ back to table](#stage-table)
 
+## 16. SLAU2 convective flux (L1 stage C5)
+
+`numerics.convective_flux = "slau2"` (Shima and Kitamura 2011; Kitamura and
+Shima 2013): face-local all-speed flux without tuning parameter, residual
+only on interior faces (boundary faces keep Roe). Unit tests: consistency,
+conservation, stationary contact, finite derivatives at rest, near-upwind
+supersonic flux (`tests/unit/test_compressible.py`).
+
+Sandbox runs on the 12k NACA 0012 O-grid (`make_meshes.py`, sharp trailing
+edge, direct solver, M and alpha as given):
+
+| Case | Flux | Iterations | CL | CD | CM |
+|---|---|---|---|---|---|
+| M 0.8, alpha 1.25 | Roe | 92 | 0.3415 | 0.02249 | 0.0350 |
+| M 0.8, alpha 1.25 | SLAU2, SLAU2 Jacobian | 64 | 0.3390 | 0.02239 | 0.0343 |
+| M 0.8, alpha 1.25 | SLAU2, Roe Jacobian | not converged | | | |
+| M 0.5, alpha 1.25 | Roe | 28 | 0.17603 | 0.00089 | 0.00160 |
+| M 0.5, alpha 1.25 | Roe + Rieper | 37 | 0.17648 | 0.00068 | 0.00168 |
+| M 0.5, alpha 1.25 | SLAU2, Roe Jacobian | 34 | 0.17624 | 0.00080 | 0.00165 |
+| M 0.5, alpha 1.25 | SLAU2, SLAU2 Jacobian | stalls at CL 0.128 | | | |
+
+Open: which Jacobian flux is robust at all Mach numbers (decided by PARDISO
+runs: the sandbox uses SuperLU), low-Mach Euler sweep, TMR NACA 0012 449 x
+129, RAE 2822.
+
 ## References
 
 - Ghia, U., Ghia, K. N., Shin, C. T. (1982): High-Re solutions for
@@ -1120,6 +1145,11 @@ need their volume, page or paper number checked.
 - Economon, T. D. (2020): Simulation and adjoint-based design for variable
   density incompressible flows with heat transfer. AIAA J. 58(2), 757–769 †.
   The artificial-compressibility formulation of the incompressible solver.
+- Shima, E., Kitamura, K. (2011): Parameter-free simple low-dissipation
+  AUSM-family scheme for all speeds. AIAA J. 49(8), 1693–1709 †.
+- Kitamura, K., Shima, E. (2013): Towards shock-stable and accurate
+  hypersonic heating computations: a new pressure flux for AUSM-family
+  schemes. J. Comput. Phys. 245, 62–83 †.
 - Rieper, F. (2011): A low-Mach number fix for Roe's approximate Riemann
   solver. J. Comput. Phys. 230(13), 5263–5287 †.
 - Krakos, J. A., Wang, Q., Hall, S. R., Darmofal, D. L. (2012): Sensitivity

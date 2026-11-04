@@ -2,6 +2,14 @@
 
 ## Unreleased – compressible Euler, laminar, SA-neg and SST solver (L1, stages C0–C4)
 
+- SLAU2 as second compressible convective flux (C5, replaces the planned JST):
+  `numerics.convective_flux = "slau2"` (Shima and Kitamura 2011, Kitamura and
+  Shima 2013; face-local, all-speed, no tuning parameter, written from the
+  papers), `numerics.jacobian_flux` (`auto` | `roe`) for the first-order
+  Jacobian. Interior faces only, boundary faces stay Roe; the default remains
+  Roe until the PARDISO validation. NACA 0012 Euler M 0.8 on the 12k O-grid:
+  64 iterations (Roe 92), CL 0.3390 CD 0.02239 (Roe 0.3415 / 0.02249).
+  `docs/requirements.md`: JST (P5) dropped.
 - Compressible RANS with k-omega SST (C4): `turbulence = "sst"` with
   `physics.flow = "compressible"`, the compressible SST-2003m. Rows
   rho k and rho omega with the mass flux of the Roe flux, diffusion
