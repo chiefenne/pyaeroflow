@@ -6,8 +6,10 @@
   `numerics.convective_flux = "slau2"` (Shima and Kitamura 2011, Kitamura and
   Shima 2013; face-local, all-speed, no tuning parameter, written from the
   papers), `numerics.jacobian_flux` (`auto` | `roe`) for the first-order
-  Jacobian. Interior faces only, boundary faces stay Roe; the default remains
-  Roe until the PARDISO validation. NACA 0012 Euler M 0.8 on the 12k O-grid:
+  Jacobian. Interior faces only, boundary faces stay Roe; default for compressible
+  Euler (Mach independent at M 0.03 to 0.1, `docs/validation.md` 16); laminar
+  and RANS stay Roe until the TMR comparison. Existing Euler examples are
+  pinned to Roe. NACA 0012 Euler M 0.8 on the 12k O-grid:
   64 iterations (Roe 92), CL 0.3390 CD 0.02239 (Roe 0.3415 / 0.02249).
   `docs/requirements.md`: JST (P5) dropped.
 - Compressible RANS with k-omega SST (C4): `turbulence = "sst"` with

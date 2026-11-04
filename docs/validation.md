@@ -1046,8 +1046,31 @@ runs (identical to the sandbox at M 0.8; at M 0.5 a SuperLU run with the
 SLAU2 Jacobian stalled at CL 0.128, so use PARDISO). The `auto` Jacobian (SLAU2) converges at both Mach numbers; the
 Roe Jacobian fails at M 0.8. Wall time 10-13 s each.
 
-Open: low-Mach Euler sweep (M 0.1, 0.03), TMR NACA 0012 (SA, SST), RAE 2822;
-they decide whether SLAU2 becomes the default flux.
+Low-Mach sweep (same O-grid, alpha 1.25, PARDISO, `jacobian_flux = auto`).
+By the Prandtl-Glauert rule CL must grow only by 1/sqrt(1-M^2) from the
+incompressible value (about 0.149) and the induced drag of the inviscid flow
+is small:
+
+| Mach | Flux | CL | CD |
+|---|---|---|---|
+| 0.1 | Roe | 0.14851 | 0.002296 |
+| 0.1 | Roe + Rieper | 0.150547 (not converged) | |
+| 0.1 | SLAU2 | 0.15012 | 0.000839 |
+| 0.03 | Roe | 0.142826 | 0.006695 |
+| 0.03 | Roe + Rieper | 0.145176 (stalls) | |
+| 0.03 | SLAU2 | 0.14947 | 0.00085 |
+
+Roe's dissipation scales with the sound speed and destroys the low-Mach
+solution; the Rieper correction helps but stalls; SLAU2 is Mach independent
+(CL 0.1495 to 0.1501, CD 0.00085). At M 0.03 the residual drop of 10 orders
+is limited by the round-off floor; use `residual_drop` 8-9 for low-Mach Euler.
+SLAU2 shows a long acoustic start-up transient from the freestream (tracked
+separately with the slow alpha 0 start-up).
+
+Default: for `model = "euler"` without `low_mach_correction`, `convective_flux`
+defaults to `slau2`; the example cases of sections 12 and 16 that quote Roe
+numbers set `convective_flux = "roe"` explicitly. Laminar and RANS keep Roe
+by default until the TMR NACA 0012 (SA, SST) and RAE 2822 comparisons are done.
 
 ## References
 
