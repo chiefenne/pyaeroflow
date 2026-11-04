@@ -52,6 +52,7 @@ from pyaeroflow.solver.linear import (
     LinearSettings,
     LinearSolverError,
     factorize,
+    reset_analysis,
     solve_matrix_free,
 )
 from pyaeroflow.solver.profile import timers
@@ -618,6 +619,7 @@ def solve_steady(
         else:
             cfl *= s.cut_factor
             lin = None  # rebuild the preconditioner after a rejection
+            reset_analysis()  # and the PARDISO analysis
         hist["residual"].append(norm_abs)
         hist["measure"].append(norm)
         hist["residuals"].append(rms_per_variable(r))

@@ -196,6 +196,22 @@ class _PardisoSession:
 _SESSION = {"obj": None}
 
 
+def reset_analysis():
+    """Make the next PARDISO factorization redo the analysis (phase 12).
+
+    PARDISO computes its fill-reducing ordering, its matching and scaling
+    (MKL defaults for unsymmetric matrices) in the analysis phase from the
+    values of that matrix; a refactorization with the same pattern (phase
+    22) keeps them. After the analysis of a (nearly) singular matrix they
+    stay unusable at any later CFL: on NACA 0012 at alpha 0 every later step
+    gave a non-finite solution although a fresh analysis of the same matrix
+    solves it to round-off. The pseudo-time solver calls this after a
+    rejected update.
+    """
+    if _SESSION["obj"] is not None:
+        _SESSION["obj"].pattern = None
+
+
 def _fast_path_available(pypardiso):
     """Tell whether the installed pypardiso has the internals the session relies on."""
     sv_cls = pypardiso.PyPardisoSolver

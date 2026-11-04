@@ -37,6 +37,7 @@ Click a case to jump to its section; each section ends with a link back here.
 | L1 C1 | [Compressible Euler: ramp, NACA 0012](#sec-12) | verification/validation | oblique-shock relations, Vassberg & Jameson 2010, Vassberg et al. 2011 | `python examples/l1_compressible.py [--fine]` |
 | L1 C2 | [Compressible laminar: flat plate, NACA 0012 Re 5000](#sec-13) | verification/validation | compressible similarity solution, Swanson & Langer 2016 | `python examples/l1_laminar.py` |
 | L1 C3 | [Compressible SA-neg: TMR flat plate M 0.2, NACA 0012 M 0.15](#sec-14) | verification/validation | NASA TMR (CFL3D, FUN3D) | `pyaeroflow run examples/cases/naca0012_sa_m015.toml` |
+| L1 C4 | [Compressible SST: TMR flat plate M 0.2, NACA 0012 M 0.15](#sec-15) | verification/validation | NASA TMR SST (CFL3D) | `pyaeroflow run examples/cases/naca0012_sst_m015.toml` |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
 the scripts write) is not tracked.
@@ -940,8 +941,82 @@ At α 15° (449 × 129) the run reaches 5.2 orders and C_L 1.5323, C_D 0.02254
 converge from the freestream start: the impulsive start leaves a large
 separated region and the pseudo-time steps are rejected (tried: earlier
 Newton–Krylov switch, restart from the α 10° state); α 0° on the
-compressible solver is not validated yet. SST (C4) and RAE 2822 are the next
-stages.
+compressible solver is not validated yet (see section 15 for the cause of
+the dead stop and its fix). SST is section 15; RAE 2822 is the next stage.
+
+[↑ back to table](#stage-table)
+
+<a id="sec-15"></a>
+## 15. Compressible k-ω SST RANS (L1 stage C4)
+
+`physics.model = "rans"` with `physics.flow = "compressible"` and
+`turbulence = "sst"`: SU2's compressible SST-2003m (rows ρk and ρω with the
+Roe mass flux, diffusion (μ + σμ_t)∇k, the incompressible sources times ρ
+with −⅔k∇·v in the production, −⅔ρkδ_ij in the stress, wall ω
+60ν_w/(β₁d₁²) with ν_w of the wall state; see
+[Compressible flow](configuration.md#compressible-flow)). Runs of 2026-11-03
+in the cloud sandbox (4 cores, PARDISO).
+
+**TMR flat plate, M 0.2, Re 5·10⁶ (verification).**
+`pyaeroflow.cases.tmr_flat_plate.solve(mach=0.2, turbulence="sst")`,
+adiabatic plate, TMR SST freestream. TMR SST finest grid (CFL3D):
+C_f(0.97) = 0.0026907, C_D = 0.0028488.
+
+| mesh | solver | C_f(0.97) | C_D | iterations |
+|---|---|---|---|---|
+| 48 × 48 | INC | 0.0026840 (−0.25 %) | 0.0028690 (+0.71 %) | 153 |
+| | compressible | 0.0026757 (−0.56 %) | 0.0028728 (+0.84 %) | 148 |
+| 96 × 64 | compressible | 0.0026770 (−0.51 %) | 0.0028692 (+0.72 %) | 257 |
+
+As with SA (section 14), the compressible C_f is about 0.3 % below INC.
+
+**NACA 0012, M 0.15, Re 6·10⁶ (validation).**
+`examples/cases/naca0012_sst_m015.toml`: TMR C-grids, low-Mach correction,
+TMR SST freestream (μ_t/μ = 0.009, Tu 0.0516 %), adiabatic wall.
+
+| grid | run | C_L | C_D | C_Dp / C_Dv |
+|---|---|---|---|---|
+| 225 × 65, frozen limiter, α 10° | INC SST | 1.0631 | 0.01722 | |
+| | compressible SST | 1.0699 | 0.01468 | 0.00872 / 0.00596 |
+| | compressible SA (section 14) | 1.0784 | 0.01498 | 0.00896 / 0.00602 |
+| 449 × 129, released limiter, α 10° | INC SST | 1.0742 | 0.01273 | |
+| | compressible SST (1200 it., 4.7 orders) | 1.0818 | 0.01280 | 0.00661 / 0.00620 |
+| 897 × 257, α 10° | CFL3D SST | 1.0778 | 0.01236 | |
+
+The 225 × 65 run (237 iterations, 4.7 orders) lies where SA does: lift
++0.6 % above INC, and the INC frozen-limiter drag excess is gone.
+On 449 × 129 the run starts from the freestream with a large separated
+region (C_D 0.088 at iteration 60) and takes a long pseudo-time transient:
+C_L overshoots to 1.119 at iteration 600, then falls back (1.099 at 800,
+1.087 at 1000, 1.0818 at 1200, still dropping by about 0.002 per 100
+iterations) while the residual falls steadily (3.2 orders at 700, 4.7 at
+1200). At 1200 iterations C_L is 0.7 % above INC SST and 0.4 % above CFL3D
+897 × 257, and C_D is 0.6 % above INC (the compressible SA on this grid is
++0.6 % / +0.2 % against INC, section 14). The forces are not fully converged
+(C_M −0.0079 vs INC −0.0059 and still moving), so the 449 row is a status,
+not a final number. The line search takes ¼ steps for long stretches, the
+same slow start-up as at α 0° (below).
+
+**α 0° start-up: cause of the dead stop and fix.** On 449 × 129 at α 0°
+(SA and SST) the run stopped dead after about 40 iterations: every
+pseudo-time step was rejected, even at CFL 10⁻⁵. Two causes worked together.
+(1) The low-Mach correction in the first-order Jacobian makes J + V/Δτ
+singular near the stagnation cells once CFL reaches a few hundred (PARDISO
+reported 5 perturbed pivots at CFL 300, 50 at CFL 1000, |Δu| ~ 10²⁶;
+without the correction none). (2) The PARDISO session reuses the
+ordering and pivoting of its first analysis, so after the bad matrix every
+later factorization failed, while a fresh solver solved the CFL 1 matrix to
+10⁻¹⁵. The Jacobian now takes the plain Roe flux
+(`compressible.jacobian_convective_flux`; the residual keeps the
+correction, as SU2 does with its first-order approximate Jacobian) and a
+rejected step makes PARDISO analyse the pattern again
+(`linear.reset_analysis`). Afterwards α 0° runs on, but slowly: the line
+search takes ¼ steps for most iterations, CFL settles at 200–250 and the
+drag still falls after 60 iterations (SST C_D 0.0152, SA 0.0188; INC 449:
+0.00809 / 0.00813). A fixed GMRES tolerance of 10⁻² instead of
+Eisenstat–Walker did not remove the ¼ steps (SA 225 × 65, 107 iterations).
+Converged α 0° results on the compressible solver are still **open**; a
+start from a converged INC solution or a CFL ramp are the candidates.
 
 [↑ back to table](#stage-table)
 

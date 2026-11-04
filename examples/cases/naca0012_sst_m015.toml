@@ -1,0 +1,57 @@
+# NACA 0012, compressible k-omega SST RANS: the NASA TMR 2DN00 case,
+# M = 0.15, Re = 6e6, alpha = 10 deg, fully turbulent (physics.flow =
+# "compressible", physics.model = "rans", turbulence = "sst", L1 stage C4).
+# TMR SST (897 x 257, CFL3D): CL 1.0778, CD 0.01236 at alpha 10; CD 0.00809
+# at alpha 0.
+# Mesh: the TMR 225 x 65 C-grid (farfield 500 chords), converted by
+# ../meshes/make_tmr_naca0012.py; "1" or "2" as third argument of that
+# script gives 449 x 129 or 897 x 257. No vortex correction (500 chords).
+
+[case]
+name = "naca0012_sst_m015"
+
+[mesh]
+file = "../meshes/naca0012_tmr_225x65.su2"   # boundary faces: airfoil, farfield
+
+[physics]
+flow = "compressible"
+model = "rans"
+turbulence = "sst"
+
+[fluid]
+reynolds_number = 6.0e6           # rho U c / mu of the freestream (Sutherland mu(T))
+
+[reference]
+length = 1.0                      # chord (m)
+moment_center = [0.25, 0.0]       # quarter chord
+
+[numerics]
+limiter = "venkatakrishnan"
+low_mach_correction = true        # Rieper's Roe fix; needed at M 0.15 (pressure drag)
+# Frozen after 1.5 orders. On 225 x 65 the released (unlimited) second order
+# gives a jet behind the sharp trailing edge; on 449 x 129 and finer use
+# release = true (as the incompressible TMR runs).
+limiter_freeze = { after_residual_drop = 1.5, after_iterations = 40, release = false }
+
+[solver]
+residual_drop = 7.0
+max_iterations = 400
+cfl = { control = "ser" }
+newton_krylov = { switch_at_residual_drop = 1.5, switch_at_iteration = 40 }
+linear_solver = { type = "pardiso" }   # remove or use "direct" without pypardiso
+
+[boundary.airfoil]
+type = "wall"                     # no-slip, adiabatic
+
+[boundary.farfield]
+type = "farfield"
+mach = 0.15
+angle_of_attack = 10.0            # deg
+pressure = 101325.0               # Pa, absolute
+temperature = 300.0               # K (TMR: 540 R)
+# TMR SST freestream: k = 9e-9 a^2 (Tu = 0.0516 % at M 0.15), mu_t / mu = 0.009
+turbulence = { turbulent_viscosity_ratio = 0.009, intensity = 5.164e-4 }
+
+[output]
+directory = "output/naca0012_sst_m015"
+force_boundaries = ["airfoil"]

@@ -741,12 +741,12 @@ def _flow_rules(data, boundaries, farfields, compressible, problems, notices):
 
     Incompressible: fluid.density and farfield.velocity are required, the
     pressures are gauge pressures (default 0) and the compressible keys are
-    rejected. Compressible: physics.model = euler, laminar or rans (SA-neg),
-    steady,
-    farfield.mach is required, the pressures are absolute (farfield default 101325 Pa,
-    temperature 288.15 K), outlets, inlets need their pressure and
-    temperature, and the reference density, velocity and temperature follow
-    from the single farfield stream: rho = p / (R T), U = M sqrt(gamma R T).
+    rejected. Compressible: physics.model = euler, laminar or rans (SA-neg
+    or SST), steady, farfield.mach is required, the pressures are absolute
+    (farfield default 101325 Pa, temperature 288.15 K), outlets, inlets need
+    their pressure and temperature, and the reference density, velocity and
+    temperature follow from the single farfield stream: rho = p / (R T),
+    U = M sqrt(gamma R T).
     """
     fluid, physics, ref = data["fluid"], data["physics"], data["reference"]
     num = data["numerics"]
@@ -782,11 +782,6 @@ def _flow_rules(data, boundaries, farfields, compressible, problems, notices):
         return
 
     if physics["model"] == "rans":
-        if physics["turbulence"] == "sst":
-            problems.append(
-                "physics.flow = compressible: turbulence = sst is planned (sa-neg "
-                "is available)"
-            )
         tr = physics["transition"]
         if tr["model"] != "none" or tr["mode"] != "none":
             problems.append(
