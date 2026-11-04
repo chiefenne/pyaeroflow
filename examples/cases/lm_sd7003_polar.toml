@@ -1,6 +1,6 @@
 # SD7003 at Re = 6e4, SST-LM (physics.transition.model = "lm"): the polar of
 # docs/validation.md section 10 on the 320k PyAero C-mesh. Tu 0.1 %,
-# nu_t/nu = 1, the SU2 clip of gamma and Re_thetat (default), growth CFL with
+# nu_t/nu = 1, the clip of gamma and Re_thetat (default), growth CFL with
 # polar_reset, the Cauchy criterion on C_D and C_L next to the residual drop,
 # a wall CSV per angle and the final fields only.
 # Mesh: ../meshes/sd7003_C10_W25_320k_cells.su2 (see examples/meshes/README.md).
@@ -84,7 +84,7 @@ residual_drop = 7.0
 max_iterations = 1500   # per angle (the polar restarts the counter); a converged angle needs far fewer
 cfl = { control = "growth", max = 1.0e5, polar_reset = true }   # each polar angle restarts the CFL ramp
 newton_krylov = { switch_at_residual_drop = 1.5, switch_at_iteration = 40, restart = 60, max_iterations = 300 }
-convergence = { fields = ["cd", "cl"], cauchy_elements = 50, cauchy_eps = 5.0e-4, start_iteration = 100 }   # relative change (as SU2); CL/CD jitter by 2e-6..5e-6 per iteration (vortex correction, gamma cell), about 1e-4 of C_D, so 1e-6 never fires; the gamma residual stalls at the clip floor, so the residual drop never fires either
+convergence = { fields = ["cd", "cl"], cauchy_elements = 50, cauchy_eps = 5.0e-4, start_iteration = 100 }   # relative change; CL/CD jitter by 2e-6..5e-6 per iteration (vortex correction, gamma cell), about 1e-4 of C_D, so 1e-6 never fires; the gamma residual stalls at the clip floor, so the residual drop never fires either
 linear_solver = { type = "pardiso" }   # without pypardiso: "umfpack" or "direct"
 refactor_interval = 3
 

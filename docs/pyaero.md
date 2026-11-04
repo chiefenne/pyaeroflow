@@ -336,8 +336,8 @@ turbulence_intensity = 0.001      # Tu as a fraction: 0.1 % (free flight ~0.05-0
 turbulence = { nu_tilde_ratio = 0.1 }   # laminar freestream, see below
 ```
 
-The BCM model (Cakmakcioglu, Bas, Mura & Kaynak, 2020 revision, the form
-SU2 implements) multiplies the SA production by an intermittency
+The BCM model (Cakmakcioglu, Bas, Mura & Kaynak, 2020 revision)
+multiplies the SA production by an intermittency
 γ = 1 − exp(−√T₁ − √T₂): T₁ compares the local vorticity Reynolds number
 d²Ω/ν — a proxy for the momentum-thickness Reynolds number of the boundary
 layer — with Menter's critical value Re_θ,t = 803.73 (Tu + 0.6067)^−1.027

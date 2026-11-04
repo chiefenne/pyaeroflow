@@ -8,7 +8,7 @@ faces enter with their face-centre values. The gradient of cell i minimises
 
 with d_k the vector from the cell centroid to the stencil point. This is the
 weighting convention of Syrakos et al. (2017): q = 0 unweighted, q = 1 inverse
-distance (as SU2's weighted least squares), q = 3/2 their recommendation for
+distance (the common weighted least squares), q = 3/2 their recommendation for
 second-order accuracy at boundary cells.
 
 Boundary faces can be excluded per variable (``include`` mask): a face whose

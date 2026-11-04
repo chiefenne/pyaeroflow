@@ -364,7 +364,7 @@ def setup(config, mesh=None):
     return problem, scaling, w0, mesh
 
 
-# Sutherland's law of air (SU2 MU_REF, MU_T_REF): used when a compressible
+# Sutherland's law of air (mu_ref at T_ref, White 2006): used when a compressible
 # laminar case gives neither fluid.viscosity nor fluid.reynolds_number.
 SUTHERLAND_MU_REF = 1.716e-5  # Pa s
 SUTHERLAND_T_REF = 273.15  # K
@@ -1939,8 +1939,7 @@ def _mode_rows(cfg):
         if tr["clip"]:
             (g_lo, g_hi), (r_lo, r_hi) = lm.GAMMA_LIMITS, lm.RE_THETA_LIMITS
             text = (
-                f"clipped as in SU2: gamma [{g_lo:g}, {g_hi:g}], "
-                f"Re_thetat [{r_lo:g}, {r_hi:g}]"
+                f"clipped: gamma [{g_lo:g}, {g_hi:g}], Re_thetat [{r_lo:g}, {r_hi:g}]"
             )
         else:
             text = "not clipped (physics.transition.clip = false)"
@@ -2210,7 +2209,7 @@ def _log_setup_compressible(log, config, problem, scaling, mesh):
         ]
     if problem.turbulent:
         turb_text = (
-            "SST-2003m, conservative compressible form (SU2, NASA TMR)"
+            "SST-2003m, conservative compressible form (NASA TMR)"
             if m.turbulence == "sst"
             else "SA-neg, conservative compressible form (NASA TMR)"
         )

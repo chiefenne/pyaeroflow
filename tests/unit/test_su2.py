@@ -1,4 +1,4 @@
-"""Reader for SU2 native meshes."""
+"""Reader for .su2 meshes."""
 
 import numpy as np
 import pytest

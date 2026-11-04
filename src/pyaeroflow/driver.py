@@ -3,8 +3,8 @@
 :class:`FlowProblem` binds a mesh, a model and boundary conditions and
 provides the residual, Jacobian and pseudo-time term for the solvers in
 :mod:`pyaeroflow.solver`. The model selects the flow family (L1):
-:class:`~pyaeroflow.physics.incompressible.IncompressibleModel` (SU2 INC,
-with the turbulence and transition models) or
+:class:`~pyaeroflow.physics.incompressible.IncompressibleModel` (artificial
+compressibility, with the turbulence and transition models) or
 :class:`~pyaeroflow.physics.compressible.CompressibleModel` (density-based,
 Euler, laminar Navier-Stokes, SA-neg and SST RANS). A flow family is a physics
 module with the same interface:
@@ -54,11 +54,11 @@ TURBULENCE_MODELS = ("sa-neg", "sst")
 # Default SST inflow of the Python API: Tu = 0.1 %, nu_t / nu = 1.
 SST_DEFAULT_INTENSITY = 0.001
 SST_DEFAULT_VISCOSITY_RATIO = 1.0
-# SU2's MAX_UPDATE_SST: an update may lower k or omega by at most this
+# Positivity limit of the SST update: it may lower k or omega by at most this
 # fraction of the current value (the cell's turbulence update is scaled).
 SST_MAX_UPDATE = 0.99
-# SU2's limits of k and omega (CTurbSSTSolver lowerlimit/upperlimit, applied
-# with AddClippedSolution after every update), non-dimensional here.
+# Solution limits of k and omega, applied after every update (floors that keep
+# the turbulence variables positive), non-dimensional here.
 SST_K_LIMITS = (1.0e-10, 1.0e10)
 SST_OMEGA_LIMITS = (1.0e-4, 1.0e15)
 # Compressible flow: an update may lower p or T by at most this fraction of
@@ -302,7 +302,7 @@ class FlowProblem:
         """SST wall values: k = 0, omega = 60 nu / (beta_1 d1^2) per wall face.
 
         d1 is the height of the wall cell, twice the wall-normal distance of
-        its centroid: on the same mesh points SU2 (vertex-based) uses the
+        its centroid: on the same mesh points a vertex-based code uses the
         distance from the wall node to its nearest neighbour, the first mesh
         spacing. The skin friction depends on this choice (about 2 % lower
         with d1 = the centroid distance, on the flat plate at every grid
@@ -603,7 +603,7 @@ class FlowProblem:
 
         With ``transition_cfl_max`` (Langtry-Menter) the gamma and Re_thetat
         rows use min(CFL, transition_cfl_max): a separate, lower pseudo-time
-        step for the transition equations, as their own solver has in SU2.
+        step for the transition equations, as a segregated transition solver has.
         """
         blocks = np.asarray(
             self.physics.time_term_blocks(self.model, self.geom, w, params, cfl)
@@ -897,7 +897,7 @@ class FlowProblem:
         """Implicit pseudo-time solution (D25, D35).
 
         beta^2 is updated from the current state before every residual
-        evaluation, as in SU2. The limiter is frozen (D23) once either freeze
+        evaluation. The limiter is frozen (D23) once either freeze
         condition is met; afterwards the residual, its Jacobian-vector
         products and the solution use the limiter values of that state.
         With ``vortex`` (:meth:`farfield_vortex`) the farfield values are
@@ -927,12 +927,13 @@ class FlowProblem:
 
         With ``nu_tilde_step_limit`` = f every update of nu_tilde is capped
         to f max(|nu_tilde|, nu) per cell before the line search (the
-        mean-flow update is untouched), as SU2 limits its turbulence
-        variable: a Newton step that multiplies nu_tilde in one boundary-layer
+        mean-flow update is untouched), as is common practice for the
+        turbulence variable: a Newton step that multiplies nu_tilde in one
+        boundary-layer
         cell cannot pass as a small change of the overall residual norm.
 
         With the Langtry-Menter model the update clips gamma and Re_thetat to
-        SU2's limits (:meth:`_sst_limiter`); ``transition_clip=False`` leaves
+        their solution limits (:meth:`_sst_limiter`); ``transition_clip=False`` leaves
         them unclipped. ``gamma_guard`` (off by default) replaces a Newton
         update of gamma that the clip floor would discard while the residual
         asks for the other direction by the explicit local step
@@ -1094,7 +1095,7 @@ class FlowProblem:
     ):
         """Step limiter of the turbulence variables, or None.
 
-        SST always gets SU2's under-relaxation (:meth:`_sst_limiter`, with the
+        SST always gets the positivity under-relaxation (:meth:`_sst_limiter`, with the
         clip of the transition variables unless ``clip`` is False, and the
         descent guard of gamma unless ``gamma_guard`` is False); SA the
         nu_tilde cap of ``factor`` (None = no cap).
@@ -1149,9 +1150,9 @@ class FlowProblem:
         stats=None,
         whole_cell=False,
     ):
-        """SU2's SST under-relaxation: k and omega stay positive.
+        """SST under-relaxation: k and omega stay positive.
 
-        After the update k and omega are clipped to SU2's limits
+        After the update k and omega are clipped to their limits
         (:data:`SST_K_LIMITS`, :data:`SST_OMEGA_LIMITS`). Without the floor
         the 99 % cut lets k fall by a factor 100 per iteration in a cell where
         Newton keeps asking for a negative k: on the 320k SD7003 LM alpha 0 a
@@ -1161,11 +1162,12 @@ class FlowProblem:
 
         Per cell the (k, omega) update is scaled by min(1, max_update /
         ratio) with ratio the larger of |dk| / k and |domega| / omega, only
-        where the update lowers a variable (SU2 scales on any change; growth
+        where the update lowers a variable (scaling on any change would also
+        cap growth; growth
         is left to the line search here, so that the turbulence can develop
         from a low freestream). With Langtry-Menter gamma and Re_thetat are
-        included, and after the update they are clipped as in SU2
-        (``CTransLMSolver``): gamma to [1e-4, 5], Re_thetat to [1e-4, 1e15].
+        included, and after the update they are clipped:
+        gamma to [1e-4, 5], Re_thetat to [1e-4, 1e15].
         Without the floor a cell whose update keeps asking for a negative gamma
         loses 99 % per iteration (gamma = 1e-142 after 70 iterations) and the
         square root of the onset term has an enormous derivative there.
@@ -1198,9 +1200,7 @@ class FlowProblem:
         clips = [(nk, SST_K_LIMITS), (nw, SST_OMEGA_LIMITS)]
         guard = guard and self.model.transition == "lm"
         if self.model.transition == "lm":
-            groups.append(
-                [rans_sst.NGL, rans_sst.NRT]
-            )  # scaled apart (own solver in SU2)
+            groups.append([rans_sst.NGL, rans_sst.NRT])  # scaled apart from k and omega
             if clip:
                 clips += [
                     (rans_sst.NGL, lm.GAMMA_LIMITS),

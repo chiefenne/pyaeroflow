@@ -1,4 +1,4 @@
-"""Menter k-omega SST turbulence model, version SST-2003m as in SU2 (L2, D12).
+"""Menter k-omega SST turbulence model, version SST-2003m (L2, D12).
 
 Kinematic form for incompressible flow (rho constant):
 
@@ -11,10 +11,8 @@ magnitude), the limited production P_k = max(0, min(nu_t S^2, 10 beta* k
 omega)), P_omega = gamma P_k / nu_t and the cross diffusion
 CD = (1 - F1) 2 sigma_omega2 grad k . grad omega / omega. The constants
 sigma_k, sigma_omega, beta and gamma blend set 1 (k-omega, near the wall) and
-set 2 (k-epsilon, outer) with F1. Formulas and constants are those of SU2
-(``CSourcePieceWise_TurbSST``, ``CTurbSSTVariable::SetBlendingFunc``,
-``CTurbSSTSolver``): Menter, Kuntz & Langtry (2003), NASA TMR "SST-2003m"
-(the cross diffusion as a source, SU2 up to 7.5).
+set 2 (k-epsilon, outer) with F1. Formulas and constants are those of Menter, Kuntz &
+Langtry (2003) and the NASA TMR page "SST-2003m" (the cross diffusion as a source).
 """
 
 import jax.numpy as jnp
@@ -27,9 +25,9 @@ A1 = 0.31
 KAPPA = 0.41
 GAMMA_1 = BETA_1 / BETA_STAR - SIGMA_W1 * KAPPA**2 / BETA_STAR**0.5
 GAMMA_2 = BETA_2 / BETA_STAR - SIGMA_W2 * KAPPA**2 / BETA_STAR**0.5
-PROD_LIMIT = 10.0  # production limiter constant (SU2: 10 for SST-2003)
-CD_FLOOR = 1.0e-10  # 10^-PROD_LIMIT, as in SU2
-OMEGA_WALL = 60.0  # omega_wall = 60 nu / (beta_1 d_1^2) (Menter, SU2)
+PROD_LIMIT = 10.0  # production limiter constant (10 for SST-2003)
+CD_FLOOR = 1.0e-10  # floor of CD_kw (Menter, Kuntz & Langtry 2003)
+OMEGA_WALL = 60.0  # omega_wall = 60 nu / (beta_1 d_1^2) (Menter 1994)
 TINY = 1.0e-300
 
 
@@ -50,7 +48,7 @@ def cross_diffusion(k_grad_omega, omega):
 
 
 def blending(k, omega, nu, distance, k_grad_omega):
-    """Menter's blending functions (F1, F2), SU2's ``SetBlendingFunc``.
+    """Menter's blending functions (F1, F2).
 
     ``k_grad_omega`` is grad k . grad omega; ``k`` must be non-negative and
     ``omega`` positive.
@@ -94,16 +92,16 @@ def sources(
     (prescribed laminar regions), P_omega = gamma P_k / nu_t written as
     gamma min(S^2, 10 beta* omega zeta) (no 0/0 where k = 0), destruction
     beta* k omega and beta omega^2, cross diffusion (1 - F1) 2 sigma_omega2
-    grad k . grad omega / omega (unclipped, as the source of SU2 7.5).
+    grad k . grad omega / omega (unclipped, as a source term).
 
     ``gamma_eff`` (Langtry-Menter, :mod:`pyaeroflow.physics.lm`) multiplies
     P_k and min(max(gamma_eff, 0.1), 1) the k destruction; P_omega keeps the
-    unmodified P_k (SU2).
+    unmodified P_k.
 
     ``divergence`` (compressible flow, :mod:`pyaeroflow.physics.rans_sst_compressible`):
     div v; the production is then that of the full Boussinesq stress with
-    its -2/3 rho k delta_ij part, P_k = nu_t S^2 - 2/3 k div v (SU2,
-    ``CSourcePieceWise_TurbSST``), and P_omega = gamma P_k / nu_t, i.e.
+    its -2/3 rho k delta_ij part, P_k = nu_t S^2 - 2/3 k div v, and
+    P_omega = gamma P_k / nu_t, i.e.
     S^2 - 2/3 zeta div v in place of S^2, both before the limiter.
     """
     k_pos = jnp.maximum(k, 0.0)

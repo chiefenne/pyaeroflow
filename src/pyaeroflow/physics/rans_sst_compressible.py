@@ -4,12 +4,12 @@ State per cell: (p, u, v, T, k, omega). The mean flow is that of
 :mod:`pyaeroflow.physics.compressible` with the effective viscosity
 mu + mu_t, mu_t = rho nu_t, in the stress, the conductivity
 c_p (mu / Pr + mu_t / Pr_t) in the heat flux and the -2/3 rho k delta_ij
-part of the Boussinesq stress (SU2's compressible SST; it enters the
+part of the Boussinesq stress (compressible SST; it enters the
 momentum and energy fluxes like a pressure 2/3 rho k). The total energy
-does not contain k (as SU2 and CFL3D).
+does not contain k (as in CFL3D).
 
 The turbulence rows are the conservative compressible SST-2003m of the NASA
-Turbulence Modeling Resource and SU2 (``CTurbSSTSolver``):
+Turbulence Modeling Resource:
 
     d(rho k)/dt + div(rho v k) = rho P_k - beta* rho k omega
                                  + div((mu + sigma_k mu_t) grad k)
@@ -18,7 +18,7 @@ Turbulence Modeling Resource and SU2 (``CTurbSSTSolver``):
                                  + rho CD,
 
 the kinematic sources of :mod:`pyaeroflow.physics.sst` times rho, with the
-divergence part of the production (-2/3 k div v in P_k, SU2) and
+divergence part of the production (-2/3 k div v in P_k) and
 nu = mu(T) / rho in the blending functions. A uniform-density flow gives
 the incompressible model back. The unknowns stay k and omega.
 
@@ -30,7 +30,8 @@ with the face average of the cell coefficients mu + sigma mu_t, omega row
 multiplied by the reference nu (row scaling, see rans_sst), the first-order
 Jacobian with the residual's face viscosities. Boundary values: k = 0 and
 omega = 60 nu_w / (beta_1 d1^2) at walls, nu_w = mu(T_w) / rho_w of the
-wall-face state (SU2 takes mu and rho of the first interior node), d1 the
+wall-face state (a vertex-based code takes mu and rho of the first
+interior node), d1 the
 wall-cell height (``BoundaryData.turbulence`` holds 60 / (beta_1 d1^2));
 the prescribed (k, omega) at inlets and inflowing farfield faces, the
 interior values elsewhere.
@@ -146,7 +147,7 @@ def _face_coefficients(model, bc, w_b, quantities, o, n, b):
     """mu_t and the (k, omega) diffusion coefficients at interior and boundary faces.
 
     Interior faces: the means of the cell values mu_t = rho nu_t and
-    mu + sigma mu_t (SU2). Boundary faces: mu_t the mean of the owner value
+    mu + sigma mu_t. Boundary faces: mu_t the mean of the owner value
     and the owner value (0 at walls), the coefficients with mu(T) of the
     boundary state and the owner's F1.
     """
@@ -356,7 +357,7 @@ def source_blocks(model, geom, bc, w):
     """Cell-local source Jacobian blocks (n_cells, 6, 6): the destruction terms.
 
     d(rho beta* k omega)/d(k, omega) and d(rho beta omega^2)/d omega (F1-
-    blended beta) times the cell area, at frozen rho (SU2's implicit part;
+    blended beta) times the cell area, at frozen rho (the implicit part;
     production and cross diffusion are left to the exact Newton-Krylov
     product), the omega row scaled like the residual.
     """

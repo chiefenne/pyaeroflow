@@ -9,7 +9,7 @@ T = diag(lambda_i / CFL) with the spectral radius lambda_i of cell i (the
 pseudo-time step is dtau_i = CFL A_i / lambda_i); for the preconditioned flow
 equations T holds the blocks Gamma_i lambda_i / CFL.
 
-Two phases (D25, as SU2's ``NEWTON_KRYLOV``):
+Two phases (D25, Jacobian-free Newton-Krylov, Knoll & Keyes 2004):
 
 1. Start-up with the approximate first-order Jacobian J1, solved by the
    sparse linear solver (direct LU or GMRES-ILU).
@@ -24,7 +24,7 @@ The CFL number follows switched evolution relaxation (Mulder & van Leer
     CFL_n = min(CFL_max, CFL_(n-1) * max(|R_(n-1)| / |R_n|, growth_factor)),
 
 i.e. the CFL number grows at least by ``growth_factor`` per accepted
-iteration while the residual decreases (SU2 raises its CFL by a factor 2
+iteration while the residual decreases (a common choice is a factor 2
 under the same condition); during a slow transient SER alone would keep it
 small. Safeguards: if the linear solve fails, the update is not finite, or the
 residual grows by more than ``reject_factor``, the update is rejected and the
@@ -73,8 +73,8 @@ class PseudoTimeSettings:
         pending (Newton-Krylov enabled and ``jvp`` given, but the switch
         condition not yet met). A pseudo-time step at a very large CFL is
         a Newton step with the approximate first-order Jacobian and does
-        not converge for the second-order residual; SU2, which has only
-        this Jacobian, is run at CFL <= 1e3. Without Newton-Krylov
+        not converge for the second-order residual; a solver with only
+        this Jacobian is run at CFL <= 1e3. Without Newton-Krylov
         ``cfl_max`` applies throughout.
     cut_factor : float
         CFL reduction after a rejected update.

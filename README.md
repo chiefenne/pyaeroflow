@@ -7,13 +7,13 @@ Command and package: `pyaeroflow`. Formerly named *aerojax* (renamed in 0.8;
 not related to other projects of that name).
 
 **Status:** 1.1. Steady and unsteady incompressible laminar, inviscid and
-RANS flow (Spalart–Allmaras SA-neg and k-ω SST, SU2 INC formulation) with the
+RANS flow (Spalart–Allmaras SA-neg and k-ω SST, artificial-compressibility formulation) with the
 transition models BCM, SA-AFT2019b and Langtry–Menter γ-Re_θ, a Newton–Krylov
 solver and BDF2 dual time stepping. Verified and validated against Couette and
 Poiseuille flow, the lid-driven cavity, the DFG cylinder benchmarks, the NASA
 TMR flat plate and NACA 0012, ERCOFTAC T3, the Eppler 387 and the SD7003
 ([validation](docs/validation.md)). A density-based compressible solver
-(`physics.flow = "compressible"`, SU2 formulation) covers the Euler, the
+(`physics.flow = "compressible"`) covers the Euler, the
 laminar Navier–Stokes and the SA-neg RANS equations so far; SST follows. Meshes come from PyAero (`.su2`) or Gmsh
 (`.msh`). The 1.0 milestone is recorded in
 [requirements §4a](docs/requirements.md#4a-milestone-10-reached-2026-10-30);
@@ -107,6 +107,21 @@ python examples/stage6_naca0012.py [--medium]
 ```
 
 The examples write VTU files (for ParaView) and plots to `examples/output/`.
+
+## Acknowledgements
+
+PyAeroFlow owes a great deal to [SU2](https://su2code.github.io), the
+open-source CFD suite developed by its worldwide community. Its documentation,
+its published papers and the openness with which its developers share their
+experience shaped many choices in this code: the incompressible formulation,
+the SST and Langtry–Menter setups, solution limits, convergence criteria and
+much of the practical know-how behind a robust implicit solver. Many thanks to
+its developers and community for that work.
+
+PyAeroFlow is an independent, clean-room implementation in Python and JAX. It
+contains no source code taken from other solvers; models and numerics are
+implemented from the published literature (see the references in the
+[docs](docs/validation.md)).
 
 ## License
 

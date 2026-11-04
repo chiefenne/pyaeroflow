@@ -1,4 +1,4 @@
-"""Incompressible Navier-Stokes equations, SU2 INC formulation (D5, D8, D21).
+"""Incompressible Navier-Stokes, artificial-compressibility form (D5, D8, D21).
 
 Working variables per cell: V = (p, u, v) with constant density rho. The
 steady equations are integrated with a preconditioned pseudo-time term
@@ -7,8 +7,8 @@ steady equations are integrated with a preconditioned pseudo-time term
                                            [u/beta^2, rho, 0  ],
                                            [v/beta^2, 0,   rho]],
 
-the density-based generalisation of artificial compressibility used by SU2
-(Economon 2020). beta^2 = beta_factor * max|v|^2 over the domain. The
+the density-based generalisation of artificial compressibility of
+Economon (2020). beta^2 = beta_factor * max|v|^2 over the domain. The
 residual R(V) is the net outflow of the inviscid flux
 
     F.n = (rho v_n, rho u v_n + p n_x, rho v v_n + p n_y),   v_n = v.n,
@@ -18,10 +18,11 @@ minus the viscous flux (0, tau.n) with tau = mu (grad v + grad v^T)
 
 Convective flux: flux-difference splitting (FDS) with low-speed
 preconditioning, F = 0.5 (F_L + F_R) - 0.5 Gamma |Gamma^-1 A| (V_R - V_L),
-where A = dF/dV includes d(rho)/dp = 1/beta^2 as in SU2, so that
+where A = dF/dV includes d(rho)/dp = 1/beta^2 (Economon 2020), so that
 Gamma^-1 A has the eigenvalues v_n, v_n - beta, v_n + beta. |Gamma^-1 A| is
 the exact matrix absolute value from the eigen-decomposition; it differs from
-SU2's closed form, which carries twice the tangential-velocity dissipation
+the closed form of the literature, which carries twice the
+tangential-velocity dissipation
 (verified numerically, see tests).
 
 Boundary conditions (D38): wall (no-slip, optional wall velocity),
@@ -77,7 +78,7 @@ class IncompressibleModel(NamedTuple):
     viscosity : float
         Dynamic viscosity mu; 0 for the Euler equations.
     beta_factor : float
-        epsilon^2 in beta^2 = epsilon^2 max|v|^2 (SU2 default 4.1).
+        epsilon^2 in beta^2 = epsilon^2 max|v|^2 (default 4.1, Economon 2020).
     spatial_order : int
         1 or 2 (MUSCL reconstruction of the convective states).
     limiter : {"none", "venkatakrishnan-wang", "venkatakrishnan"}
@@ -289,8 +290,8 @@ def boundary_state(bc, normal, v_in):
     pressure, interior velocity. Farfield: prescribed state. Symmetry:
     interior pressure, interior velocity with the normal component removed.
     Total-pressure inlet: interior pressure p, velocity magnitude from
-    p_total - p = rho |v|^2 / 2 along the prescribed direction (SU2's
-    incompressible pressure inlet).
+    p_total - p = rho |v|^2 / 2 along the prescribed direction (the
+    usual incompressible pressure inlet).
     """
     vn = v_in[:, U] * normal[:, 0] + v_in[:, V] * normal[:, 1]
     mirrored = v_in.at[:, U].add(-vn * normal[:, 0]).at[:, V].add(-vn * normal[:, 1])

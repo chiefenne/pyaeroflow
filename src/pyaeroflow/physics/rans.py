@@ -150,7 +150,7 @@ def _source(model, nu_tilde, vort, distance, grad_sq, switch, gamma=None):
     ``gamma`` (optional) is a given intermittency, e.g. the under-relaxed
     field of the driver; by default it is evaluated from the current state.
 
-    gamma is frozen in every linearisation (Picard on gamma, as SU2 does):
+    gamma is frozen in every linearisation (Picard on gamma):
     the residual uses its current value, but neither the Newton-Krylov JVP
     nor the first-order source Jacobian differentiates it. Both square roots
     of the BCM formula have unbounded slope (at onset and as nu_t -> 0), so

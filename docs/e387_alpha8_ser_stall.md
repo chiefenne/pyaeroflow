@@ -62,7 +62,7 @@ Data: uploaded history CSV with the diagnostics columns, 400 iterations, restart
 - The relaxed run is not converged at 400 iterations: CL is 1.20 to 1.22 against 1.17 to 1.20 in the baseline, and the median CFL is 312 against 1165.
 
 Candidate fixes:
-1. Limit the ν̃ update per Newton step, relative to max(|ν̃|, ν), as SU2 and FUN3D do for the turbulence variable.
+1. Limit the ν̃ update per Newton step, relative to max(|ν̃|, ν), as FUN3D does for the turbulence variable.
 2. Make the line search and acceptance see ν̃ (per-equation scaled norm).
 3. Restrict the γ diagnostics to near-wall cells.
 

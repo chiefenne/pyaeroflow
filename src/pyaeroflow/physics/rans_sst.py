@@ -9,15 +9,15 @@ diffusion and the cell sources of :mod:`pyaeroflow.physics.sst`.
 
 Cell quantities that need gradients (strain rate, F1, F2, nu_t) are
 evaluated from the least-squares gradients; the face diffusion coefficients
-are the averages of the two cell values (SU2). At boundary faces the owner
+are the averages of the two cell values. At boundary faces the owner
 cell's F1 is used, and nu_t is zero at walls.
 
 The omega equation is solved multiplied by nu (row scaling, the solution is
 unchanged): its residual then has the units of the k residual. Unscaled,
 omega (up to 1e7 U/L next to a wall) would dominate the RMS residual norm
 that decides acceptance and line search, so that the mean flow could not
-make progress (SU2 solves turbulence apart from the mean flow and does not
-need this).
+make progress (a segregated solver, which solves turbulence apart from the
+mean flow, does not need this).
 
 Boundary values: k = 0 and omega = 60 nu / (beta_1 d1^2) at walls (stored in
 ``BoundaryData.turbulence`` by the driver, d1 the wall cell's height), the
@@ -28,7 +28,7 @@ With the Langtry-Menter transition model (``model.transition == "lm"``,
 :mod:`pyaeroflow.physics.lm`) the state has two more columns, the
 intermittency gamma (NGL) and Re_thetat (NRT). They are prescribed (1 and
 the freestream correlation, also in ``BoundaryData.turbulence``) on inflow
-faces and have zero gradient elsewhere, walls included (TMR, SU2). They are
+faces and have zero gradient elsewhere, walls included (TMR). They are
 convected and diffused like k and omega; the Re_thetat row is scaled by
 RET_SCALE for the same reason as the omega row.
 """
@@ -336,8 +336,8 @@ def jacobian_coefficients(model, geom, bc, w):
 
     Returns (mu_f, dc_f, mu_b, dc_b): the effective viscosity and the (k,
     omega) diffusion coefficients at interior and boundary faces, as in the
-    residual. They enter the compact fluxes as given values (SU2 does not
-    differentiate the diffusion coefficients either); a nu_t estimated from
+    residual. They enter the compact fluxes as given values (the
+    diffusion coefficients are not differentiated); a nu_t estimated from
     the two face states alone (k / omega) misses the SST limiter and is off
     by orders of magnitude in a laminar boundary layer.
     """
@@ -386,7 +386,7 @@ def boundary_flux(model, beta2, w_o, bc_kind, bc_value, bc_turb, mu, dc, normal,
 
 @partial(jax.jit, static_argnums=0)
 def source_blocks(model, geom, bc, w):
-    """Cell-local source Jacobian blocks (n_cells, n_var, n_var), SU2's implicit part.
+    """Cell-local source Jacobian blocks (n_cells, n_var, n_var), the implicit part.
 
     Only the destruction terms: d(beta* k omega)/d(k, omega) (times the
     Langtry-Menter destruction factor) and d(beta omega^2)/d omega with the

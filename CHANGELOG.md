@@ -3,7 +3,7 @@
 ## Unreleased – compressible Euler, laminar, SA-neg and SST solver (L1, stages C0–C4)
 
 - Compressible RANS with k-omega SST (C4): `turbulence = "sst"` with
-  `physics.flow = "compressible"`, SU2's compressible SST-2003m. Rows
+  `physics.flow = "compressible"`, the compressible SST-2003m. Rows
   rho k and rho omega with the mass flux of the Roe flux, diffusion
   (mu + sigma mu_t) grad k / grad omega (two-point normal derivative), the
   incompressible SST sources times rho with the divergence part of the
@@ -15,7 +15,7 @@
   `BoundaryData` gets `turbulence` and `viscosity`). First-order Jacobian
   with the residual's face viscosities (as incompressible SST), destruction
   source blocks, conservative row-scaled pseudo-time blocks, p/T positivity
-  plus SU2's SST update limiter. New module
+  plus the SST update limiter. New module
   `physics/rans_sst_compressible.py`; `tmr_flat_plate.solve(mach=0.2,
   turbulence="sst")`; example `naca0012_sst_m015.toml`;
   `docs/validation.md` §15. Fixes: the `residual_nu_tilde` field of
@@ -49,7 +49,7 @@
   `naca0012_sa_m015.toml` on the TMR 225 x 65 C-grid (committed with its
   PLOT3D file and `examples/meshes/make_tmr_naca0012.py` for the finer
   levels); `docs/validation.md` §14. New `numerics.low_mach_correction`
-  (Rieper, SU2 `LOW_MACH_CORR`): at M 0.15 plain Roe gives +10 to +26 %
+  (Rieper): at M 0.15 plain Roe gives +10 to +26 %
   pressure drag on the TMR 225 x 65 and 113 x 33 grids; with it NACA 0012
   on 449 x 129 is CL 1.0914, CD 0.01270 (CFL3D same h 1.0909, 0.01273). y+ and nu_t/nu outputs use the local
   wall density and viscosity in compressible flow. Transition models and
@@ -60,7 +60,7 @@
   law (`fluid.viscosity_model = "sutherland"` default or `"constant"`,
   `fluid.sutherland_temperature` 110.4 K), heat flux k grad T with
   k = mu c_p / Pr (`fluid.prandtl` 0.72), work of the stress in the energy
-  equation, as SU2's `CNSSolver`. `fluid.viscosity` / `reynolds_number`
+  equation. `fluid.viscosity` / `reynolds_number`
   refer to the reference temperature; with neither, mu follows from
   Sutherland's law of air at the reference temperature. `wall` is a no-slip
   wall, adiabatic or isothermal with the new `temperature` key. Viscous
@@ -77,7 +77,7 @@
   twice.
 
 - New flow family `physics.flow = "compressible"`: density-based Euler
-  solver for an ideal gas as SU2's compressible solver. Unknowns p, u, v, T
+  solver for an ideal gas. Unknowns p, u, v, T
   (rho = p / (R T)), Roe flux with Harten's entropy fix
   (`numerics.convective_flux = "roe"`, `numerics.entropy_fix`, default
   0.001), MUSCL with the Venkatakrishnan(-Wang) limiter and a first-order
@@ -127,8 +127,8 @@
   case (95 % of the gamma residual left), whose gamma updates then raised the
   gamma residual 25x. With it, alpha 2 from the alpha 0 state went from CL
   0.045 to 0.24 in 12 iterations at mostly full steps.
-- Fix: SST k and omega are clipped to SU2's limits after every update
-  (k in [1e-10, 1e10], omega in [1e-4, 1e15], CTurbSSTSolver). Without the
+- Fix: SST k and omega are clipped to the limits after every update
+  (k in [1e-10, 1e10], omega in [1e-4, 1e15]). Without the
   floor the 99 % under-relaxation let k collapse in a cell where Newton kept
   asking for a negative k (320k SD7003 LM alpha 0: one wake cell at k = 3e-73,
   u = -0.23 among neighbours at 0.93); the cell held 99 % of the u residual
@@ -184,7 +184,7 @@
   below it empties the window. When the forces are steady but the guard holds
   the stop back, the log says so once and the Summary has a `Cauchy criterion`
   row if the run ends that way. `min_residual_drop = 0` is the plain
-  (SU2) criterion of before. Existing cases that stop on Cauchy at a residual
+  criterion of before. Existing cases that stop on Cauchy at a residual
   drop above 0.1 orders are not affected; a case that stops on Cauchy with the
   residual at its peak (such as the α = 4° run above) now continues.
 - Performance (C2): the first-order Jacobian is assembled in one pass on its
@@ -230,14 +230,14 @@
   one stage-table scheme and a bibliography of the models (entries marked †
   need their details checked); README mesh and `plot_log.py` notes.
 
-- Cauchy convergence now follows SU2. Steady: a Cauchy element is the
+- Cauchy convergence reworked. Steady: a Cauchy element is the
   relative change of the coefficient between iterations (`|C_n - C_(n-1)| /
   |C_n|`), not the absolute change; an old `solver.convergence.cauchy_eps`
   needs rescaling (1e-5 on C_D = 0.02 is about 5e-4). Unsteady: new table
   `[time.convergence]` (`fields`, `cauchy_elements`, `cauchy_eps`,
   `start_step`, `window_start_step`, `window_function`) stops the run when the
-  windowed time average of the coefficients has settled
-  (`WINDOW_CAUCHY_CRIT`); `pyaeroflow.solver.convergence.WindowedCauchyCriterion`.
+  windowed time average of the coefficients has settled;
+  `pyaeroflow.solver.convergence.WindowedCauchyCriterion`.
 
 - Fixed: the pseudo-time Jacobian, the pseudo-time term and the
   Jacobian-vector products used β² of the last evaluated residual state. After
@@ -248,7 +248,7 @@
   case-file option `positive_jacobian` (1.1) did; before, only case files got
   the new default.
 - Documentation: the Cauchy criterion works on the absolute change of the
-  coefficient, not on the change relative to it; the docs said "as SU2". Wording
+  coefficient, not on the change relative to it; the docs said otherwise. Wording
   fixed, behaviour unchanged. Version references (no release 0.10), the LM
   linearization wording, the D54 exclusion threshold (10⁻¹²), the status lines
   of `requirements.md` and the model-choice guide corrected.
@@ -290,7 +290,7 @@
   GMRES needs 20–50 iterations per step.
 - Documentation: SD7003 SST-LM polar on the 320k PyAero mesh (`docs/validation.md` §10,
   limits in §11); 1.0 list item 2 closed.
-- The Configuration block of the log names the SU2 clip of gamma and Re_thetat
+- The Configuration block of the log names the clip of gamma and Re_thetat
   for Langtry–Menter cases also when it is on (the default); before, only
   `physics.transition.clip = false` was logged.
 - `solver.cfl.polar_reset = true`: `pyaeroflow polar` restarts the CFL ramp at each
@@ -319,13 +319,13 @@ the 0.8 section below was never released separately.
 ### Transition steps 2–4, SST, solver state and output
 
 - Force-based convergence (`solver.convergence`): `fields = ["cd"]` adds
-  SU2's Cauchy criterion (mean change of the coefficient per iteration below
+  the Cauchy criterion (mean change of the coefficient per iteration below
   `cauchy_eps` over `cauchy_elements` iterations, from `start_iteration`) to
   the residual drop of steady runs. `physics.transition.clip = false` turns
-  the γ/Re_θt clip off (default on, as SU2).
+  the γ/Re_θt clip off (default on).
 
 - Langtry–Menter: after every update γ is clipped to [1e-4, 5] and Re_θt to
-  [1e-4, 1e15], as in SU2 (`CTransLMSolver`). Without the floor one cell of
+  [1e-4, 1e15]. Without the floor one cell of
   the 320k SD7003 run fell to γ = 1e-142 (99 % per iteration for 70
   iterations), kept the γ residual at 10⁻⁵·⁴ and the run "not converged".
 
@@ -338,8 +338,8 @@ the 0.8 section below was never released separately.
 
 - Langtry–Menter γ-Re_θ transition on SST (L3 step 4):
   `physics.transition.model = "lm"` with `turbulence = "sst"`, the TMR
-  SST-2003-LM2009 equations on the SST-2003m base with SU2's
-  `MENTER_LANGTRY` correlations (local Tu from k, local dU/ds,
+  SST-2003-LM2009 equations on the SST-2003m base with the
+  Langtry–Menter 2009 correlations (local Tu from k, local dU/ds,
   separation-induced γ_sep, F₁ = max(F₁, F₃)). Two transport equations for
   γ and Re_θt (7 unknowns per cell, log columns `gam`, `ret`), exact
   Newton–Krylov JVP. New fields `re_theta_t`, `intermittency_effective`,
@@ -349,10 +349,11 @@ the 0.8 section below was never released separately.
   `examples/cases/lm_*.toml`.
 
 - k-ω SST turbulence model (D12, L2): `physics.turbulence = "sst"`, Menter's
-  SST-2003m with SU2's formulation and constants (strain-rate ν_t limiter,
+  SST-2003m with the formulation and constants of Menter, Kuntz & Langtry
+  2003 (strain-rate ν_t limiter,
   production limiter, F1/F2 blending, cross diffusion, wall ω = 60ν/(β₁d₁²)).
   Two transport equations for k and ω (5 unknowns per cell), exact
-  Newton–Krylov JVP, SU2's update under-relaxation. Turbulence tables give
+  Newton–Krylov JVP, a positivity under-relaxation of the update. Turbulence tables give
   k and ω (form b needs `intensity`; default Tu 0.1 %, ν_t/ν = 1). New VTU
   fields `k`, `omega`, `blending_f1`, `residual_k`, `residual_omega`, and
   `mu_t` for every RANS model; `nu_tilde` and `residual_nu_tilde` are SA
@@ -434,7 +435,7 @@ the 0.8 section below was never released separately.
   name in titles, prose and the log header. Case files, meshes and result
   files are unchanged. Reinstall with
   `pip uninstall aerojax && pip install -e .`.
-- BCM transition model (Cakmakcioglu et al., 2020 revision, SU2 form):
+- BCM transition model (Cakmakcioglu et al., 2020 revision):
   `physics.transition.model = "bcm"` with `turbulence_intensity` (fraction,
   defaults to the inflow table's `intensity`). Algebraic intermittency
   γ = 1 − exp(−√T₁ − √T₂) from the vorticity Reynolds number and ν_t/ν
@@ -446,8 +447,8 @@ the 0.8 section below was never released separately.
 - The SA source Jacobian in the first-order system keeps only its negative
   (damping) part; the positive production derivative made the 96 × 64 BCM
   plate diverge in ν̃ at CFL 10³.
-- The BCM intermittency is frozen in every linearisation (Picard on γ, as
-  SU2): the residual is unchanged, but neither the Newton-Krylov JVP nor the
+- The BCM intermittency is frozen in every linearisation (Picard on γ):
+  the residual is unchanged, but neither the Newton-Krylov JVP nor the
   first-order source Jacobian differentiates γ. Both square roots of the BCM
   formula have unbounded slope (at onset and as ν_t → 0, dγ/d(ν_t/ν) ≈ 6500
   at ν_t/ν = 3·10⁻⁷), which made the E387 linear systems stiff (GMRES
@@ -693,10 +694,9 @@ the 0.8 section below was never released separately.
 
 ## 0.2 – Stage 2: steady laminar incompressible flow (2026-10-14)
 
-- Incompressible Navier–Stokes in the SU2 INC formulation (D5, D8): working
+- Incompressible Navier–Stokes in the artificial-compressibility formulation (Economon 2020) (D5, D8): working
   variables (p, u, v), preconditioned pseudo-time with β² = 4.1·max|v|²,
-  FDS convective flux (D21) with the exact |Γ⁻¹A| (SU2's closed form has
-  twice the tangential dissipation), viscous flux with α-damping gradients
+  FDS convective flux (D21) with the exact |Γ⁻¹A|, viscous flux with α-damping gradients
   (D24), body force, Euler mode.
 - Boundary conditions (D38): wall (moving), symmetry/slip wall, velocity
   inlet, pressure outlet, farfield; periodic pairs as translated interior
@@ -747,7 +747,7 @@ the 0.8 section below was never released separately.
 - Rectangle mesh generator (D42): quadrilateral, triangle, polygon
   (centroid dual) and mixed cells, tanh clustering in y, random perturbation
   of interior nodes.
-- Reader for 2D SU2 meshes (`.su2`, D43), compatible with PyAero's export.
+- Reader for 2D `.su2` meshes (D43), compatible with PyAero's export.
 - VTU writer with cell and point data, binary or ASCII (D45).
 - Optional matplotlib mesh plot (D46).
 - Unit tests and the example `examples/stage0_meshes.py`.

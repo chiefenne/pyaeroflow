@@ -13,12 +13,9 @@ thickness Reynolds number Re_thetat. The coupling to SST is
 
 the omega equation is unchanged. Formulas, constants and limits are those of
 the NASA TMR page "langtrymenter_4eqn" (SST-2003-LM2009: Langtry & Menter,
-AIAA J. 47(12), 2009, with F_turb of Menter, Langtry & Voelker 2006) and of
-SU2 (``CSourcePieceWise_TransLM``, ``TransLMCorrelations`` with the
-MENTER_LANGTRY correlation, ``CTransLMSolver::Postprocessing``,
-``CTurbSSTVariable::SetBlendingFunc``). Tu and dU/ds are local values (TMR,
-SU2). All functions are pure and cell-local (kinematic form, constant
-density).
+AIAA J. 47(12), 2009, with F_turb of Menter, Langtry & Voelker 2006). Tu
+and dU/ds are local values (TMR). All functions are pure and cell-local
+(kinematic form, constant density).
 """
 
 import jax
@@ -32,7 +29,7 @@ SIGMA_F = 1.0
 SIGMA_THETA = 2.0
 TU_MIN = 0.027  # percent
 LAMBDA_LIMIT = 0.1
-GAMMA_LIMITS = (1.0e-4, 5.0)  # solution limits of SU2 (CTransLMSolver)
+GAMMA_LIMITS = (1.0e-4, 5.0)  # solution limits (floors keep gamma positive)
 RE_THETA_LIMITS = (1.0e-4, 1.0e15)
 RE_THETA_EQ_MIN = 20.0
 EQ_ITERATIONS = 12  # fixed-point iterations of Re_thetat^eq(lambda(theta))
@@ -83,7 +80,7 @@ def equilibrium_re_theta(tu, du_ds, nu, speed):
     """Re_thetat^eq(Tu, lambda_theta), solved by fixed-point iteration on theta.
 
     lambda_theta = theta^2 / nu dU/ds with theta = Re_thetat^eq nu / U,
-    limited to [-0.1, 0.1]; Re_thetat^eq >= 20 (TMR, SU2).
+    limited to [-0.1, 0.1]; Re_thetat^eq >= 20 (TMR).
     """
     base = _re_theta_tu(tu)
     scale = nu * du_ds / jnp.maximum(speed, TINY) ** 2  # lambda / Re_theta^2
@@ -95,7 +92,7 @@ def equilibrium_re_theta(tu, du_ds, nu, speed):
 
 
 def critical_re_theta(re_t):
-    """Re_thetac(Re_thetat), Langtry-Menter 2009 (MENTER_LANGTRY in SU2)."""
+    """Re_thetac(Re_thetat), Langtry-Menter 2009."""
     r = jnp.minimum(re_t, 1870.0)
     poly = (
         -396.035e-2

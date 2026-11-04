@@ -1,10 +1,8 @@
-"""Force-based (Cauchy) convergence of steady and unsteady runs, as SU2's.
+"""Force-based (Cauchy) convergence of steady and unsteady runs.
 
-Steady: :class:`CauchyCriterion` (``CONV_FIELD``, ``CONV_CAUCHY_ELEMS``,
-``CONV_CAUCHY_EPS``, ``CONV_STARTITER``). Unsteady: :class:`WindowedCauchyCriterion`
-on the windowed time average of the coefficients (``WINDOW_CAUCHY_CRIT``,
-``CONV_WINDOW_FIELD``, ``CONV_WINDOW_CAUCHY_ELEMS``, ``CONV_WINDOW_CAUCHY_EPS``,
-``CONV_WINDOW_STARTITER``, ``WINDOW_START_ITER``, ``WINDOW_FUNCTION``).
+Steady: :class:`CauchyCriterion` on the relative change of the coefficients
+between iterations. Unsteady: :class:`WindowedCauchyCriterion` on the windowed
+time average of the coefficients (window functions after Krakos et al. 2012).
 """
 
 import numpy as np
@@ -13,10 +11,10 @@ TINY = np.finfo(float).tiny
 
 
 class CauchyCriterion:
-    """Cauchy convergence of monitored coefficients, after SU2's CONV_FIELD.
+    """Cauchy convergence of monitored coefficients.
 
     A Cauchy element is the relative difference of a coefficient between two
-    consecutive iterations, ``|C_n - C_(n-1)| / |C_n|`` (as SU2; a
+    consecutive iterations, ``|C_n - C_(n-1)| / |C_n|`` (a
     coefficient near zero, e.g. C_L at alpha = 0, gives large elements).
     Every accepted iteration adds the element of each coefficient to a window
     of the last ``elements`` elements. The criterion is met when the mean
@@ -28,18 +26,18 @@ class CauchyCriterion:
     its residual sits at the peak. With ``min_drop`` the window must also be
     made of iterations whose residual drop (the worst equation relative to its
     own peak, in orders) is at least ``min_drop``; an iteration below it
-    starts the count again. ``min_drop = 0`` is SU2's plain criterion.
+    starts the count again. ``min_drop = 0`` is the plain Cauchy criterion.
 
     Parameters
     ----------
     names : sequence of str
         Monitored coefficients, ``cl``, ``cd`` or ``cm``.
     elements : int
-        Window length in iterations (SU2 CONV_CAUCHY_ELEMS).
+        Window length in iterations.
     eps : float
-        Tolerance of the mean absolute change per iteration (CONV_CAUCHY_EPS).
+        Tolerance of the mean absolute change per iteration.
     start : int
-        Iteration the criterion counts from (CONV_STARTITER).
+        Iteration the criterion counts from.
     min_drop : float
         Residual drop in orders that every iteration of the window needs;
         ``update`` is given the drop of each iteration (None = not known, the
@@ -87,7 +85,7 @@ class CauchyCriterion:
     def steady(self):
         """True if the window is full and every mean change is below ``eps``.
 
-        This is SU2's criterion, whatever the residual does.
+        This is the plain criterion, whatever the residual does.
         """
         return len(self.changes) >= self.elements and bool(
             np.all(self.value < self.eps)
@@ -135,7 +133,7 @@ def window_weight(function, i, n):
 class WindowedCauchyCriterion:
     """Cauchy convergence of the windowed time average of coefficients.
 
-    As SU2's ``WINDOW_CAUCHY_CRIT``: from time step ``window_start`` on, each
+    From time step ``window_start`` on, each
     monitored coefficient is averaged over the steps with the weights of a
     window function over the ``n_window`` steps from ``window_start`` to the
     last step of the run (``tavg`` is the weighted mean sum(w C) / sum(w)).

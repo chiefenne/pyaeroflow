@@ -504,7 +504,7 @@ def _consistency(data, explicit, problems, notices, path):
         if data["solver"]["nu_tilde_step_limit"] is not None:
             notices.append(
                 "solver.nu_tilde_step_limit ignored with turbulence = sst (k and "
-                "omega updates are under-relaxed as in SU2)"
+                "omega updates are under-relaxed by the SST positivity limiter)"
             )
     if rans:
         model = physics["turbulence"]
