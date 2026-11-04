@@ -28,7 +28,8 @@
   hundred, and a rejected pseudo-time step makes the PARDISO session analyse
   the pattern again (`linear.reset_analysis`) instead of reusing the
   pivoting of the bad matrix. alpha 0 now runs on but converges slowly
-  (open, `docs/validation.md` §15).
+  (open, `docs/validation.md` §15); 449 x 129 SST alpha 10 from the
+  freestream needs about 1200 iterations (CL 1.0818, CD 0.01280).
 
 - Compressible RANS with SA-neg (C3): `physics.model = "rans"` (turbulence
   `sa-neg`) with `physics.flow = "compressible"`. The turbulence row is the

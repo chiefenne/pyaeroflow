@@ -980,21 +980,22 @@ TMR SST freestream (μ_t/μ = 0.009, Tu 0.0516 %), adiabatic wall.
 | | compressible SST | 1.0699 | 0.01468 | 0.00872 / 0.00596 |
 | | compressible SA (section 14) | 1.0784 | 0.01498 | 0.00896 / 0.00602 |
 | 449 × 129, released limiter, α 10° | INC SST | 1.0742 | 0.01273 | |
-| | compressible SST, not converged (517 it.) | 1.1155 | 0.01521 | |
+| | compressible SST (1200 it., 4.7 orders) | 1.0818 | 0.01280 | 0.00661 / 0.00620 |
 | 897 × 257, α 10° | CFL3D SST | 1.0778 | 0.01236 | |
 
 The 225 × 65 run (237 iterations, 4.7 orders) lies where SA does: lift
 +0.6 % above INC, and the INC frozen-limiter drag excess is gone.
-**Open:** the 449 × 129 run has not converged. It started from the
-freestream with a large separated region (C_D 0.088 at iteration 60). After
-517 iterations the flow on the upper surface is attached, but the residual
-has dropped only 2.4 orders, the line search takes ¼ steps most of the time,
-and C_L is still rising (1.086 at 350, 1.098 at 400, 1.113 at 500), past
-INC SST (1.0742) and CFL3D (1.0778), while C_M moves away from INC
-(−0.0018 vs −0.0059). The 449 numbers are therefore not a result. The
-compressible SA on the same grid and settings converges (section 14), so
-the slow pseudo-time start-up shared with α 0° (below) is the first
-suspect, not the SST terms; the plate and 225 × 65 agree with INC and TMR.
+On 449 × 129 the run starts from the freestream with a large separated
+region (C_D 0.088 at iteration 60) and takes a long pseudo-time transient:
+C_L overshoots to 1.119 at iteration 600, then falls back (1.099 at 800,
+1.087 at 1000, 1.0818 at 1200, still dropping by about 0.002 per 100
+iterations) while the residual falls steadily (3.2 orders at 700, 4.7 at
+1200). At 1200 iterations C_L is 0.7 % above INC SST and 0.4 % above CFL3D
+897 × 257, and C_D is 0.6 % above INC (the compressible SA on this grid is
++0.6 % / +0.2 % against INC, section 14). The forces are not fully converged
+(C_M −0.0079 vs INC −0.0059 and still moving), so the 449 row is a status,
+not a final number. The line search takes ¼ steps for long stretches, the
+same slow start-up as at α 0° (below).
 
 **α 0° start-up: cause of the dead stop and fix.** On 449 × 129 at α 0°
 (SA and SST) the run stopped dead after about 40 iterations: every
