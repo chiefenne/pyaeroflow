@@ -1028,22 +1028,26 @@ only on interior faces (boundary faces keep Roe). Unit tests: consistency,
 conservation, stationary contact, finite derivatives at rest, near-upwind
 supersonic flux (`tests/unit/test_compressible.py`).
 
-Sandbox runs on the 12k NACA 0012 O-grid (`make_meshes.py`, sharp trailing
-edge, direct solver, M and alpha as given):
+Runs on the 12k NACA 0012 O-grid (`make_meshes.py`, sharp trailing edge, PARDISO
+unless noted):
 
 | Case | Flux | Iterations | CL | CD | CM |
 |---|---|---|---|---|---|
 | M 0.8, alpha 1.25 | Roe | 92 | 0.3415 | 0.02249 | 0.0350 |
-| M 0.8, alpha 1.25 | SLAU2, SLAU2 Jacobian | 64 | 0.3390 | 0.02239 | 0.0343 |
-| M 0.8, alpha 1.25 | SLAU2, Roe Jacobian | not converged | | | |
+| M 0.8, alpha 1.25 | SLAU2, SLAU2 Jacobian (`auto`) | 64 | 0.33903 | 0.022393 | 0.03425 |
+| M 0.8, alpha 1.25 | SLAU2, Roe Jacobian | not converged (200 it, diverges) | | | |
 | M 0.5, alpha 1.25 | Roe | 28 | 0.17603 | 0.00089 | 0.00160 |
 | M 0.5, alpha 1.25 | Roe + Rieper | 37 | 0.17648 | 0.00068 | 0.00168 |
-| M 0.5, alpha 1.25 | SLAU2, Roe Jacobian | 34 | 0.17624 | 0.00080 | 0.00165 |
-| M 0.5, alpha 1.25 | SLAU2, SLAU2 Jacobian | stalls at CL 0.128 | | | |
+| M 0.5, alpha 1.25 | SLAU2, SLAU2 Jacobian (`auto`) | 26 | 0.176244 | 0.000804 | 0.001648 |
+| M 0.5, alpha 1.25 | SLAU2, Roe Jacobian | 34 | 0.176244 | 0.000804 | 0.001648 |
 
-Open: which Jacobian flux is robust at all Mach numbers (decided by PARDISO
-runs: the sandbox uses SuperLU), low-Mach Euler sweep, TMR NACA 0012 449 x
-129, RAE 2822.
+The Roe rows are from the SuperLU sandbox runs, the SLAU2 rows from PARDISO
+runs (identical to the sandbox at M 0.8; at M 0.5 a SuperLU run with the
+SLAU2 Jacobian stalled at CL 0.128, so use PARDISO). The `auto` Jacobian (SLAU2) converges at both Mach numbers; the
+Roe Jacobian fails at M 0.8. Wall time 10-13 s each.
+
+Open: low-Mach Euler sweep (M 0.1, 0.03), TMR NACA 0012 (SA, SST), RAE 2822;
+they decide whether SLAU2 becomes the default flux.
 
 ## References
 

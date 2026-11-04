@@ -568,9 +568,10 @@ def jacobian_convective_flux(model, w_l, w_r, normal):
 
     Plain Roe, or SLAU2 if ``convective_flux = "slau2"`` and ``jacobian_flux
     = "auto"``. Measured on the 12k NACA 0012 Euler O-grid with SLAU2
-    residuals: the SLAU2 Jacobian converges at M 0.8 (64 iterations, Roe 92)
-    but stalls at M 0.5 (CL 0.128 instead of 0.176); the Roe Jacobian
-    converges at M 0.5 (CL 0.1762) but not at M 0.8.
+    residuals and PARDISO: the SLAU2 Jacobian converges at M 0.8 (64
+    iterations) and M 0.5 (26 iterations); the Roe Jacobian converges at
+    M 0.5 (34) but not at M 0.8. (With the SuperLU direct solver the SLAU2
+    Jacobian stalled at M 0.5, so use PARDISO.)
 
     The low-Mach correction stays out of the Jacobian (the residual and the
     Newton-Krylov products keep it): its velocity blending removes the
