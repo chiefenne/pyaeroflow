@@ -8,6 +8,11 @@
 # Mesh: ../meshes/RAE2822_C10_W25_320k_cells.su2, a C-type PyAero mesh (320 k
 # cells, tunnel 10 chords above/below, 25 chords wake); boundary faces:
 # Airfoil, Inlet, Outlet, Top, Bottom (capitalised).
+# WARNING: this 320k mesh was built for a low Reynolds number: y1/c = 1e-4 gives
+# y+ = 12.4 at Re 6.5e6 (needs y1/c <= 8e-6) and the farfield is only 9 chords
+# away. Both fluxes then give the same wrong answer (CL 0.51, no shock; the
+# experiment has CL 0.74). Use a mesh with y1/c <= 8e-6 and a 25 to 50 chord
+# farfield before running this case.
 # Companion: rae2822_case6_slau2.toml (same case, plain Roe flux).
 
 [case]
@@ -27,6 +32,7 @@ reynolds_number = 6.5e6           # rho U c / mu of the freestream (Sutherland m
 [reference]
 length = 1.0                      # chord (m)
 moment_center = [0.25, 0.0]       # quarter chord
+vortex_correction = true          # farfield correction for the lift
 
 [initial]
 from_boundary = "Inlet"
