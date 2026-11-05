@@ -630,13 +630,13 @@ SCHEMA = {
             ),
             "ser_gmres_hold": Opt(
                 "int",
-                10,
+                25,
                 "Newton steps with this many GMRES iterations or more hold the CFL (ser)",
                 minimum=1,
             ),
             "ser_gmres_reduce": Opt(
                 "int",
-                30,
+                60,
                 "Newton steps with more GMRES iterations than this halve the CFL (ser)",
                 minimum=1,
             ),
@@ -699,7 +699,7 @@ SCHEMA = {
             ),
             "gmres": Opt(
                 "string",
-                "scipy",
+                "right",
                 "GMRES of the Newton steps: scipy (left-preconditioned inner "
                 "iteration; when the true residual misses the tolerance it "
                 "restarts from scratch with a tighter inner tolerance) or right "
@@ -734,7 +734,7 @@ SCHEMA = {
             ),
             "preconditioner_lagging": Opt(
                 "string",
-                "fixed",
+                "adaptive",
                 "Refactorization of the preconditioner in the Newton phase: "
                 "fixed (refactor_interval, CFL x4 and the 15-iteration rule) or "
                 "adaptive (keep it while the GMRES count stays below lag_growth "
