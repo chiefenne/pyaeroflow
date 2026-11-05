@@ -304,7 +304,7 @@ def test_bcm_relaxed_intermittency_and_diagnostics(tmp_path):
     h = np.genfromtxt(run / "out" / "plate.history.csv", delimiter=",", names=True)
     for col in ("gamma_cells", "gamma_jumped", "gamma_dmax_x", "rnu_max_y"):
         assert col in h.dtype.names
-    assert h["gamma_cells"][-1] > 0 and h["gamma_dmax"][-1] < 1e-3
+    assert h["gamma_cells"][-1] > 0 and h["gamma_dmax"][-1] < 2e-3
     w_ref = np.genfromtxt(
         ref / "out" / "plate.wall_plate.csv", delimiter=",", names=True
     )

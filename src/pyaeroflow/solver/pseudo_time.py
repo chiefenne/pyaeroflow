@@ -206,6 +206,11 @@ class PseudoTimeSettings:
         The source-term limit is switched off after this many consecutive
         Newton-Krylov steps that were accepted as full steps, and armed again
         by any cut or rejected step.
+    source_cfl_ramp : float
+        Gradual release (> 1): after ``source_cfl_release`` clean steps the
+        limit is multiplied by this factor on every further clean step and off
+        above 1e8 times the base; a cut or rejected step divides it by the
+        factor (at least back to the base). 1 = the hard release and re-arm.
     linear : LinearSettings
         Sparse linear solver of phase 1 and preconditioner of phase 2.
     """
@@ -247,6 +252,7 @@ class PseudoTimeSettings:
     cfl_floor_exponent: float = None
     source_cfl_limit: float = None
     source_cfl_release: int = 5
+    source_cfl_ramp: float = 1.0
     linear: LinearSettings = LinearSettings()
 
 
@@ -450,6 +456,9 @@ def solve_steady(
     # Source-term time-step limit: armed at the start and after every cut or
     # rejected step, released after source_cfl_release clean Newton steps.
     source_active = bool(resume.get("source_active", s.source_cfl_limit is not None))
+    source_level = float(resume.get("source_level", 1.0))  # gradual release
+    source_off = 1.0e8
+    ramp = s.source_cfl_ramp > 1.0
     clean_nk = 0
     fails_in_row, last_fail = 0, -(10**9)
     retry_pc = False  # retry a failed step with the existing factorization
@@ -466,6 +475,7 @@ def solve_steady(
             "eta": eta,
             "residual_start": r_start,
             "source_active": source_active,
+            "source_level": source_level,
         }
 
     state["it"] = it0
@@ -521,7 +531,11 @@ def solve_steady(
         with timers.section("time term"):
             if s.source_cfl_limit is not None:
                 t_matrix = time_term(
-                    u, cfl, source_limit=s.source_cfl_limit if source_active else None
+                    u,
+                    cfl,
+                    source_limit=s.source_cfl_limit * source_level
+                    if source_active
+                    else None,
                 )
             else:
                 t_matrix = time_term(u, cfl)
@@ -620,7 +634,11 @@ def solve_steady(
             if dbg is not None:
                 dbg["trials"].append((1.0, abs_new, rms_per_variable(r_new)))
                 dbg["full_step"] = r_new
-            if unsteady:
+            # The approximate-Jacobian phase of a Newton-Krylov run keeps the
+            # merit control: there the pseudo-time residual accepts steps that
+            # raise the steady residual at low CFL (small AFT/BCM plates).
+            unsteady_now = unsteady and (use_nk or not (s.newton_krylov and has_jvp))
+            if unsteady_now:
                 r_new, abs_new, step, accepted = _unsteady_line_search(
                     lambda a, u=u, du=du, it=it: res(u + a * du, it + 1),
                     merit,
@@ -683,8 +701,13 @@ def solve_steady(
                 ratio = norm_abs / max(abs_new, tiny)
                 if ratio > 1.0:
                     ratio = max(ratio, s.growth_factor)
-            if unsteady and step < 1.0:
-                ratio = min(ratio, 1.0)  # an under-relaxed step holds the CFL
+            if unsteady_now:
+                # HANIM: success never lowers the CFL (failures do, by the
+                # retry); an under-relaxed step holds it. Lowering it by the
+                # steady-residual ratio of a step that was accepted on the
+                # pseudo-time residual lets the CFL decay while the steady
+                # residual creeps up (flat-plate AFT stalled at CFL 2).
+                ratio = min(ratio, 1.0) if step < 1.0 else max(ratio, 1.0)
             if use_nk:
                 if not ser:
                     if lin_its >= s.nk_cfl_adapt_iterations:
@@ -716,7 +739,12 @@ def solve_steady(
             cfl *= s.cut_factor
             fails_in_row += 1
             last_fail = it
-            if unsteady and fails_in_row == 1 and lin is not None and not linear_failed:
+            if (
+                unsteady_now
+                and fails_in_row == 1
+                and lin is not None
+                and not linear_failed
+            ):
                 retry_pc = True  # first retry: keep the factorization
             else:
                 retry_pc = False
@@ -727,9 +755,23 @@ def solve_steady(
             if accepted and use_nk and step >= 1.0:
                 clean_nk += 1
                 if clean_nk >= s.source_cfl_release:
-                    source_active = False
+                    if ramp and source_active:
+                        source_level *= s.source_cfl_ramp
+                        if source_level > source_off:
+                            source_active = False
+                    else:
+                        source_active = False
             elif not accepted or step < 1.0:
                 clean_nk = 0
+                if ramp and source_level > 1.0:
+                    # step back one level (from "off" to the last level before)
+                    source_level = max(
+                        1.0,
+                        (source_off if not source_active else source_level)
+                        / s.source_cfl_ramp,
+                    )
+                else:
+                    source_level = 1.0
                 source_active = True
             info = getattr(callback, "info", None)
             if info is not None and was_active != source_active:

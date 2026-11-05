@@ -372,7 +372,6 @@ def _check_value(dotted, opt, value, problems):
 # Defaults that replace the schema defaults when physics.transition.model =
 # "lm" and the case file does not set the key (configuration.md, LM section).
 LM_DEFAULTS = {
-    "solver.cfl.max": 2000.0,
     "solver.newton_krylov.cfl_adapt_iterations": 150,
     "solver.newton_krylov.variable_scaling": True,
     "solver.line_search_merit": "no_transition",

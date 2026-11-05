@@ -213,7 +213,7 @@ def test_lm_solver_defaults():
 
     cfg = lm()
     s = cfg["solver"]
-    assert s["cfl"]["max"] == 2000.0
+    assert s["cfl"]["max"] == 1.0e10  # 1.3: the source-term limit replaces the 2000 cap
     assert s["newton_krylov"]["cfl_adapt_iterations"] == 150
     assert s["newton_krylov"]["variable_scaling"] is True
     assert s["line_search_merit"] == "no_transition"
@@ -221,7 +221,9 @@ def test_lm_solver_defaults():
     assert cfg["physics"]["transition"]["positive_jacobian"] is True
     assert any("Langtry-Menter defaults" in n for n in cfg.notices)
     settings = _pseudo_time_settings(cfg)
-    assert settings.cfl_max == 2000.0
+    assert settings.cfl_max == 1.0e10
+    assert settings.step_control == "unsteady"
+    assert settings.source_cfl_limit == 0.9
     assert settings.nk_cfl_adapt_iterations == 150
     assert settings.nk_variable_scaling is True
     again = resolve(tomllib.loads(cfg.to_toml()), "c.toml")

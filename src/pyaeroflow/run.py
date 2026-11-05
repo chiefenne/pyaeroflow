@@ -1072,8 +1072,9 @@ def _pseudo_time_settings(cfg):
         step_control=solver["step_control"],
         alpha_min=solver["step_alpha_min"],
         cfl_floor_exponent=solver["cfl"]["floor_exponent"],
-        source_cfl_limit=solver["source_time_step"]["limit"],
+        source_cfl_limit=solver["source_time_step"]["limit"] or None,
         source_cfl_release=solver["source_time_step"]["release_after"],
+        source_cfl_ramp=solver["source_time_step"]["release_ramp"],
         linear=LinearSettings(**solver["linear_solver"]),
     )
 
@@ -1437,7 +1438,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     return result, coefficients
 
 
-def _control_loop_rows(solver):
+def _control_loop_rows(solver, rans):
     """Return the configuration rows of the optional Phase A control-loop options."""
     rows = []
     if solver["step_control"] == "unsteady":
@@ -1457,12 +1458,17 @@ def _control_loop_rows(solver):
             )
         )
     src = solver["source_time_step"]
-    if src["limit"] is not None:
+    if src["limit"] and rans:
+        ramp = (
+            f", gradually (x{src['release_ramp']:g} per step)"
+            if src["release_ramp"] > 1.0
+            else ""
+        )
         rows.append(
             (
                 "source time step",
                 f"lambda_max(dS/dQ) dt <= {src['limit']:g}, released after "
-                f"{src['release_after']} full Newton steps",
+                f"{src['release_after']} full Newton steps{ramp}",
             )
         )
     return rows
@@ -1699,6 +1705,12 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         residual_drop=tm["inner_residual_drop"],
         first_order_iterations=0,
         nk_switch_residual_drop=0.0,
+        # The inner iterations of a time step have the mass matrix in the
+        # residual: the pseudo-time control options of the steady loop do not
+        # apply (not validated there).
+        step_control="merit",
+        source_cfl_limit=None,
+        cfl_floor_exponent=None,
     )
     settings = DualTimeSettings(
         tm["time_step"] / t_scale, tm["end_time"] / t_scale, tm["scheme"], inner
@@ -1956,7 +1968,7 @@ def _mode_rows(cfg):
         else:
             rows.append(("Newton-Krylov", "off"))
         if solver["method"] == "implicit":
-            rows += _control_loop_rows(solver)
+            rows += _control_loop_rows(solver, cfg["physics"]["model"] == "rans")
     conv = solver["convergence"]
     if conv["fields"] and not unsteady and solver["method"] == "implicit":
         rows.append(

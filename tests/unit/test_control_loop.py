@@ -141,3 +141,59 @@ def test_source_cfl_cap_limits_the_time_term(turbulence):
     assert np.all(limited >= plain * (1 - 1e-12))
     assert p.source_limited_cells == int(np.count_nonzero(cap < cfl))
     assert p.source_limited_cells > 0
+
+
+def test_control_loop_defaults_since_1_3():
+    from pyaeroflow.config import resolve
+    from pyaeroflow.run import _pseudo_time_settings
+
+    raw = {
+        "mesh": {"file": "m.su2"},
+        "physics": {"model": "laminar"},
+        "fluid": {"density": 1.0, "viscosity": 0.1},
+        "reference": {"velocity": 1.0},
+        "initial": {"velocity": [0.0, 0.0]},
+        "boundary": {
+            "bottom": {"type": "wall"},
+            "top": {"type": "wall", "velocity": [1.0, 0.0]},
+            "left": {
+                "type": "periodic",
+                "partner": "right",
+                "translation": [2.0, 0.0],
+            },
+        },
+    }
+    s = _pseudo_time_settings(resolve(raw, "c.toml"))
+    assert s.step_control == "unsteady" and s.source_cfl_limit == 0.9
+    assert s.source_cfl_ramp == 1.0
+    old = {
+        **raw,
+        "solver": {"step_control": "merit", "source_time_step": {"limit": 0.0}},
+    }
+    s = _pseudo_time_settings(resolve(old, "c.toml"))
+    assert s.step_control == "merit" and s.source_cfl_limit is None
+
+
+def test_source_limit_ramps_up_and_steps_back():
+    residual, jacobian, _, u0 = scalar_problem(1.5)
+    calls = []
+
+    def time_term(u, cfl, source_limit=None):
+        calls.append(source_limit)
+        return sp.diags(np.ones(u.size) / cfl)
+
+    jvp = lambda u, du: 0.5 / np.sqrt(u) * du  # noqa: E731
+    settings = PseudoTimeSettings(
+        nk_switch_residual_drop=0.0,
+        residual_drop=14.0,
+        source_cfl_limit=0.9,
+        source_cfl_release=2,
+        source_cfl_ramp=10.0,
+    )
+    result = solve_steady(residual, jacobian, time_term, u0, settings, jvp=jvp)
+    assert result.converged
+    # base for the first steps, then x10 per clean step, then off
+    assert calls[0] == pytest.approx(0.9) and calls[1] == pytest.approx(0.9)
+    levels = [c for c in calls if c is not None]
+    assert levels == sorted(levels) and levels[-1] > 0.9 * 10
+    assert calls[-1] is None or calls[-1] > 0.9

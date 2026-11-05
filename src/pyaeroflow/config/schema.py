@@ -448,13 +448,14 @@ SCHEMA = {
         ),
         "step_control": Opt(
             "string",
-            "merit",
-            "Step acceptance (implicit): merit (halve a step that raises the "
-            "steady residual RMS, reject above cfl.reject_factor) or unsteady "
-            "(HANIM, Wang et al. 2021: a step must lower the pseudo-time "
-            "residual a T du + R(u + a du); quadratic under-relaxation a, a "
-            "partial step holds the CFL, a failed step is retried at "
-            "cfl.cut_factor with the existing factorization)",
+            "unsteady",
+            "Step acceptance (implicit): unsteady (default since 1.3; HANIM, "
+            "Wang et al. 2021: a step must lower the pseudo-time residual "
+            "a T du + R(u + a du); quadratic under-relaxation a, a partial "
+            "step holds the CFL, a failed step is retried at cfl.cut_factor "
+            "with the existing factorization) or merit (the 1.2 loop: halve a "
+            "step that raises the steady residual RMS, reject above "
+            "cfl.reject_factor)",
             choices=("merit", "unsteady"),
         ),
         "step_alpha_min": Opt(
@@ -467,12 +468,13 @@ SCHEMA = {
         "source_time_step": {
             "limit": Opt(
                 "float",
-                None,
+                0.9,
                 "RANS: source-term time-step limit (Piotrowski & Zingg 2020): "
                 "the local pseudo-time step of every cell obeys "
                 "lambda_max(dS/dQ) dt <= limit, lambda_max the largest growth "
                 "rate of the cell-local turbulence/transition source Jacobian "
-                "(production included); 0.9 in the paper. Off by default",
+                "(production included); 0.9 in the paper (default since 1.3). "
+                "0 switches it off (the 1.2 behaviour)",
                 minimum=0.0,
             ),
             "release_after": Opt(
@@ -481,6 +483,16 @@ SCHEMA = {
                 "Switch the limit off after this many consecutive full "
                 "Newton-Krylov steps; any cut or rejected step arms it again",
                 minimum=1,
+            ),
+            "release_ramp": Opt(
+                "float",
+                1.0,
+                "Gradual release: after release_after clean steps the limit is "
+                "multiplied by this factor on every further clean step (off "
+                "above 1e8 times the base), and a cut or rejected step divides "
+                "it by the factor instead of re-arming it fully. 1 = release "
+                "and re-arm at once (default); 10 is the value to try",
+                minimum=1.0,
             ),
         },
         "refactor_interval": Opt(
