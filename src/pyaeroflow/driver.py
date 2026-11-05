@@ -213,6 +213,7 @@ class FlowProblem:
         self.compressible = self.flow is comp
         self.turbulent = model.turbulence != "none"
         self.source_limited_cells = 0  # cells capped by the source-term dt limit
+        self.local_cfl_cells = 0  # cells with a lowered local CFL (row_cfl)
         if self.compressible and self.turbulent:
             if model.transition != "none":
                 raise ValueError("compressible flow: transition models are planned")
@@ -599,7 +600,7 @@ class FlowProblem:
         )
         return JacobianPattern(self.geom, self.model.n_var, masks)
 
-    def source_cfl_cap(self, w, params, limit):
+    def source_cfl_cap(self, w, params, limit, rows=None):
         """Largest local CFL per cell allowed by the source-term time-step limit.
 
         Piotrowski & Zingg (2020), after Lian et al.: the local pseudo-time
@@ -610,7 +611,8 @@ class FlowProblem:
         CFL_i <= limit / max Re eig(-D_i^-1 J_i), with D_i the turbulence
         block of the pseudo-time matrix at CFL 1 and J_i the source part of
         dR/dw (:func:`source_jacobian` of the physics module). Cells without
-        a growing source mode get inf.
+        a growing source mode get inf. ``rows`` (columns of the state) limits
+        the eigenvalue problem to these variables' sub-block.
         """
         w = jnp.asarray(w)
         nt = self.physics.NT
@@ -619,6 +621,9 @@ class FlowProblem:
         )[:, nt:, nt:]
         j = np.asarray(self.physics.source_jacobian(self.model, self.geom, self.bc, w))
         m = -np.linalg.solve(d, j)
+        if rows is not None:
+            sub = [c - nt for c in rows]
+            m = m[:, sub][:, :, sub]
         if m.shape[1] == 1:
             rate = m[:, 0, 0]
         else:
@@ -626,7 +631,16 @@ class FlowProblem:
         with np.errstate(divide="ignore"):
             return np.where(rate > 0.0, limit / np.maximum(rate, 1e-300), np.inf)
 
-    def time_term(self, w, params, cfl, transition_cfl_max=None, source_limit=None):
+    def time_term(
+        self,
+        w,
+        params,
+        cfl,
+        transition_cfl_max=None,
+        source_limit=None,
+        row_cfl=None,
+        source_rows=None,
+    ):
         """Block-diagonal pseudo-time matrix Gamma_i Lambda_i / CFL.
 
         With ``transition_cfl_max`` (Langtry-Menter) the gamma and Re_thetat
@@ -635,18 +649,28 @@ class FlowProblem:
 
         With ``source_limit`` (RANS) every cell uses min(CFL, CFL_i) with the
         cap CFL_i of :meth:`source_cfl_cap`; the number of capped cells is
-        kept in ``self.source_limited_cells``.
+        kept in ``self.source_limited_cells``. With ``source_rows`` the cap
+        comes from these variables' source sub-block and applies to their rows
+        only (the transition rows after the release of the full limit).
+
+        With ``row_cfl = (columns, cap)`` the rows ``columns`` of cell i use
+        min(CFL, cap_i): the local CFL of :func:`solve_steady`
+        (``local_cfl_columns``); the number of capped cells is kept in
+        ``self.local_cfl_cells``.
         """
         blocks = np.asarray(
             self.physics.time_term_blocks(self.model, self.geom, w, params, cfl)
         )
         self.source_limited_cells = 0
         if source_limit is not None and self.turbulent:
-            cap = self.source_cfl_cap(w, params, source_limit)
+            cap = self.source_cfl_cap(w, params, source_limit, source_rows)
             factor = np.maximum(1.0, cfl / cap)
             self.source_limited_cells = int(np.count_nonzero(factor > 1.0))
-            if self.source_limited_cells:
+            if self.source_limited_cells and source_rows is None:
                 blocks = blocks * factor[:, None, None]
+            elif self.source_limited_cells:
+                blocks = blocks.copy()
+                blocks[:, list(source_rows), :] *= factor[:, None, None]
         if (
             transition_cfl_max is not None
             and self.model.transition == "lm"
@@ -655,6 +679,17 @@ class FlowProblem:
             rows = [rans_sst.NGL, rans_sst.NRT]
             blocks = blocks.copy()
             blocks[:, rows, :] *= cfl / transition_cfl_max
+        self.local_cfl_cells = 0
+        if row_cfl is not None:
+            columns, cap = row_cfl
+            factor = np.maximum(1.0, cfl / np.asarray(cap))
+            if transition_cfl_max is not None and cfl > transition_cfl_max:
+                # the fixed cap above already scaled these rows
+                factor = np.maximum(1.0, transition_cfl_max / np.asarray(cap))
+            self.local_cfl_cells = int(np.count_nonzero(factor > 1.0))
+            if self.local_cfl_cells:
+                blocks = blocks.copy()
+                blocks[:, list(columns), :] *= factor[:, None, None]
         return block_diagonal(blocks)
 
     def explicit_update(self, w, r, params, cfl):
@@ -1047,6 +1082,10 @@ class FlowProblem:
             if self.source_limited_cells and it > 0:
                 note = on_iteration.info.get("note", "")
                 tag = f"src-dt {self.source_limited_cells}"
+                on_iteration.info["note"] = f"{note}, {tag}" if note else tag
+            if self.local_cfl_cells and it > 0:
+                note = on_iteration.info.get("note", "")
+                tag = f"loc-cfl {self.local_cfl_cells}"
                 on_iteration.info["note"] = f"{note}, {tag}" if note else tag
             if vortex is not None and accepted:
                 self.apply_farfield_vortex(vortex, w)

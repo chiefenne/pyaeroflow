@@ -247,6 +247,43 @@ class PseudoTimeSettings:
         Largest number of Newton steps per factorization (``adaptive``).
     pc_lag_growth : float
         GMRES growth factor that triggers a new factorization (``adaptive``).
+    source_release_cfl : float or None
+        The source-term limit is released only once the CFL has reached this
+        value (besides ``source_cfl_release`` clean steps); None = at any CFL.
+    source_keep_columns : tuple of int or None
+        Variables whose rows keep the source-term limit after its release,
+        computed from their own source sub-block (``time_term`` keyword
+        ``source_rows``; Langtry-Menter: gamma, Re_thetat). None = the release
+        frees all rows.
+    nk_equation_scaling : bool
+        Divide every equation of the Newton-Krylov system by the RMS of its
+        current residual before GMRES, so that
+        the GMRES tolerance applies to all equations alike; without it the
+        norm is in raw units and the largest raw residual (Re_thetat in the
+        LM wake) decides when GMRES stops.
+    growth_max : float or None
+        Largest CFL factor per accepted iteration (``growth`` control);
+        None = unbounded SER ratio.
+    full_step_growth : bool
+        ``unsteady`` step control: an accepted full step raises the CFL by at
+        least ``growth_factor`` even if the steady residual did not fall
+        (HANIM); False holds the CFL then.
+    local_cfl_columns : tuple of int or None
+        Local CFL (Phase C, after the local CFL adaptation of SU2): the rows
+        of these variables (Langtry-Menter: gamma, Re_thetat) get a per-cell
+        CFL cap c_i, applied as min(CFL, c_i) by the ``time_term`` keyword
+        ``row_cfl``. A cell whose raw update of one of the variables exceeds
+        ``local_cfl_max_change`` times max(|u|, 0.01 RMS of the field) gets
+        c_i = max(cfl_start, local_cfl_cut min(CFL, c_i)) for the following
+        steps; a cell with a small update (below half that) raises its cap
+        by ``local_cfl_growth`` per step until it reaches the global CFL
+        (cap off). The global CFL control is unchanged. None = off.
+    local_cfl_max_change : float
+        Relative update size that cuts the local CFL of a cell.
+    local_cfl_cut : float
+        Factor on the local CFL of a cell with a large update.
+    local_cfl_growth : float
+        Growth of a cut local CFL per step with a small update.
     linear : LinearSettings
         Sparse linear solver of phase 1 and preconditioner of phase 2.
     """
@@ -296,6 +333,15 @@ class PseudoTimeSettings:
     pc_lagging: str = "adaptive"
     pc_lag_max: int = 10
     pc_lag_growth: float = 1.5
+    nk_equation_scaling: bool = False
+    source_keep_columns: tuple = None
+    source_release_cfl: float = None
+    growth_max: float = None
+    full_step_growth: bool = False
+    local_cfl_columns: tuple = None
+    local_cfl_max_change: float = 0.2
+    local_cfl_cut: float = 0.1
+    local_cfl_growth: float = 2.0
     linear: LinearSettings = LinearSettings()
 
 
@@ -523,6 +569,15 @@ def solve_steady(
         10.0 ** (-s.nk_approximate_drop) if s.nk_approximate_drop is not None else 0.0
     )
     eta_prev = None
+    # Local CFL caps of the local_cfl_columns rows (inf = global CFL).
+    local_cols = None if s.local_cfl_columns is None else list(s.local_cfl_columns)
+    local_cap = None
+    if local_cols is not None:
+        local_cap = np.full(u.shape[0], np.inf)
+        if resume.get("local_cfl") is not None:
+            saved = np.asarray(resume["local_cfl"], dtype=float)
+            if saved.shape == local_cap.shape:
+                local_cap = saved.copy()
     # Live view of the solver state for the callback (restart files).
     state = {}
 
@@ -538,6 +593,7 @@ def solve_steady(
             "source_active": source_active,
             "source_level": source_level,
             "approximate_products": approx_on,
+            "local_cfl": None if local_cap is None else local_cap.copy(),
         }
 
     state["it"] = it0
@@ -592,16 +648,19 @@ def solve_steady(
         nk_on = nk_on or immediate or norm <= nk_threshold or by_iteration
         use_nk = s.newton_krylov and has_jvp and not startup and nk_on
         with timers.section("time term"):
+            kw = {}
             if s.source_cfl_limit is not None:
-                t_matrix = time_term(
-                    u,
-                    cfl,
-                    source_limit=s.source_cfl_limit * source_level
-                    if source_active
-                    else None,
+                kw["source_limit"] = (
+                    s.source_cfl_limit * source_level if source_active else None
                 )
-            else:
-                t_matrix = time_term(u, cfl)
+                if not source_active and s.source_keep_columns is not None:
+                    # released: the kept rows (transition) stay limited
+                    kw["source_limit"] = s.source_cfl_limit
+                    kw["source_rows"] = list(s.source_keep_columns)
+            if local_cap is not None and np.isfinite(local_cap).any():
+                kw["row_cfl"] = (local_cols, local_cap)
+            t_matrix = time_term(u, cfl, **kw)
+        du_local = None
         accepted, lin_its, step, linear_failed = False, 0, 1.0, False
         try:
             if adaptive_pc and use_nk:
@@ -651,10 +710,15 @@ def solve_steady(
                     operator, precondition, unscale = _variable_scaling(
                         operator, precondition, u
                     )
+                rhs = -r.ravel()
+                if s.nk_equation_scaling:
+                    operator, precondition, rhs = _equation_scaling(
+                        operator, precondition, rhs, rms_per_variable(r), u.shape[0]
+                    )
                 with timers.section("nk solve (GMRES)"):
                     du, lin_its = solve_matrix_free(
                         operator,
-                        -r.ravel(),
+                        rhs,
                         precondition,
                         tolerance=tolerance,
                         restart=s.nk_restart,
@@ -697,6 +761,8 @@ def solve_steady(
                     du = lin.solve(-r.ravel())
                 lin_its = lin.iterations
             du = du.reshape(u.shape)
+            if local_cols is not None:
+                du_local = du[:, local_cols].copy()
             if dbg is not None:
                 dbg.update(nk=use_nk, gmres=lin_its, factorized=not reuse)
                 dbg["reference"] = r
@@ -790,7 +856,14 @@ def solve_steady(
                 # steady-residual ratio of a step that was accepted on the
                 # pseudo-time residual lets the CFL decay while the steady
                 # residual creeps up (flat-plate AFT stalled at CFL 2).
-                ratio = min(ratio, 1.0) if step < 1.0 else max(ratio, 1.0)
+                full = s.full_step_growth and not ser
+                ratio = (
+                    min(ratio, 1.0)
+                    if step < 1.0
+                    else max(ratio, s.growth_factor if full else 1.0)
+                )
+            if s.growth_max is not None and not ser:
+                ratio = min(ratio, s.growth_max)
             if use_nk:
                 lagged = adaptive_pc and steps_since_factor > 1
                 if not ser:
@@ -851,11 +924,39 @@ def solve_steady(
                 retry_pc = False
                 lin = None  # rebuild the preconditioner after a rejection
                 reset_analysis()  # and the PARDISO analysis
+        if du_local is not None:
+            # Local CFL from the raw update size (before the line search and
+            # the clips): cut where the update is large, regrow where small.
+            ref = np.maximum(
+                np.abs(u[:, local_cols]),
+                np.maximum(0.01 * rms_per_variable(u[:, local_cols]), tiny),
+            )
+            change = np.max(np.abs(du_local) / ref, axis=1)
+            change = np.where(np.isfinite(change), change, np.inf)
+            big = change > s.local_cfl_max_change
+            small = change < 0.5 * s.local_cfl_max_change
+            cfl_step = hist["cfl"][-1]
+            local_cap = np.where(
+                big,
+                np.maximum(
+                    s.cfl_start, s.local_cfl_cut * np.minimum(cfl_step, local_cap)
+                ),
+                local_cap,
+            )
+            grown = local_cap * s.local_cfl_growth
+            local_cap = np.where(
+                small & np.isfinite(local_cap),
+                np.where(grown >= cfl, np.inf, grown),
+                local_cap,
+            )
+            if dbg is not None:
+                dbg["local_cfl_cut"] = int(np.count_nonzero(big))
         if s.source_cfl_limit is not None:
             was_active = source_active
             if accepted and use_nk and step >= 1.0:
                 clean_nk += 1
-                if clean_nk >= s.source_cfl_release:
+                high = s.source_release_cfl is None or cfl >= s.source_release_cfl
+                if clean_nk >= s.source_cfl_release and high:
                     if ramp and source_active:
                         source_level *= s.source_cfl_ramp
                         if source_level > source_off:
@@ -971,6 +1072,33 @@ def _variable_scaling(operator, precondition, u):
         return full * y
 
     return apply, pre, unscale
+
+
+def _equation_scaling(operator, precondition, rhs, scale, n_cells):
+    """Newton-Krylov system with every equation divided by its residual RMS.
+
+    ``nk_equation_scaling``: rows of variable j are multiplied by
+    d_j = 1 / scale_j, scale_j the RMS of the current residual of variable j
+    (variables below 1e-12 of the largest get the weight of the largest), so
+    that every equation has the same share of GMRES's norm |D (b - A x)|.
+    In raw units Re_thetat (residual ~1e-3 in the LM wake) hides the flow and
+    gamma rows (~1e-6); weighting by the peaks of the convergence measure
+    instead hid the flow rows once they had dropped (39k SD7003 alpha 2:
+    linear residual of u 100x the residual at CFL 10). Returns the operator
+    v -> D A v, the right preconditioner y -> M^-1 D^-1 y and D b.
+    """
+    peak = np.asarray(scale, dtype=float)
+    active = peak >= 1e-12 * peak.max()
+    weight = np.where(active, 1.0 / np.where(active, peak, 1.0), 1.0 / peak.max())
+    d = np.tile(weight, n_cells)
+
+    def apply(v):
+        return d * operator(v)
+
+    def pre(y):
+        return precondition(y / d)
+
+    return apply, pre, d * rhs
 
 
 def _newton_operator(t_matrix, product, shape):

@@ -86,6 +86,42 @@ SCHEMA = {
                 "plain Newton and positive_jacobian alone was better, so it is off "
                 "by default",
             ),
+            "local_cfl": {
+                "max_change": Opt(
+                    "float",
+                    0.0,
+                    "model = lm, implicit: local CFL of the gamma and Re_thetat "
+                    "rows (after SU2's local CFL adaptation). A cell whose raw "
+                    "Newton update of gamma or Re_thetat exceeds max_change "
+                    "times max(|value|, 0.01 field RMS) gets a CFL cap for these "
+                    "rows: cut times min(CFL, cap); the cap grows by growth per "
+                    "step with an update below half of max_change and is "
+                    "dropped once it reaches the global CFL. Aimed at the gamma "
+                    "wake instability of LM polar restarts at CFL 1e4-1e5. "
+                    "0 = off (default); 0.2 is the value to try",
+                    minimum=0.0,
+                ),
+                "cut": Opt(
+                    "float",
+                    0.1,
+                    "Factor on the local CFL of a cell with a large update",
+                    minimum=0.0,
+                ),
+                "growth": Opt(
+                    "float",
+                    2.0,
+                    "Growth of a cut local CFL per step with a small update",
+                    minimum=1.0,
+                ),
+                "variables": Opt(
+                    "string",
+                    "transition",
+                    "Rows with the local CFL and whose update is measured: "
+                    "transition (gamma, Re_thetat) or turbulence (k, omega, "
+                    "gamma, Re_thetat)",
+                    choices=("transition", "turbulence"),
+                ),
+            },
             "cfl_max": Opt(
                 "float",
                 None,
@@ -498,6 +534,24 @@ SCHEMA = {
                 "Newton-Krylov steps; any cut or rejected step arms it again",
                 minimum=1,
             ),
+            "release_cfl": Opt(
+                "float",
+                None,
+                "Release the limit only once the CFL has reached this value "
+                "(besides release_after clean steps). Default: at any CFL "
+                "(the 39k SD7003 LM alpha 2 restart released it at CFL 160, "
+                "then GMRES failed at CFL 3e5 where the source terms make "
+                "T + J indefinite); 1e6 is the value to try",
+                minimum=0.0,
+            ),
+            "keep_transition": Opt(
+                "bool",
+                False,
+                "Langtry-Menter: after the release the gamma and Re_thetat "
+                "rows keep the limit, computed from their own source "
+                "sub-block (the flow and k-omega rows are released). Default "
+                "false",
+            ),
             "release_ramp": Opt(
                 "float",
                 1.0,
@@ -582,6 +636,23 @@ SCHEMA = {
             ),
             "growth_factor": Opt(
                 "float", 2.0, "Minimum CFL growth per accepted iteration", minimum=1.0
+            ),
+            "growth_max": Opt(
+                "float",
+                None,
+                "control = growth: largest CFL factor per accepted iteration "
+                "(the SER ratio |R_old| / |R_new| is unbounded: on the 39k "
+                "SD7003 LM alpha 2 restart it jumped 7e4 -> 3e5 and GMRES "
+                "failed). Default: no bound",
+                minimum=1.0,
+            ),
+            "full_step_growth": Opt(
+                "bool",
+                False,
+                "step_control = unsteady: an accepted full step raises the CFL "
+                "by at least growth_factor even when the steady residual did "
+                "not fall (HANIM: success raises the CFL). Default false: such "
+                "a step holds the CFL",
             ),
             "cut_factor": Opt(
                 "float", 0.1, "CFL reduction after a rejected update", minimum=0.0
@@ -688,6 +759,18 @@ SCHEMA = {
                 "small variables unsolved: on the 320k SD7003 LM case 95 % of the "
                 "gamma residual stayed in the linear model while Re_thetat (~1e3) "
                 "was solved. Default true with physics.transition.model = lm",
+            ),
+            "equation_scaling": Opt(
+                "bool",
+                False,
+                "Divide every equation of the Newton system by the RMS of its "
+                "current residual before GMRES, so the GMRES tolerance holds "
+                "for all equations alike. In raw "
+                "units the Re_thetat rows (~1e-3 in the LM wake) decide when "
+                "GMRES stops: on the 39k SD7003 alpha 2 restart steps at CFL "
+                "2e3 stopped at a total linear residual of 0.45 with the u, k "
+                "and gamma rows worse than before the solve (relative linear "
+                "residual 6, 2e4, 1.7) and were rejected. Default false",
             ),
             "linearize": Opt(
                 "bool",

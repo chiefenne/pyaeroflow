@@ -1052,6 +1052,8 @@ def _pseudo_time_settings(cfg):
         cfl_max=solver["cfl"]["max"],
         cfl_max_approximate=solver["cfl"]["max_approximate"],
         growth_factor=solver["cfl"]["growth_factor"],
+        growth_max=solver["cfl"]["growth_max"],
+        full_step_growth=solver["cfl"]["full_step_growth"],
         cut_factor=solver["cfl"]["cut_factor"],
         reject_factor=solver["cfl"]["reject_factor"],
         cfl_control=solver["cfl"]["control"],
@@ -1073,6 +1075,7 @@ def _pseudo_time_settings(cfg):
         nk_cfl_adapt_iterations=solver["newton_krylov"]["cfl_adapt_iterations"],
         nk_linearize=solver["newton_krylov"]["linearize"],
         nk_variable_scaling=solver["newton_krylov"]["variable_scaling"],
+        nk_equation_scaling=solver["newton_krylov"]["equation_scaling"],
         nk_gmres=solver["newton_krylov"]["gmres"],
         nk_forcing_max=solver["newton_krylov"]["forcing_max"],
         nk_forcing_safeguard=solver["newton_krylov"]["forcing_safeguard"],
@@ -1087,6 +1090,7 @@ def _pseudo_time_settings(cfg):
         source_cfl_limit=solver["source_time_step"]["limit"] or None,
         source_cfl_release=solver["source_time_step"]["release_after"],
         source_cfl_ramp=solver["source_time_step"]["release_ramp"],
+        source_release_cfl=solver["source_time_step"]["release_cfl"],
         linear=LinearSettings(**solver["linear_solver"]),
     )
 
@@ -1333,6 +1337,25 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
                     for c in range(problem.model.n_var)
                     if c not in (rans_sst.NGL, rans_sst.NRT)
                 ),
+            )
+        if (
+            solver["source_time_step"]["keep_transition"]
+            and problem.model.transition == "lm"
+        ):
+            settings = dataclasses.replace(
+                settings, source_keep_columns=(rans_sst.NGL, rans_sst.NRT)
+            )
+        local = tr_cfg["local_cfl"]
+        if local["max_change"] and problem.model.transition == "lm":
+            columns = (rans_sst.NGL, rans_sst.NRT)
+            if local["variables"] == "turbulence":
+                columns = tuple(range(problem.physics.NT, problem.model.n_var))
+            settings = dataclasses.replace(
+                settings,
+                local_cfl_columns=columns,
+                local_cfl_max_change=local["max_change"],
+                local_cfl_cut=local["cut"],
+                local_cfl_growth=local["growth"],
             )
         freeze = cfg["numerics"]["limiter_freeze"]
         if cfg["reference"]["vortex_correction"]:
@@ -2069,6 +2092,17 @@ def _mode_rows(cfg):
                     "and sqrt of the LM onset, separation and blending "
                     "functions have smooth derivatives, the residual is "
                     "unchanged (physics.transition.jacobian_smoothing)",
+                )
+            )
+        local = tr.get("local_cfl") or {}
+        if local.get("max_change"):
+            rows.append(
+                (
+                    "local CFL",
+                    f"{local['variables']} rows: cut x{local['cut']:g} where "
+                    "the update exceeds "
+                    f"{local['max_change']:g} of the value, regrow "
+                    f"x{local['growth']:g} (physics.transition.local_cfl)",
                 )
             )
         if tr.get("cfl_max") is not None:

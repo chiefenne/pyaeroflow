@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased – Phase C of the solver roadmap
+
+- New opt-in (Langtry-Menter): `physics.transition.local_cfl =
+  { max_change, cut, growth }` (default `max_change = 0`, off). Per-cell CFL
+  of the gamma and Re_thetat rows from the size of their Newton update, after
+  SU2's local CFL adaptation, against the gamma wake instability of LM polar
+  restarts at high CFL. Log tag `loc-cfl N`, `variables = "turbulence"`
+  for the k-omega rows too. No gain on the 39k SD7003 alpha 2 restart.
+- New opt-in: `solver.newton_krylov.equation_scaling` (GMRES on the system
+  with every equation divided by its residual RMS), `solver.source_time_step
+  .release_cfl` and `.keep_transition`, `solver.cfl.growth_max` and
+  `.full_step_growth`. Sandbox findings in
+  analysis/ank_startup/phase_c_topic1.md (project files).
+
 ## 1.4.0 – Newton cost (Phase B of the solver roadmap, 2026-11-05)
 
 Changed defaults (the 1.3 behaviour stays reachable, see below). A full
