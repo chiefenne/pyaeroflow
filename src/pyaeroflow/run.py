@@ -1438,7 +1438,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
 
 
 def _control_loop_rows(solver):
-    """Configuration rows of the optional Phase A control-loop options."""
+    """Return the configuration rows of the optional Phase A control-loop options."""
     rows = []
     if solver["step_control"] == "unsteady":
         rows.append(
