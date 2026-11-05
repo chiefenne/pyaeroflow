@@ -26,6 +26,11 @@ validation rerun is still to do.
 - New opt-in: `forcing_max`, `forcing_safeguard`,
   `approximate_products_until` (R1 products with the frozen limiter; no
   gain on the airfoil cases).
+- New opt-in (Langtry-Menter): `physics.transition.jacobian_smoothing`
+  (default 0, off). Smooth derivatives of the onset, separation and blending
+  switches (max/min/clip and sqrt(gamma F_onset)) in the Newton-Krylov
+  Jacobian and the preconditioner, values bit-identical. T3A at width 0.1:
+  465 -> 198 Jacobian products, 96 -> 83 s, same Cf. SD7003 not yet tested.
 - Known: Langtry-Menter polars restarted at a new angle can still lose time
   when the CFL grows into the gamma wake instability (rejects and CFL
   restarts, SD7003 alpha 2); `source_time_step.release_ramp` does not help

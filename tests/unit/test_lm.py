@@ -415,3 +415,41 @@ def test_whole_cell_relaxation_scales_the_flow_update_of_a_limited_cell():
     np.testing.assert_allclose(whole[0, :3], scale * du[0, :3])
     np.testing.assert_allclose(whole[0, rans_sst.NK], plain[0, rans_sst.NK])
     np.testing.assert_allclose(whole[1:], plain[1:])  # other cells unchanged
+
+
+def test_jacobian_smoothing_keeps_values_and_bounds_the_onset_slope():
+    """Smooth switches change only the derivatives of the LM sources."""
+    nu, d = 1.5e-5, 1.0e-3
+    re_t = 400.0
+    s_onset = 2.193 * float(lm.critical_re_theta(jnp.array(re_t))) * nu / d**2
+    strain = jnp.linspace(0.6, 1.6, 2001) * s_onset
+    one = jnp.ones(strain.size)
+
+    def src(s, w):
+        args = (0.05 * one, re_t * one, 1e-8 * one, 1e3 * one, nu, s, s, d * one)
+        return lm.sources(*args, one, 0.0 * one, positive=True, smooth=w)[0]
+
+    v0, t0 = jax.jvp(lambda s: src(s, 0.0), (strain,), (one,))
+    v1, t1 = jax.jvp(lambda s: src(s, 0.1), (strain,), (one,))
+    assert bool(jnp.all(v0 == v1))  # bit-identical values
+    assert np.all(np.isfinite(np.asarray(t1)))
+    jump0 = np.abs(np.diff(np.asarray(t0))).max()
+    jump1 = np.abs(np.diff(np.asarray(t1))).max()
+    assert jump1 < 1e-2 * jump0  # the onset step is gone from the slope
+    g = 0.3 * one
+    e0 = lm.effective_intermittency(
+        g, re_t * one, 1e-8 * one, 1e3 * one, nu, strain, strain, d * one, one
+    )
+    e1 = lm.effective_intermittency(
+        g,
+        re_t * one,
+        1e-8 * one,
+        1e3 * one,
+        nu,
+        strain,
+        strain,
+        d * one,
+        one,
+        smooth=0.1,
+    )
+    assert bool(jnp.all(e0 == e1))

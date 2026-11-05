@@ -42,6 +42,52 @@ def _safe_sqrt(x):
     return jnp.where(positive, jnp.sqrt(jnp.where(positive, x, 1.0)), 0.0)
 
 
+# Smooth switches (``smooth`` > 0, physics.transition.jacobian_smoothing):
+# the value is the exact max / min / clip / sqrt, only the derivative is that
+# of a smooth version with transition width ``w``,
+#
+#     f = stop_gradient(f_exact) + (f_smooth - stop_gradient(f_smooth)),
+#
+# so the residual (and the converged solution) is unchanged and only the
+# Newton-Krylov Jacobian and the preconditioner see bounded, continuous
+# slopes instead of the steps of the onset switches and the 1 / (2 sqrt x)
+# slope of the production at onset.
+
+
+def _exact_value(exact, smooth):
+    # exact + (smooth - smooth): the value is exact to the bit.
+    return jax.lax.stop_gradient(exact) + (smooth - jax.lax.stop_gradient(smooth))
+
+
+def _smax(a, b, w):
+    """max(a, b); with w > 0 the derivative of 0.5 (a + b + sqrt((a-b)^2 + w^2))."""
+    exact = jnp.maximum(a, b)
+    if w <= 0.0:
+        return exact
+    return _exact_value(exact, 0.5 * (a + b + jnp.sqrt((a - b) ** 2 + w * w)))
+
+
+def _smin(a, b, w):
+    """min(a, b); with w > 0 the derivative of 0.5 (a + b - sqrt((a-b)^2 + w^2))."""
+    exact = jnp.minimum(a, b)
+    if w <= 0.0:
+        return exact
+    return _exact_value(exact, 0.5 * (a + b - jnp.sqrt((a - b) ** 2 + w * w)))
+
+
+def _sclip(x, lo, hi, w):
+    """clip(x, lo, hi) with smooth derivatives (exact value)."""
+    return _smin(_smax(x, lo, w), hi, w)
+
+
+def _ssqrt(x, w):
+    """sqrt(max(x, 0)); with w > 0 the slope of sqrt(smax(x, 0) + w^2), <= 1/(2w)."""
+    exact = _safe_sqrt(x)
+    if w <= 0.0:
+        return exact
+    return _exact_value(exact, jnp.sqrt(_smax(x, 0.0, w) + w * w))
+
+
 def turbulence_intensity(k, speed):
     """Local Tu = 100 sqrt(2k/3) / U in percent, at least 0.027."""
     tu = 100.0 * _safe_sqrt(2.0 * k / 3.0) / jnp.maximum(speed, TINY)
@@ -76,7 +122,7 @@ def pressure_gradient_factor(lam, tu):
     return jnp.where(lam <= 0.0, neg, pos)
 
 
-def equilibrium_re_theta(tu, du_ds, nu, speed):
+def equilibrium_re_theta(tu, du_ds, nu, speed, smooth=0.0):
     """Re_thetat^eq(Tu, lambda_theta), solved by fixed-point iteration on theta.
 
     lambda_theta = theta^2 / nu dU/ds with theta = Re_thetat^eq nu / U,
@@ -84,10 +130,11 @@ def equilibrium_re_theta(tu, du_ds, nu, speed):
     """
     base = _re_theta_tu(tu)
     scale = nu * du_ds / jnp.maximum(speed, TINY) ** 2  # lambda / Re_theta^2
-    re = jnp.maximum(base, RE_THETA_EQ_MIN)
+    w_lam, w_re = smooth * LAMBDA_LIMIT, smooth * RE_THETA_EQ_MIN
+    re = _smax(base, RE_THETA_EQ_MIN, w_re)
     for _ in range(EQ_ITERATIONS):
-        lam = jnp.clip(re**2 * scale, -LAMBDA_LIMIT, LAMBDA_LIMIT)
-        re = jnp.maximum(base * pressure_gradient_factor(lam, tu), RE_THETA_EQ_MIN)
+        lam = _sclip(re**2 * scale, -LAMBDA_LIMIT, LAMBDA_LIMIT, w_lam)
+        re = _smax(base * pressure_gradient_factor(lam, tu), RE_THETA_EQ_MIN, w_re)
     return re
 
 
@@ -122,15 +169,17 @@ def blending_f3(k, nu, distance):
     return jnp.exp(-((r_y / 120.0) ** 8))
 
 
-def _theta_blending(gamma, re_t, omega, nu, vorticity, distance, speed):
+def _theta_blending(gamma, re_t, omega, nu, vorticity, distance, speed, smooth=0.0):
     """F_thetat of the Re_thetat production (and of gamma_sep)."""
     u2 = jnp.maximum(speed, TINY) ** 2
     re_omega = omega * distance**2 / nu
     f_wake = jnp.exp(-((re_omega / 1.0e5) ** 2))
     delta = 375.0 * vorticity * nu * re_t * distance / u2 + 1.0e-20
     var = (CE2 * gamma - 1.0) / (CE2 - 1.0)
-    return jnp.minimum(
-        jnp.maximum(f_wake * jnp.exp(-((distance / delta) ** 4)), 1.0 - var**2), 1.0
+    return _smin(
+        _smax(f_wake * jnp.exp(-((distance / delta) ** 4)), 1.0 - var**2, smooth),
+        1.0,
+        smooth,
     )
 
 
@@ -140,33 +189,46 @@ def _reynolds_numbers(k, omega, nu, strain, distance):
 
 
 def separation_intermittency(
-    gamma, re_t, k, omega, nu, strain, vorticity, distance, speed
+    gamma, re_t, k, omega, nu, strain, vorticity, distance, speed, smooth=0.0
 ):
     """gamma_sep = min(s1 max(0, Re_V/(3.235 Re_thetac) - 1) F_reattach, 2) F_thetat."""
     re_v, r_t, _ = _reynolds_numbers(k, omega, nu, strain, distance)
     f_reattach = jnp.exp(-((r_t / 20.0) ** 4))
-    f_theta = _theta_blending(gamma, re_t, omega, nu, vorticity, distance, speed)
-    g = S1 * jnp.maximum(0.0, re_v / (3.235 * critical_re_theta(re_t)) - 1.0)
-    return jnp.clip(jnp.minimum(g * f_reattach, 2.0) * f_theta, 0.0, 2.0)
+    f_theta = _theta_blending(
+        gamma, re_t, omega, nu, vorticity, distance, speed, smooth
+    )
+    g = S1 * _smax(0.0, re_v / (3.235 * critical_re_theta(re_t)) - 1.0, smooth)
+    return _sclip(_smin(g * f_reattach, 2.0, smooth) * f_theta, 0.0, 2.0, smooth)
 
 
 def effective_intermittency(
-    gamma, re_t, k, omega, nu, strain, vorticity, distance, speed
+    gamma, re_t, k, omega, nu, strain, vorticity, distance, speed, smooth=0.0
 ):
     """gamma_eff = max(gamma, gamma_sep), the factor on SST's P_k."""
     g_sep = separation_intermittency(
-        gamma, re_t, k, omega, nu, strain, vorticity, distance, speed
+        gamma, re_t, k, omega, nu, strain, vorticity, distance, speed, smooth
     )
-    return jnp.maximum(gamma, g_sep)
+    return _smax(gamma, g_sep, smooth)
 
 
-def destruction_factor(gamma_eff):
+def destruction_factor(gamma_eff, smooth=0.0):
     """min(max(gamma_eff, 0.1), 1): the factor on SST's D_k."""
-    return jnp.clip(gamma_eff, 0.1, 1.0)
+    return _sclip(gamma_eff, 0.1, 1.0, smooth)
 
 
 def sources(
-    gamma, re_t, k, omega, nu, strain, vorticity, distance, speed, du_ds, positive=False
+    gamma,
+    re_t,
+    k,
+    omega,
+    nu,
+    strain,
+    vorticity,
+    distance,
+    speed,
+    du_ds,
+    positive=False,
+    smooth=0.0,
 ):
     """Return the sources per unit volume (s_gamma, s_re_thetat), kinematic.
 
@@ -196,28 +258,34 @@ def sources(
         destruction derivative where it is positive, so d s_gamma / d gamma
         <= 0 everywhere. The derivatives with respect to the other variables
         stay exact.
+    smooth : float
+        Width w of the smooth switches in the derivatives (0: exact). The
+        values are unchanged; max, min and clip of the onset, separation and
+        blending functions get the slope of 0.5 (a + b +- sqrt((a-b)^2 + w^2))
+        and sqrt(gamma F_onset) that of sqrt(max(x, 0) + w^2).
     """
+    w = smooth
     g = jnp.maximum(gamma, 0.0)
     re_v, r_t, re_omega = _reynolds_numbers(k, omega, nu, strain, distance)
     re_c = critical_re_theta(re_t)
     f_sub = jnp.exp(-((re_omega / 200.0) ** 2))
     f_length = length_function(re_t) * (1.0 - f_sub) + 40.0 * f_sub
     f1 = re_v / (2.193 * re_c)
-    f2 = jnp.minimum(jnp.maximum(f1, f1**4), 2.0)
-    f3 = jnp.maximum(1.0 - (r_t / 2.5) ** 3, 0.0)
-    f_onset = jnp.maximum(f2 - f3, 0.0)
+    f2 = _smin(_smax(f1, f1**4, w), 2.0, w)
+    f3 = _smax(1.0 - (r_t / 2.5) ** 3, 0.0, w)
+    f_onset = _smax(f2 - f3, 0.0, w)
     f_turb = jnp.exp(-((r_t / 4.0) ** 4))
     g_root = jax.lax.stop_gradient(g) if positive else g
-    p_g = f_length * CA1 * strain * _safe_sqrt(g_root * f_onset) * (1.0 - CE1 * g)
+    p_g = f_length * CA1 * strain * _ssqrt(g_root * f_onset, w) * (1.0 - CE1 * g)
     h = g * (CE2 * g - 1.0)  # h' = 2 c_e2 gamma - 1, negative below gamma = 0.01
     if positive:
         h = jnp.where(2.0 * CE2 * g > 1.0, h, jax.lax.stop_gradient(h))
     e_g = CA2 * vorticity * f_turb * h
 
     tu = turbulence_intensity(k, speed)
-    re_eq = equilibrium_re_theta(tu, du_ds, nu, speed)
+    re_eq = equilibrium_re_theta(tu, du_ds, nu, speed, w)
     inv_t = jnp.maximum(speed, TINY) ** 2 / (500.0 * nu)  # 1 / T
-    f_theta = _theta_blending(gamma, re_t, omega, nu, vorticity, distance, speed)
+    f_theta = _theta_blending(gamma, re_t, omega, nu, vorticity, distance, speed, w)
     p_t = C_THETA * inv_t * (re_eq - re_t) * (1.0 - f_theta)
     return p_g - e_g, p_t
 
