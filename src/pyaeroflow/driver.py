@@ -1123,6 +1123,20 @@ class FlowProblem:
             linearize=lambda w: self.linearize(
                 w, params_at(w), state["psi"], state["gamma"]
             ),
+            # R1 products (Phase B): the limiter frozen at the state, unless
+            # the run has frozen or released it already.
+            linearize_approximate=(
+                (
+                    lambda w: self.linearize(
+                        w,
+                        params_at(w),
+                        self.limiter(w) if state["psi"] is None else state["psi"],
+                        state["gamma"],
+                    )
+                )
+                if uses_limiter
+                else None
+            ),
             limit_step=self._step_limiter(
                 nu_tilde_step_limit,
                 transition_clip,

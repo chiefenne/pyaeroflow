@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.4.0 – Newton cost (Phase B of the solver roadmap, 2026-11-05)
+
+Changed defaults (the 1.3 behaviour stays reachable, see below). A full
+validation rerun is still to do.
+
+- `solver.newton_krylov.gmres = "right"`: own right-preconditioned GMRES
+  (CGS2 Arnoldi) that stops on the true linear residual the forcing term
+  refers to. SciPy's left-preconditioned GMRES restarted from scratch when
+  the true residual missed the tolerance and over-solved (37-56 against
+  10-24 products per step). `"scipy"` restores 1.3.
+- `solver.newton_krylov.preconditioner_lagging = "adaptive"`: the
+  factorization is kept while the GMRES count stays below 1.5x (and 3 above)
+  the count right after the factorization, at most 10 steps (`lag_max`,
+  `lag_growth`). A failed solve on a lagged factorization refactorizes and
+  holds the CFL. `"fixed"` restores 1.3.
+- `solver.cfl.ser_gmres_hold = 25`, `ser_gmres_reduce = 60` (SER control):
+  the old hold at 10 GMRES iterations pinned NACA 0012 225 SST alpha 15 at
+  CFL ~1.2e3. `{ ser_gmres_hold = 10, ser_gmres_reduce = 30 }` restores 1.3.
+- Results (user, PARDISO): SD7003 320k LM fresh alpha 0, 2, 4 in 5780 s
+  (1.3.0: 7071 s, 1.2: 14290 s), forces identical; NACA 0012 225 SST
+  alpha 15 converged in 266 iterations / 118 s (1.3.0 settings with
+  SciPy GMRES and hold 25: not converged in 400). Euler NACA 0012 M 0.8:
+  116 s -> 83 s.
+- New opt-in: `forcing_max`, `forcing_safeguard`,
+  `approximate_products_until` (R1 products with the frozen limiter; no
+  gain on the airfoil cases).
+- Known: Langtry-Menter polars restarted at a new angle can still lose time
+  when the CFL grows into the gamma wake instability (rejects and CFL
+  restarts, SD7003 alpha 2); `source_time_step.release_ramp` does not help
+  there. Phase C topic.
+
 ## 1.3.0 – control loop (Phase A of the solver roadmap, 2026-11-05)
 
 Changed defaults (the 1.2 behaviour stays reachable, see below). A full

@@ -351,10 +351,19 @@ def factorize(matrix, settings=None):
     raise ValueError(f"linear solver type must be one of {SOLVERS}")
 
 
+GMRES_METHODS = ("scipy", "right")
+
+
 def solve_matrix_free(
-    apply, rhs, precondition, tolerance=1.0e-2, restart=50, max_iterations=200
+    apply,
+    rhs,
+    precondition,
+    tolerance=1.0e-2,
+    restart=50,
+    max_iterations=200,
+    method="scipy",
 ):
-    """Right-preconditioned restarted GMRES for an operator given as a function.
+    """Restarted, preconditioned GMRES for an operator given as a function.
 
     Parameters
     ----------
@@ -367,19 +376,42 @@ def solve_matrix_free(
         Relative residual tolerance.
     restart : int
     max_iterations : int
-        Maximum matrix-vector products, rounded up to whole restart cycles.
+        Maximum matrix-vector products, rounded up to whole restart cycles
+        (``"scipy"``) or exact (``"right"``).
+    method : {"scipy", "right"}
+        ``"scipy"``: SciPy's ``gmres``. Its inner iteration minimizes the
+        *left*-preconditioned residual |M^-1 (b - A x)| and stops at a
+        preconditioned tolerance; afterwards the true residual is checked,
+        and if it misses ``tolerance`` a new cycle starts from scratch with a
+        tightened inner tolerance (the Krylov space is thrown away, one extra
+        product per cycle). ``"right"``: :func:`gmres_right`, which minimizes
+        the true residual |b - A x| directly, so the stopping test is the
+        one the forcing term refers to.
 
     Returns
     -------
     x : ndarray
     iterations : int
-        Number of GMRES iterations (matrix-vector products).
+        Number of GMRES iterations (matrix-vector products, the products of
+        the residual checks between cycles included).
 
     Raises
     ------
     LinearSolverError
         If the solution is not finite.
     """
+    if method == "right":
+        x, its = gmres_right(
+            apply,
+            rhs,
+            precondition,
+            tolerance=tolerance,
+            restart=restart,
+            max_iterations=max_iterations,
+        )
+        return _finite(x), its
+    if method != "scipy":
+        raise ValueError(f"GMRES method must be one of {GMRES_METHODS}")
     n = rhs.size
     count = {"n": 0}
 
@@ -396,6 +428,88 @@ def solve_matrix_free(
     if info < 0:
         raise LinearSolverError(f"GMRES breakdown (info = {info})")
     return _finite(x), count["n"]
+
+
+def gmres_right(
+    apply, rhs, precondition, tolerance=1.0e-2, restart=50, max_iterations=200
+):
+    """Right-preconditioned restarted GMRES (Saad & Schultz 1986, Saad 2003 9.3.2).
+
+    Solves ``A M^-1 y = b``, ``x = M^-1 y``: the Arnoldi residual estimate
+    is the true residual |b - A x|, so the iteration stops as soon as
+    |b - A x| <= ``tolerance`` |b| (the inexact-Newton condition of the
+    forcing term), with no preconditioned norm in between. Classical
+    Gram-Schmidt with one reorthogonalization (vectorized, as stable as
+    modified Gram-Schmidt), Givens rotations for the least-squares problem.
+    The preconditioned basis is not stored: the update of a cycle is
+    ``M^-1 (V y)``, one more preconditioner application per cycle, so the
+    memory equals that of the left-preconditioned solver.
+
+    Returns ``(x, products)``; ``products`` counts the operator applications,
+    the true-residual products at restarts included. A solve that reaches
+    ``max_iterations`` returns its best iterate (as SciPy's does).
+    """
+    b = np.asarray(rhs, dtype=float)
+    n = b.size
+    x = np.zeros(n)
+    b_norm = float(np.linalg.norm(b))
+    if b_norm == 0.0 or not np.isfinite(b_norm):
+        return x, 0
+    target = tolerance * b_norm
+    products = 0
+    r, beta = b, b_norm
+    eps = np.finfo(float).eps
+    while products < max_iterations:
+        m = max(1, min(restart, max_iterations - products))
+        v = np.empty((m + 1, n))
+        h = np.zeros((m + 1, m))
+        cs, sn = np.zeros(m), np.zeros(m)
+        g = np.zeros(m + 1)
+        g[0] = beta
+        v[0] = r / beta
+        k, resid = 0, beta
+        for j in range(m):
+            w = np.asarray(apply(np.asarray(precondition(v[j])))).ravel().astype(float)
+            products += 1
+            w_norm = float(np.linalg.norm(w))
+            coef = v[: j + 1] @ w
+            w = w - coef @ v[: j + 1]
+            corr = v[: j + 1] @ w  # second pass (CGS2)
+            w = w - corr @ v[: j + 1]
+            coef = coef + corr
+            h[: j + 1, j] = coef
+            h_next = float(np.linalg.norm(w))
+            h[j + 1, j] = h_next
+            breakdown = h_next <= eps * max(w_norm, eps)
+            if not breakdown:
+                v[j + 1] = w / h_next
+            for i in range(j):  # earlier rotations on the new column
+                a, c = h[i, j], h[i + 1, j]
+                h[i, j] = cs[i] * a + sn[i] * c
+                h[i + 1, j] = -sn[i] * a + cs[i] * c
+            a, c = h[j, j], h[j + 1, j]
+            den = float(np.hypot(a, c))
+            cs[j], sn[j] = (1.0, 0.0) if den == 0.0 else (a / den, c / den)
+            h[j, j], h[j + 1, j] = den, 0.0
+            g[j + 1] = -sn[j] * g[j]
+            g[j] = cs[j] * g[j]
+            resid = abs(g[j + 1])
+            k = j + 1
+            if resid <= target or breakdown or not np.isfinite(resid):
+                break
+        y = np.zeros(k)
+        for i in range(k - 1, -1, -1):  # back substitution
+            if h[i, i] != 0.0:
+                y[i] = (g[i] - h[i, i + 1 : k] @ y[i + 1 :]) / h[i, i]
+        x = x + np.asarray(precondition(y @ v[:k])).ravel()
+        if resid <= target or products >= max_iterations or not np.isfinite(resid):
+            break
+        r = b - np.asarray(apply(x)).ravel()
+        products += 1
+        beta = float(np.linalg.norm(r))
+        if beta <= target:
+            break
+    return x, products
 
 
 def solve_direct(matrix, rhs):

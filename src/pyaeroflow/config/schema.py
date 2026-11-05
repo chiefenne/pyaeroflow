@@ -630,13 +630,13 @@ SCHEMA = {
             ),
             "ser_gmres_hold": Opt(
                 "int",
-                10,
+                25,
                 "Newton steps with this many GMRES iterations or more hold the CFL (ser)",
                 minimum=1,
             ),
             "ser_gmres_reduce": Opt(
                 "int",
-                30,
+                60,
                 "Newton steps with more GMRES iterations than this halve the CFL (ser)",
                 minimum=1,
             ),
@@ -696,6 +696,63 @@ SCHEMA = {
                 "(stalled steps of 20-50 iterations hold the CFL near 1e3 with "
                 "the default). Default 150 with physics.transition.model = lm",
                 minimum=4,
+            ),
+            "gmres": Opt(
+                "string",
+                "right",
+                "GMRES of the Newton steps: scipy (left-preconditioned inner "
+                "iteration; when the true residual misses the tolerance it "
+                "restarts from scratch with a tighter inner tolerance) or right "
+                "(right-preconditioned, minimizes the true linear residual that "
+                "the forcing term refers to; no wasted restarts)",
+                choices=("scipy", "right"),
+            ),
+            "forcing_max": Opt(
+                "float",
+                0.5,
+                "Upper bound of the Eisenstat-Walker forcing term (GMRES "
+                "tolerance of a Newton step)",
+                minimum=0.0,
+            ),
+            "forcing_safeguard": Opt(
+                "bool",
+                False,
+                "Eisenstat-Walker (1996) safeguards: the forcing term does not "
+                "fall below 0.9 eta_prev^2 when that exceeds 0.1, nor below "
+                "0.5 target / residual measure (no over-solving of the last "
+                "steps)",
+            ),
+            "approximate_products_until": Opt(
+                "float",
+                None,
+                "Approximate (R1) Jacobian products with the limiter frozen at "
+                "the current state until the residual has dropped by this many "
+                "orders (Yildirim et al. 2019: 4-5), exact products afterwards; "
+                "none = exact products throughout. No effect without a limiter "
+                "or once the limiter is frozen",
+                minimum=0.0,
+            ),
+            "preconditioner_lagging": Opt(
+                "string",
+                "adaptive",
+                "Refactorization of the preconditioner in the Newton phase: "
+                "fixed (refactor_interval, CFL x4 and the 15-iteration rule) or "
+                "adaptive (keep it while the GMRES count stays below lag_growth "
+                "x (and 3 above) the count right after the factorization, at "
+                "most lag_max steps)",
+                choices=("fixed", "adaptive"),
+            ),
+            "lag_max": Opt(
+                "int",
+                10,
+                "Most Newton steps per factorization (adaptive lagging)",
+                minimum=1,
+            ),
+            "lag_growth": Opt(
+                "float",
+                1.5,
+                "GMRES growth that triggers a refactorization (adaptive lagging)",
+                minimum=1.0,
             ),
         },
         "linear_solver": {

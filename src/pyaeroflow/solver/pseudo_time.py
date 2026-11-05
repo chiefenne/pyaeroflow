@@ -211,6 +211,42 @@ class PseudoTimeSettings:
         limit is multiplied by this factor on every further clean step and off
         above 1e8 times the base; a cut or rejected step divides it by the
         factor (at least back to the base). 1 = the hard release and re-arm.
+    nk_gmres : {"scipy", "right"}
+        GMRES of the Newton-Krylov phase: SciPy's (left-preconditioned inner
+        iteration, restarts from scratch when the true residual misses the
+        tolerance; 1.2 behaviour) or the right-preconditioned
+        :func:`~pyaeroflow.solver.linear.gmres_right`, which minimizes the
+        true linear residual the forcing term refers to (Phase B).
+    nk_forcing_max : float
+        Upper bound of the Eisenstat-Walker forcing term (``nk_forcing``).
+    nk_forcing_safeguard : bool
+        Safeguards of Eisenstat & Walker (1996) choice 2 and Kelley (1995):
+        eta_k >= 0.9 eta_(k-1)^2 whenever that exceeds 0.1 (no sudden
+        tightening after one good step), and eta_k >= 0.5 target / measure
+        (no over-solving of the last steps), the latter above
+        ``nk_linear_tolerance`` too.
+    nk_approximate_drop : float or None
+        Approximate (R1) Jacobian products until the residual measure has
+        dropped by this many orders (Yildirim et al. 2019: 4-5 orders), exact
+        products afterwards (latched): the Newton-Krylov products then come
+        from ``linearize_approximate`` (frozen limiter). None = exact
+        products throughout (1.2).
+    pc_lagging : {"fixed", "adaptive"}
+        Preconditioner lagging in the Newton-Krylov phase. ``fixed`` (1.2):
+        ``refactor_interval``, ``refactor_cfl_ratio`` and the 15-iteration
+        rule. ``adaptive``: keep the factorization while the GMRES count of a
+        step stays below ``pc_lag_growth`` times (and 3 above) the count of
+        the first step after the factorization, for at most ``pc_lag_max``
+        steps, while the CFL has not fallen below half its value at the
+        factorization; the pseudo-time term of the operator is always the
+        current one, so a lagged factorization only costs GMRES iterations,
+        which this rule watches. A step with a lagged preconditioner that hits
+        ``nk_cfl_adapt_iterations`` refactorizes instead of cutting the CFL
+        cap.
+    pc_lag_max : int
+        Largest number of Newton steps per factorization (``adaptive``).
+    pc_lag_growth : float
+        GMRES growth factor that triggers a new factorization (``adaptive``).
     linear : LinearSettings
         Sparse linear solver of phase 1 and preconditioner of phase 2.
     """
@@ -245,14 +281,21 @@ class PseudoTimeSettings:
     ser_growth_min: float = 1.2
     ser_ratio_min: float = 0.3
     ser_ratio_max: float = 2.0
-    ser_gmres_hold: int = 10
-    ser_gmres_reduce: int = 30
+    ser_gmres_hold: int = 25
+    ser_gmres_reduce: int = 60
     step_control: str = "merit"
     alpha_min: float = 0.1
     cfl_floor_exponent: float = None
     source_cfl_limit: float = None
     source_cfl_release: int = 5
     source_cfl_ramp: float = 1.0
+    nk_gmres: str = "right"
+    nk_forcing_max: float = 0.5
+    nk_forcing_safeguard: bool = False
+    nk_approximate_drop: float = None
+    pc_lagging: str = "adaptive"
+    pc_lag_max: int = 10
+    pc_lag_growth: float = 1.5
     linear: LinearSettings = LinearSettings()
 
 
@@ -310,6 +353,7 @@ def solve_steady(
     limit_step=None,
     resume=None,
     debug=None,
+    linearize_approximate=None,
 ):
     """Drive ``residual(u)`` to zero by implicit pseudo-time stepping.
 
@@ -343,6 +387,10 @@ def solve_steady(
         ``linearize(u) -> apply`` with ``apply(du) -> dR/du(u) @ du``: the
         residual linearized once per Newton step (``settings.nk_linearize``).
         Either ``jvp`` or ``linearize`` enables Newton-Krylov.
+    linearize_approximate : callable, optional
+        Like ``linearize``, the approximate (R1) linearization used for the
+        Newton-Krylov products until ``settings.nk_approximate_drop`` orders
+        (e.g. with the limiter frozen at the state).
     reference_norm : array, optional
         Per-variable residual norms that ``residual_drop`` and the
         Newton-Krylov switch refer to; default the norms of the initial
@@ -462,6 +510,19 @@ def solve_steady(
     clean_nk = 0
     fails_in_row, last_fail = 0, -(10**9)
     retry_pc = False  # retry a failed step with the existing factorization
+    adaptive_pc = s.pc_lagging == "adaptive"
+    pc_base_its = None  # GMRES count of the first NK step after a factorization
+    # Approximate (R1) products until nk_approximate_drop orders, then exact.
+    approx_on = bool(
+        resume.get(
+            "approximate_products",
+            s.nk_approximate_drop is not None and linearize_approximate is not None,
+        )
+    )
+    approx_threshold = (
+        10.0 ** (-s.nk_approximate_drop) if s.nk_approximate_drop is not None else 0.0
+    )
+    eta_prev = None
     # Live view of the solver state for the callback (restart files).
     state = {}
 
@@ -476,6 +537,7 @@ def solve_steady(
             "residual_start": r_start,
             "source_active": source_active,
             "source_level": source_level,
+            "approximate_products": approx_on,
         }
 
     state["it"] = it0
@@ -492,6 +554,7 @@ def solve_steady(
     use_linearize = linearize is not None and s.nk_linearize
     has_jvp = jvp is not None or use_linearize
     lin, steps_since_factor, cfl_at_factor = None, 0, cfl
+    lin_nk = False  # the factorization was built in the Newton-Krylov phase
     stale = False  # the preconditioner let GMRES work hard: rebuild it
     max_iterations = s.max_iterations
     it = it0
@@ -541,14 +604,25 @@ def solve_steady(
                 t_matrix = time_term(u, cfl)
         accepted, lin_its, step, linear_failed = False, 0, 1.0, False
         try:
-            reuse = lin is not None and (
-                retry_pc
-                or (
-                    steps_since_factor < s.refactor_interval
-                    and cfl <= cfl_at_factor * s.refactor_cfl_ratio
-                    and not stale
+            if adaptive_pc and use_nk:
+                reuse = lin is not None and (
+                    retry_pc
+                    or (
+                        lin_nk
+                        and steps_since_factor < s.pc_lag_max
+                        and cfl >= 0.5 * cfl_at_factor
+                        and not stale
+                    )
                 )
-            )
+            else:
+                reuse = lin is not None and (
+                    retry_pc
+                    or (
+                        steps_since_factor < s.refactor_interval
+                        and cfl <= cfl_at_factor * s.refactor_cfl_ratio
+                        and not stale
+                    )
+                )
             if not reuse:
                 with timers.section("assemble matrix"):
                     matrix = jacobian(u) + t_matrix
@@ -556,9 +630,16 @@ def solve_steady(
                     lin = factorize(matrix, s.linear)
                 del matrix
                 steps_since_factor, cfl_at_factor = 0, cfl
+                lin_nk, pc_base_its = use_nk, None
             steps_since_factor += 1
             if use_nk:
-                if use_linearize:
+                if approx_on and norm <= approx_threshold:
+                    approx_on = False
+                    _note(callback, "exact Jacobian products")
+                if approx_on:
+                    with timers.section("linearize"):
+                        product = linearize_approximate(u)
+                elif use_linearize:
                     with timers.section("linearize"):
                         product = linearize(u)
                 else:
@@ -578,6 +659,7 @@ def solve_steady(
                         tolerance=tolerance,
                         restart=s.nk_restart,
                         max_iterations=s.nk_max_krylov,
+                        method=s.nk_gmres,
                     )
                 if s.nk_variable_scaling:
                     du = unscale(du)
@@ -607,6 +689,7 @@ def solve_steady(
                         tolerance=s.nk_linear_tolerance,
                         restart=s.nk_restart,
                         max_iterations=s.nk_max_krylov,
+                        method=s.nk_gmres,
                     )
                 del matrix
             else:
@@ -709,12 +792,25 @@ def solve_steady(
                 # residual creeps up (flat-plate AFT stalled at CFL 2).
                 ratio = min(ratio, 1.0) if step < 1.0 else max(ratio, 1.0)
             if use_nk:
+                lagged = adaptive_pc and steps_since_factor > 1
                 if not ser:
-                    if lin_its >= s.nk_cfl_adapt_iterations:
+                    if lin_its >= s.nk_cfl_adapt_iterations and not lagged:
                         cfl_cap = max(cfl * 0.25, s.cfl_start)
+                    elif lin_its >= s.nk_cfl_adapt_iterations:
+                        # stale (lagged) preconditioner: refactorize next
+                        # step but do not grow the CFL on a failed solve
+                        ratio = min(ratio, 1.0)
                     elif lin_its <= s.nk_cfl_adapt_iterations // 4:
                         cfl_cap = min(cfl_cap * 4.0, s.cfl_max)
-                stale = lin_its > s.nk_cfl_adapt_iterations // 4
+                if adaptive_pc:
+                    if pc_base_its is None:
+                        pc_base_its = max(lin_its, 1)
+                    stale = (
+                        lin_its > max(s.pc_lag_growth * pc_base_its, pc_base_its + 3)
+                        or lin_its >= s.nk_cfl_adapt_iterations
+                    )
+                else:
+                    stale = lin_its > s.nk_cfl_adapt_iterations // 4
             # Cap the CFL while the Newton-Krylov switch is pending: a huge
             # pseudo-time step with the approximate Jacobian does not converge.
             waiting = s.newton_krylov and has_jvp and not use_nk
@@ -726,9 +822,14 @@ def solve_steady(
                 )
                 cfl = max(cfl, min(floor, limit))
             if use_nk:
-                eta = min(
-                    0.5, max(s.nk_linear_tolerance, 0.9 * (abs_new / norm_abs) ** 2)
-                )
+                eta_new = 0.9 * (abs_new / norm_abs) ** 2
+                if s.nk_forcing_safeguard:
+                    if eta_prev is not None and 0.9 * eta_prev**2 > 0.1:
+                        eta_new = max(eta_new, 0.9 * eta_prev**2)
+                    new_measure = measure(r_new)
+                    eta_new = max(eta_new, 0.5 * target / max(new_measure, tiny))
+                eta = min(s.nk_forcing_max, max(s.nk_linear_tolerance, eta_new))
+                eta_prev = eta
             u, r, norm_abs = u_new, r_new, abs_new
             # Peaks of the per-variable residuals set the scales (D54).
             scale = np.maximum(scale, rms_per_variable(r))
@@ -801,6 +902,13 @@ def solve_steady(
         state["it"] = it
     history = {k: np.asarray(v) for k, v in hist.items()}
     return SteadyResult(u, bool(converged), history, snapshot())
+
+
+def _note(callback, text):
+    """Append ``text`` to the log note of the current iteration."""
+    info = getattr(callback, "info", None)
+    if info is not None:
+        info["note"] = f"{info['note']}, {text}" if info.get("note") else text
 
 
 def _unsteady_line_search(
