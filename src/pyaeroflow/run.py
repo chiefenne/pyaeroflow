@@ -1068,6 +1068,13 @@ def _pseudo_time_settings(cfg):
         nk_cfl_adapt_iterations=solver["newton_krylov"]["cfl_adapt_iterations"],
         nk_linearize=solver["newton_krylov"]["linearize"],
         nk_variable_scaling=solver["newton_krylov"]["variable_scaling"],
+        nk_gmres=solver["newton_krylov"]["gmres"],
+        nk_forcing_max=solver["newton_krylov"]["forcing_max"],
+        nk_forcing_safeguard=solver["newton_krylov"]["forcing_safeguard"],
+        nk_approximate_drop=solver["newton_krylov"]["approximate_products_until"],
+        pc_lagging=solver["newton_krylov"]["preconditioner_lagging"],
+        pc_lag_max=solver["newton_krylov"]["lag_max"],
+        pc_lag_growth=solver["newton_krylov"]["lag_growth"],
         refactor_interval=solver["refactor_interval"],
         step_control=solver["step_control"],
         alpha_min=solver["step_alpha_min"],
@@ -1471,6 +1478,28 @@ def _control_loop_rows(solver, rans):
                 f"{src['release_after']} full Newton steps{ramp}",
             )
         )
+    nk = solver["newton_krylov"]
+    if nk["enabled"]:
+        parts = []
+        if nk["approximate_products_until"] is not None:
+            parts.append(
+                "R1 products (frozen limiter) until "
+                f"{nk['approximate_products_until']:g} orders"
+            )
+        if nk["gmres"] == "right":
+            parts.append("right-preconditioned GMRES")
+        if nk["forcing_safeguard"] or nk["forcing_max"] != 0.5:
+            parts.append(
+                f"forcing <= {nk['forcing_max']:g}"
+                + (" with safeguards" if nk["forcing_safeguard"] else "")
+            )
+        if nk["preconditioner_lagging"] == "adaptive":
+            parts.append(
+                f"adaptive PC lagging (GMRES x{nk['lag_growth']:g}, "
+                f"at most {nk['lag_max']} steps)"
+            )
+        if parts:
+            rows.append(("Newton cost", ", ".join(parts)))
     return rows
 
 
