@@ -796,6 +796,10 @@ def solve_steady(
                 if not ser:
                     if lin_its >= s.nk_cfl_adapt_iterations and not lagged:
                         cfl_cap = max(cfl * 0.25, s.cfl_start)
+                    elif lin_its >= s.nk_cfl_adapt_iterations:
+                        # stale (lagged) preconditioner: refactorize next
+                        # step but do not grow the CFL on a failed solve
+                        ratio = min(ratio, 1.0)
                     elif lin_its <= s.nk_cfl_adapt_iterations // 4:
                         cfl_cap = min(cfl_cap * 4.0, s.cfl_max)
                 if adaptive_pc:
