@@ -446,6 +446,43 @@ SCHEMA = {
             "no_transition with physics.transition.model = lm",
             choices=("all", "no_transition"),
         ),
+        "step_control": Opt(
+            "string",
+            "merit",
+            "Step acceptance (implicit): merit (halve a step that raises the "
+            "steady residual RMS, reject above cfl.reject_factor) or unsteady "
+            "(HANIM, Wang et al. 2021: a step must lower the pseudo-time "
+            "residual a T du + R(u + a du); quadratic under-relaxation a, a "
+            "partial step holds the CFL, a failed step is retried at "
+            "cfl.cut_factor with the existing factorization)",
+            choices=("merit", "unsteady"),
+        ),
+        "step_alpha_min": Opt(
+            "float",
+            0.1,
+            "step_control = unsteady: smallest under-relaxation a step is "
+            "accepted with",
+            minimum=0.0,
+        ),
+        "source_time_step": {
+            "limit": Opt(
+                "float",
+                None,
+                "RANS: source-term time-step limit (Piotrowski & Zingg 2020): "
+                "the local pseudo-time step of every cell obeys "
+                "lambda_max(dS/dQ) dt <= limit, lambda_max the largest growth "
+                "rate of the cell-local turbulence/transition source Jacobian "
+                "(production included); 0.9 in the paper. Off by default",
+                minimum=0.0,
+            ),
+            "release_after": Opt(
+                "int",
+                5,
+                "Switch the limit off after this many consecutive full "
+                "Newton-Krylov steps; any cut or rejected step arms it again",
+                minimum=1,
+            ),
+        },
         "refactor_interval": Opt(
             "int",
             3,
@@ -522,6 +559,16 @@ SCHEMA = {
             ),
             "cut_factor": Opt(
                 "float", 0.1, "CFL reduction after a rejected update", minimum=0.0
+            ),
+            "floor_exponent": Opt(
+                "float",
+                None,
+                "SER floor: after an accepted step, and with no failed step in "
+                "the last 5 iterations, CFL >= start (R_0 / R)^p (R the residual "
+                "RMS, R_0 that of the start), bounded by max (max_approximate "
+                "before the Newton-Krylov switch); 0.5 is a common choice. Off "
+                "by default",
+                minimum=0.0,
             ),
             "reject_factor": Opt(
                 "float",

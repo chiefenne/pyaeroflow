@@ -212,6 +212,7 @@ class FlowProblem:
         self.flow = flow_module(model)
         self.compressible = self.flow is comp
         self.turbulent = model.turbulence != "none"
+        self.source_limited_cells = 0  # cells capped by the source-term dt limit
         if self.compressible and self.turbulent:
             if model.transition != "none":
                 raise ValueError("compressible flow: transition models are planned")
@@ -598,16 +599,54 @@ class FlowProblem:
         )
         return JacobianPattern(self.geom, self.model.n_var, masks)
 
-    def time_term(self, w, params, cfl, transition_cfl_max=None):
+    def source_cfl_cap(self, w, params, limit):
+        """Largest local CFL per cell allowed by the source-term time-step limit.
+
+        Piotrowski & Zingg (2020), after Lian et al.: the local pseudo-time
+        step obeys lambda_max(dS/dQ) dt <= ``limit`` (0.9 in the paper), with
+        lambda_max the largest positive real part of the eigenvalues of the
+        cell-local source Jacobian of the turbulence (and transition)
+        equations. In the residual's own scaling this is
+        CFL_i <= limit / max Re eig(-D_i^-1 J_i), with D_i the turbulence
+        block of the pseudo-time matrix at CFL 1 and J_i the source part of
+        dR/dw (:func:`source_jacobian` of the physics module). Cells without
+        a growing source mode get inf.
+        """
+        w = jnp.asarray(w)
+        nt = self.physics.NT
+        d = np.asarray(
+            self.physics.time_term_blocks(self.model, self.geom, w, params, 1.0)
+        )[:, nt:, nt:]
+        j = np.asarray(self.physics.source_jacobian(self.model, self.geom, self.bc, w))
+        m = -np.linalg.solve(d, j)
+        if m.shape[1] == 1:
+            rate = m[:, 0, 0]
+        else:
+            rate = np.max(np.real(np.linalg.eigvals(m)), axis=1)
+        with np.errstate(divide="ignore"):
+            return np.where(rate > 0.0, limit / np.maximum(rate, 1e-300), np.inf)
+
+    def time_term(self, w, params, cfl, transition_cfl_max=None, source_limit=None):
         """Block-diagonal pseudo-time matrix Gamma_i Lambda_i / CFL.
 
         With ``transition_cfl_max`` (Langtry-Menter) the gamma and Re_thetat
         rows use min(CFL, transition_cfl_max): a separate, lower pseudo-time
         step for the transition equations, as a segregated transition solver has.
+
+        With ``source_limit`` (RANS) every cell uses min(CFL, CFL_i) with the
+        cap CFL_i of :meth:`source_cfl_cap`; the number of capped cells is
+        kept in ``self.source_limited_cells``.
         """
         blocks = np.asarray(
             self.physics.time_term_blocks(self.model, self.geom, w, params, cfl)
         )
+        self.source_limited_cells = 0
+        if source_limit is not None and self.turbulent:
+            cap = self.source_cfl_cap(w, params, source_limit)
+            factor = np.maximum(1.0, cfl / cap)
+            self.source_limited_cells = int(np.count_nonzero(factor > 1.0))
+            if self.source_limited_cells:
+                blocks = blocks * factor[:, None, None]
         if (
             transition_cfl_max is not None
             and self.model.transition == "lm"
@@ -1005,6 +1044,10 @@ class FlowProblem:
                 )
 
         def on_iteration(it, w, residuals, cfl, accepted):
+            if self.source_limited_cells and it > 0:
+                note = on_iteration.info.get("note", "")
+                tag = f"src-dt {self.source_limited_cells}"
+                on_iteration.info["note"] = f"{note}, {tag}" if note else tag
             if vortex is not None and accepted:
                 self.apply_farfield_vortex(vortex, w)
                 # The farfield values changed: the residual operator did, so
@@ -1067,7 +1110,9 @@ class FlowProblem:
         result = solve_steady(
             residual,
             lambda w: self.jacobian(w, params_at(w)),
-            lambda w, cfl: self.time_term(w, params_at(w), cfl, transition_cfl_max),
+            lambda w, cfl, **kw: self.time_term(
+                w, params_at(w), cfl, transition_cfl_max, **kw
+            ),
             w0,
             settings or PseudoTimeSettings(),
             residual_startup=residual_startup,

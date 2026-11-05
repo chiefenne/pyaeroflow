@@ -174,6 +174,38 @@ class PseudoTimeSettings:
     ser_gmres_reduce : int
         Newton-Krylov steps with more GMRES iterations than this halve the
         CFL at least (``ser``).
+    step_control : {"merit", "unsteady"}
+        Step acceptance. ``merit`` (1.2 behaviour): halve a step that raises
+        the RMS of the steady residual (``line_search_steps`` times) and
+        reject it only if it still raised the RMS more than
+        ``reject_factor``-fold. ``unsteady`` (HANIM, Wang, Diskin, Nielsen &
+        Liu 2021): judge the step by the pseudo-time residual
+        R_t(u + a du) = a T du + R(u + a du), which equals R(u) at a = 0 and
+        vanishes to first order at a = 1 for the exact linear solve; a step
+        must lower its RMS. A full step that does not is under-relaxed by the
+        minimum of a quadratic fit of |R_t(a)|^2 (bounded to [0.1, 0.5] of
+        the last trial, up to ``line_search_steps`` times); a partial step
+        holds the CFL, and a step that still fails or needs a < ``alpha_min``
+        is rejected: state restored, CFL times ``cut_factor``, and the retry
+        reuses the existing factorization (direct-solve phase: GMRES on the
+        assembled matrix with the old factorization as preconditioner). A
+        second failure in a row rebuilds the factorization and the PARDISO
+        analysis, as ``merit`` does at once.
+    alpha_min : float
+        Smallest under-relaxation an ``unsteady`` step may be accepted with.
+    cfl_floor_exponent : float or None
+        SER floor: after an accepted step and when no step failed in the last
+        5 iterations, CFL >= cfl_start (R_0 / R)^p with R the merit RMS and R_0
+        that of the start (bounded by the CFL limit of the phase). None = off.
+    source_cfl_limit : float or None
+        Source-term time-step limit (Piotrowski & Zingg 2020): the local CFL
+        of every cell obeys lambda_max(dS/dQ) dt <= this value (0.9 in the
+        paper); needs a ``time_term`` that takes a ``source_limit`` keyword
+        (the RANS problems). None = off.
+    source_cfl_release : int
+        The source-term limit is switched off after this many consecutive
+        Newton-Krylov steps that were accepted as full steps, and armed again
+        by any cut or rejected step.
     linear : LinearSettings
         Sparse linear solver of phase 1 and preconditioner of phase 2.
     """
@@ -210,6 +242,11 @@ class PseudoTimeSettings:
     ser_ratio_max: float = 2.0
     ser_gmres_hold: int = 10
     ser_gmres_reduce: int = 30
+    step_control: str = "merit"
+    alpha_min: float = 0.1
+    cfl_floor_exponent: float = None
+    source_cfl_limit: float = None
+    source_cfl_release: int = 5
     linear: LinearSettings = LinearSettings()
 
 
@@ -407,6 +444,15 @@ def solve_steady(
     # so expensive linear solves lower the cap and cheap ones raise it.
     cfl_cap = float(resume.get("cfl_cap", s.cfl_max))
     nk_on = bool(resume.get("nk_on", False))  # the switch latches
+    unsteady = s.step_control == "unsteady"
+    # Merit RMS of the start: the reference of the SER floor.
+    r_start = float(resume.get("residual_start", norm_abs))
+    # Source-term time-step limit: armed at the start and after every cut or
+    # rejected step, released after source_cfl_release clean Newton steps.
+    source_active = bool(resume.get("source_active", s.source_cfl_limit is not None))
+    clean_nk = 0
+    fails_in_row, last_fail = 0, -(10**9)
+    retry_pc = False  # retry a failed step with the existing factorization
     # Live view of the solver state for the callback (restart files).
     state = {}
 
@@ -418,6 +464,8 @@ def solve_steady(
             "scale": scale.copy(),
             "nk_on": nk_on,
             "eta": eta,
+            "residual_start": r_start,
+            "source_active": source_active,
         }
 
     state["it"] = it0
@@ -471,14 +519,21 @@ def solve_steady(
         nk_on = nk_on or immediate or norm <= nk_threshold or by_iteration
         use_nk = s.newton_krylov and has_jvp and not startup and nk_on
         with timers.section("time term"):
-            t_matrix = time_term(u, cfl)
-        accepted, lin_its, step = False, 0, 1.0
+            if s.source_cfl_limit is not None:
+                t_matrix = time_term(
+                    u, cfl, source_limit=s.source_cfl_limit if source_active else None
+                )
+            else:
+                t_matrix = time_term(u, cfl)
+        accepted, lin_its, step, linear_failed = False, 0, 1.0, False
         try:
-            reuse = (
-                lin is not None
-                and steps_since_factor < s.refactor_interval
-                and cfl <= cfl_at_factor * s.refactor_cfl_ratio
-                and not stale
+            reuse = lin is not None and (
+                retry_pc
+                or (
+                    steps_since_factor < s.refactor_interval
+                    and cfl <= cfl_at_factor * s.refactor_cfl_ratio
+                    and not stale
+                )
             )
             if not reuse:
                 with timers.section("assemble matrix"):
@@ -523,6 +578,23 @@ def solve_steady(
                     )
                     dbg["linear_misfit"] = (a_du + r.ravel()).reshape(u.shape)
                 product = None  # frees the stored linearization
+            elif retry_pc and reuse:
+                # Retry after a failed step at a lower CFL: the factorization
+                # belongs to the old pseudo-time term, so it preconditions a
+                # GMRES solve of the new matrix instead of being rebuilt (the
+                # new matrix only has a larger diagonal).
+                with timers.section("assemble matrix"):
+                    matrix = jacobian(u) + t_matrix
+                with timers.section("direct solve"):
+                    du, lin_its = solve_matrix_free(
+                        matrix.dot,
+                        -r.ravel(),
+                        _timed("preconditioner", lin.precondition),
+                        tolerance=s.nk_linear_tolerance,
+                        restart=s.nk_restart,
+                        max_iterations=s.nk_max_krylov,
+                    )
+                del matrix
             else:
                 with timers.section("direct solve"):
                     du = lin.solve(-r.ravel())
@@ -548,23 +620,39 @@ def solve_steady(
             if dbg is not None:
                 dbg["trials"].append((1.0, abs_new, rms_per_variable(r_new)))
                 dbg["full_step"] = r_new
-            # Backtracking line search (D54): halve a step that raises the
-            # residual norm before giving up on it. The fraction kept is
-            # logged (``step 1/2``, ``step 1/4``): an iteration that needs it
-            # every time makes little progress however the forces look.
-            for _ in range(s.line_search_steps):
-                if np.isfinite(abs_new) and abs_new <= norm_abs:
-                    break
-                step *= 0.5
+            if unsteady:
+                r_new, abs_new, step, accepted = _unsteady_line_search(
+                    lambda a, u=u, du=du, it=it: res(u + a * du, it + 1),
+                    merit,
+                    (t_matrix @ du.ravel()).reshape(u.shape),
+                    norm_abs,
+                    r_new,
+                    s.line_search_steps,
+                    s.alpha_min,
+                    dbg,
+                )
                 u_new = u + step * du
-                r_new = res(u_new, it + 1)
-                abs_new = merit(r_new)
-                if dbg is not None:
-                    dbg["trials"].append((step, abs_new, rms_per_variable(r_new)))
-            accepted = np.isfinite(abs_new) and abs_new <= s.reject_factor * norm_abs
+            else:
+                # Backtracking line search (D54): halve a step that raises the
+                # residual norm before giving up on it. The fraction kept is
+                # logged (``step 1/2``, ``step 1/4``): an iteration that needs
+                # it every time makes little progress however the forces look.
+                for _ in range(s.line_search_steps):
+                    if np.isfinite(abs_new) and abs_new <= norm_abs:
+                        break
+                    step *= 0.5
+                    u_new = u + step * du
+                    r_new = res(u_new, it + 1)
+                    abs_new = merit(r_new)
+                    if dbg is not None:
+                        dbg["trials"].append((step, abs_new, rms_per_variable(r_new)))
+                accepted = (
+                    np.isfinite(abs_new) and abs_new <= s.reject_factor * norm_abs
+                )
             if dbg is not None:
                 dbg["new"] = r_new
         except LinearSolverError as error:
+            linear_failed = True
             if dbg is not None:
                 dbg["error"] = str(error)
         if dbg is not None:
@@ -595,6 +683,8 @@ def solve_steady(
                 ratio = norm_abs / max(abs_new, tiny)
                 if ratio > 1.0:
                     ratio = max(ratio, s.growth_factor)
+            if unsteady and step < 1.0:
+                ratio = min(ratio, 1.0)  # an under-relaxed step holds the CFL
             if use_nk:
                 if not ser:
                     if lin_its >= s.nk_cfl_adapt_iterations:
@@ -607,6 +697,11 @@ def solve_steady(
             waiting = s.newton_krylov and has_jvp and not use_nk
             limit = min(cfl_cap, s.cfl_max_approximate) if waiting else cfl_cap
             cfl = min(limit, cfl * ratio)
+            if s.cfl_floor_exponent is not None and it - last_fail > 5:
+                floor = s.cfl_start * (r_start / max(abs_new, tiny)) ** (
+                    s.cfl_floor_exponent
+                )
+                cfl = max(cfl, min(floor, limit))
             if use_nk:
                 eta = min(
                     0.5, max(s.nk_linear_tolerance, 0.9 * (abs_new / norm_abs) ** 2)
@@ -616,10 +711,30 @@ def solve_steady(
             scale = np.maximum(scale, rms_per_variable(r))
             norm = measure(r)
             converged = done(norm, norm_abs)
+            fails_in_row, retry_pc = 0, False
         else:
             cfl *= s.cut_factor
-            lin = None  # rebuild the preconditioner after a rejection
-            reset_analysis()  # and the PARDISO analysis
+            fails_in_row += 1
+            last_fail = it
+            if unsteady and fails_in_row == 1 and lin is not None and not linear_failed:
+                retry_pc = True  # first retry: keep the factorization
+            else:
+                retry_pc = False
+                lin = None  # rebuild the preconditioner after a rejection
+                reset_analysis()  # and the PARDISO analysis
+        if s.source_cfl_limit is not None:
+            was_active = source_active
+            if accepted and use_nk and step >= 1.0:
+                clean_nk += 1
+                if clean_nk >= s.source_cfl_release:
+                    source_active = False
+            elif not accepted or step < 1.0:
+                clean_nk = 0
+                source_active = True
+            info = getattr(callback, "info", None)
+            if info is not None and was_active != source_active:
+                note = "source dt limit " + ("armed" if source_active else "released")
+                info["note"] = f"{info['note']}, {note}" if info.get("note") else note
         hist["residual"].append(norm_abs)
         hist["measure"].append(norm)
         hist["residuals"].append(rms_per_variable(r))
@@ -644,6 +759,43 @@ def solve_steady(
         state["it"] = it
     history = {k: np.asarray(v) for k, v in hist.items()}
     return SteadyResult(u, bool(converged), history, snapshot())
+
+
+def _unsteady_line_search(
+    residual_at, merit, t_du, norm0, r_full, steps, alpha_min, dbg=None
+):
+    """Quadratic under-relaxation on the pseudo-time residual (HANIM).
+
+    R_t(a) = a T du + R(u + a du); f(a) = |R_t(a)| on the merit columns,
+    f(0) = ``norm0``. A full step is accepted if f(1) < f(0). Otherwise
+    g = f^2 is modelled as g(0) - 2 g(0) a + c a^2 (slope of the exact Newton
+    direction) through the last trial, and the next trial is its minimum
+    a = g(0) / c, bounded to [0.1, 0.5] times the last trial.
+
+    Returns ``(r_new, merit of r_new, a, accepted)``.
+    """
+    g0 = norm0 * norm0
+    alpha, r_new = 1.0, r_full
+    f_t = merit(r_new + t_du)
+    for _ in range(steps):
+        if np.isfinite(f_t) and f_t < norm0:
+            break
+        with np.errstate(over="ignore", invalid="ignore"):
+            g_a = f_t * f_t if np.isfinite(f_t) else np.inf
+            c = (g_a - g0 + 2.0 * g0 * alpha) / (alpha * alpha)
+        guess = g0 / c if np.isfinite(c) and c > 0.0 else 0.0
+        alpha = min(max(guess, 0.1 * alpha), 0.5 * alpha)
+        r_new = residual_at(alpha)
+        f_t = merit(r_new + alpha * t_du)
+        if dbg is not None:
+            dbg["trials"].append((alpha, merit(r_new), rms_per_variable(r_new)))
+    abs_new = merit(r_new)
+    accepted = bool(
+        np.isfinite(f_t) and np.isfinite(abs_new) and f_t < norm0 and alpha >= alpha_min
+    )
+    if dbg is not None:
+        dbg["unsteady_residual"] = f_t
+    return r_new, abs_new, alpha, accepted
 
 
 def _variable_scaling(operator, precondition, u):

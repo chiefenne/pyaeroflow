@@ -1069,6 +1069,11 @@ def _pseudo_time_settings(cfg):
         nk_linearize=solver["newton_krylov"]["linearize"],
         nk_variable_scaling=solver["newton_krylov"]["variable_scaling"],
         refactor_interval=solver["refactor_interval"],
+        step_control=solver["step_control"],
+        alpha_min=solver["step_alpha_min"],
+        cfl_floor_exponent=solver["cfl"]["floor_exponent"],
+        source_cfl_limit=solver["source_time_step"]["limit"],
+        source_cfl_release=solver["source_time_step"]["release_after"],
         linear=LinearSettings(**solver["linear_solver"]),
     )
 
@@ -1432,6 +1437,37 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     return result, coefficients
 
 
+def _control_loop_rows(solver):
+    """Configuration rows of the optional Phase A control-loop options."""
+    rows = []
+    if solver["step_control"] == "unsteady":
+        rows.append(
+            (
+                "step control",
+                "unsteady residual (HANIM): quadratic under-relaxation, accept "
+                f"from a = {solver['step_alpha_min']:g}, retry with the old "
+                "factorization",
+            )
+        )
+    if solver["cfl"]["floor_exponent"] is not None:
+        rows.append(
+            (
+                "CFL floor",
+                f"start (R_0 / R)^{solver['cfl']['floor_exponent']:g}",
+            )
+        )
+    src = solver["source_time_step"]
+    if src["limit"] is not None:
+        rows.append(
+            (
+                "source time step",
+                f"lambda_max(dS/dQ) dt <= {src['limit']:g}, released after "
+                f"{src['release_after']} full Newton steps",
+            )
+        )
+    return rows
+
+
 def _iteration_note(note, step_factor):
     """Log note of an iteration: the driver's note and the line-search cut.
 
@@ -1440,7 +1476,11 @@ def _iteration_note(note, step_factor):
     """
     if step_factor >= 1.0:
         return note
-    cut = f"step 1/{round(1.0 / step_factor)}"
+    inverse = 1.0 / max(step_factor, 1e-12)
+    if abs(inverse - round(inverse)) < 1e-6:
+        cut = f"step 1/{round(inverse)}"
+    else:  # quadratic under-relaxation (solver.step_control = unsteady)
+        cut = f"step {step_factor:.2f}"
     return f"{note}, {cut}" if note else cut
 
 
@@ -1450,11 +1490,17 @@ def _line_search_rows(history):
     cut = factors[factors < 1.0]
     if not cut.size:
         return []
-    values, counts = np.unique(cut, return_counts=True)
-    detail = ", ".join(
+    inverse = 1.0 / np.maximum(cut, 1e-12)
+    halved = np.abs(inverse - np.round(inverse)) < 1e-6
+    values, counts = np.unique(cut[halved], return_counts=True)
+    parts = [
         f"1/{round(1.0 / v)}: {n}"
         for v, n in zip(values[::-1], counts[::-1], strict=True)
-    )
+    ]
+    if not halved.all():  # quadratic under-relaxation (step_control = unsteady)
+        other = cut[~halved]
+        parts.append(f"other: {other.size}, mean {other.mean():.2f}")
+    detail = ", ".join(parts)
     return [
         (
             "line search",
@@ -1909,6 +1955,8 @@ def _mode_rows(cfg):
             rows.append(("Newton-Krylov", when))
         else:
             rows.append(("Newton-Krylov", "off"))
+        if solver["method"] == "implicit":
+            rows += _control_loop_rows(solver)
     conv = solver["convergence"]
     if conv["fields"] and not unsteady and solver["method"] == "implicit":
         rows.append(
