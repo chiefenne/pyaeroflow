@@ -39,7 +39,7 @@ from_boundary = "Inlet"
 [numerics]
 limiter = "venkatakrishnan-wang"  # shock on the upper surface
 convective_flux = "slau2"
-# no limiter_freeze: with the limiter frozen at iteration 40 (before the shock exists) the shock forms unlimited and the run diverges (see validation 16)
+# no limiter_freeze: with the limiter frozen at iteration 40 (before the shock exists) the shock forms unlimited and the run diverges
 
 [solver]
 residual_drop = 7.0
