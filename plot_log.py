@@ -8,10 +8,17 @@ Mode is taken from the header line:
   "step ..."  -> transient (x-axis = time [s]; no CFL column, so CFL panels
                             are skipped; "inner" is parsed but not plotted)
 
+The residual columns are read from the header, so no case file is needed:
+incompressible logs (log(R_p), log(R_u), log(R_v)), compressible logs
+(log(R_rho), log(R_rhou), log(R_rhov), log(R_rhoE)) and any turbulence
+columns (R_nu, R_gam, R_n, R_k, R_om) are all recognised. Everything that is
+not a turbulence column is drawn on the left axis, the turbulence columns on
+the right axis. The optional targets file holds only reference values (it
+cannot be derived from the log).
+
 Writes (prefix defaults to the log file name without extension):
-  <prefix>_residuals.png  R_p, R_u, R_v (left axis) + R_nu (right axis);
-                          with SA-AFT also R_gam and R_n, with SST R_k and
-                          R_om instead of R_nu (right axis)
+  <prefix>_residuals.png  flow residuals (left axis) + turbulence residuals
+                          (right axis)
   <prefix>_solver.png     drop / CFL / GMRES / line-search step / wall[s] as
                           stacked subplots (the step panel only if the line
                           search cut a step: log notes "step 1/2", "step 1/4")
@@ -28,7 +35,8 @@ Scaling:
     is limited to +-DCFL_MAX.
 
 Targets (optional TOML file, every entry optional, see targets.toml):
-  Keys: CL CD CM drop CFL GMRES wall Rp Ru Rv Rnu Rk Rom  (also "log(R_p)" etc.)
+  Keys: CL CD CM drop CFL GMRES wall Rp Ru Rv Rrho Rrhou Rrhov RrhoE Rnu Rgam
+  Rn Rk Rom  (also "log(R_p)" etc.)
   Each entry is either a number (target line only) or a table:
       [targets.CD]
       value = 0.0195
@@ -73,9 +81,13 @@ DCFL_MAX = 8e3       # +- limit for the delta CFL panel
 TARGET_ALIASES = {
     "log(R_p)": "Rp", "log(R_u)": "Ru", "log(R_v)": "Rv", "log(R_nu)": "Rnu",
     "log(R_gam)": "Rgam", "log(R_n)": "Rn", "log(R_k)": "Rk", "log(R_om)": "Rom",
+    "log(R_rho)": "Rrho", "log(R_rhou)": "Rrhou", "log(R_rhov)": "Rrhov",
+    "log(R_rhoE)": "RrhoE",
 }
+TURB_KEYS = ("Rnu", "Rgam", "Rn", "Rk", "Rom")   # residuals on the right axis
 TARGET_KEYS = {"CL", "CD", "CM", "drop", "CFL", "GMRES", "wall",
-               "Rp", "Ru", "Rv", "Rnu", "Rgam", "Rn", "Rk", "Rom"}
+               "Rp", "Ru", "Rv", "Rrho", "Rrhou", "Rrhov", "RrhoE",
+               "Rnu", "Rgam", "Rn", "Rk", "Rom"}
 
 
 def is_num(s):
@@ -176,8 +188,9 @@ def parse_log(path):
     """Return (data dict, notes, mode). mode is 'steady' or 'transient'.
 
     The residual columns are taken from the header ("log(R_p)" ... ), so
-    laminar (3), SA (4), SA-AFT (6: also R_gam, R_n) and SST (5: R_k, R_om
-    instead of R_nu) logs all work.
+    incompressible and compressible logs, laminar, SA, SA-AFT, SST and
+    Langtry-Menter logs all work (R_p R_u R_v or R_rho R_rhou R_rhov R_rhoE,
+    plus any of R_nu R_gam R_n R_k R_om).
     Steady: iter, log(R_*), drop, CFL, [NK], GMRES, CL, CD, CM, wall, note.
             NK is optional per row; GMRES is 0 when no NK step ran. A note
             "step 1/N" (the line search kept 1/N of the Newton step) is not
@@ -284,21 +297,22 @@ def consecutive_diff(x):
 def plot_residuals(d, x, notes, xlabel, targets, title, path):
     fig, ax = plt.subplots(figsize=(13, 6))
     lines = []
-    for k, (key, lab) in enumerate([("Rp", "log(R_p)"), ("Ru", "log(R_u)"),
-                                    ("Rv", "log(R_v)")]):
+    left = [k for k in d if k.startswith("R") and k not in TURB_KEYS]
+    for k, key in enumerate(left):
+        lab = f"log(R_{key[1:]})"
         lines += ax.plot(x, d[key], marker=".", ms=4, lw=1, color=f"C{k}", label=lab)
         t = draw_target(ax, key, targets, f"C{k}")
         if t is not None:
             t.set_label(f"{lab} {t.get_label()}")
             lines.append(t)
-    ax.set_ylabel("log(R_p), log(R_u), log(R_v)")
+    ax.set_ylabel(", ".join(f"log(R_{key[1:]})" for key in left))
 
-    right = [k for k in ("Rnu", "Rgam", "Rn", "Rk", "Rom") if k in d]
+    right = [k for k in TURB_KEYS if k in d]
     if right:
         ax2 = ax.twinx()  # secondary y axis for the turbulence residuals
         for k, key in enumerate(right):
             lab = f"log(R_{key[1:]})"
-            c = f"C{3 + k}"
+            c = f"C{len(left) + k}"
             lines += ax2.plot(x, d[key], marker=".", ms=4, lw=1.2, color=c, ls="--",
                               label=f"{lab}  [right axis]")
             t = draw_target(ax2, key, targets, c)
@@ -306,9 +320,9 @@ def plot_residuals(d, x, notes, xlabel, targets, title, path):
                 t.set_label(f"{lab} {t.get_label()}")
                 lines.append(t)
         ylab = ", ".join(f"log(R_{key[1:]})" for key in right)
-        ax2.set_ylabel(ylab, color="C3" if len(right) == 1 else "k")
+        ax2.set_ylabel(ylab, color=f"C{len(left)}" if len(right) == 1 else "k")
         if len(right) == 1:
-            ax2.tick_params(axis="y", colors="C3")
+            ax2.tick_params(axis="y", colors=f"C{len(left)}")
     ax.legend(lines, [l.get_label() for l in lines], loc="upper right",
               ncol=2, fontsize=9)
 

@@ -13,6 +13,9 @@ file = "ramp_10deg_96x64.su2"     # boundary faces: wall, inflow, top, outflow
 flow = "compressible"
 model = "euler"
 
+[numerics]
+convective_flux = "roe"           # default for Euler is slau2
+
 [solver]
 max_iterations = 200
 residual_drop = 10.0

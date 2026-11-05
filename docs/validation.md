@@ -1020,6 +1020,79 @@ start from a converged INC solution or a CFL ramp are the candidates.
 
 [↑ back to table](#stage-table)
 
+## 16. SLAU2 convective flux (L1 stage C5)
+
+`numerics.convective_flux = "slau2"` (Shima and Kitamura 2011; Kitamura and
+Shima 2013): face-local all-speed flux without tuning parameter, residual
+only on interior faces (boundary faces keep Roe). Unit tests: consistency,
+conservation, stationary contact, finite derivatives at rest, near-upwind
+supersonic flux (`tests/unit/test_compressible.py`).
+
+Runs on the 12k NACA 0012 O-grid (`make_meshes.py`, sharp trailing edge, PARDISO
+unless noted):
+
+| Case | Flux | Iterations | CL | CD | CM |
+|---|---|---|---|---|---|
+| M 0.8, alpha 1.25 | Roe | 92 | 0.3415 | 0.02249 | 0.0350 |
+| M 0.8, alpha 1.25 | SLAU2, SLAU2 Jacobian (`auto`) | 64 | 0.33903 | 0.022393 | 0.03425 |
+| M 0.8, alpha 1.25 | SLAU2, Roe Jacobian | not converged (200 it, diverges) | | | |
+| M 0.5, alpha 1.25 | Roe | 28 | 0.17603 | 0.00089 | 0.00160 |
+| M 0.5, alpha 1.25 | Roe + Rieper | 37 | 0.17648 | 0.00068 | 0.00168 |
+| M 0.5, alpha 1.25 | SLAU2, SLAU2 Jacobian (`auto`) | 26 | 0.176244 | 0.000804 | 0.001648 |
+| M 0.5, alpha 1.25 | SLAU2, Roe Jacobian | 34 | 0.176244 | 0.000804 | 0.001648 |
+
+The Roe rows are from the SuperLU sandbox runs, the SLAU2 rows from PARDISO
+runs (identical to the sandbox at M 0.8; at M 0.5 a SuperLU run with the
+SLAU2 Jacobian stalled at CL 0.128, so use PARDISO). The `auto` Jacobian (SLAU2) converges at both Mach numbers; the
+Roe Jacobian fails at M 0.8. Wall time 10-13 s each.
+
+Low-Mach sweep (same O-grid, alpha 1.25, PARDISO, `jacobian_flux = auto`).
+By the Prandtl-Glauert rule CL must grow only by 1/sqrt(1-M^2) from the
+incompressible value (about 0.149) and the induced drag of the inviscid flow
+is small:
+
+| Mach | Flux | CL | CD |
+|---|---|---|---|
+| 0.1 | Roe | 0.14851 | 0.002296 |
+| 0.1 | Roe + Rieper | 0.150547 (not converged) | |
+| 0.1 | SLAU2 | 0.15012 | 0.000839 |
+| 0.03 | Roe | 0.142826 | 0.006695 |
+| 0.03 | Roe + Rieper | 0.145176 (stalls) | |
+| 0.03 | SLAU2 | 0.14947 | 0.00085 |
+
+Roe's dissipation scales with the sound speed and destroys the low-Mach
+solution; the Rieper correction helps but stalls; SLAU2 is Mach independent
+(CL 0.1495 to 0.1501, CD 0.00085). At M 0.03 the residual drop of 10 orders
+is limited by the round-off floor; use `residual_drop` 8-9 for low-Mach Euler.
+SLAU2 shows a long acoustic start-up transient from the freestream (tracked
+separately with the slow alpha 0 start-up).
+
+TMR NACA 0012, M 0.15, Re 6e6, alpha 10 (PARDISO; Roe rows use
+`low_mach_correction`; 449 Roe rows are from sections 14 and 15):
+
+| Grid | Model | Flux | Residual drop | CL | CD |
+|---|---|---|---|---|---|
+| 225 x 65 | SA-neg | Roe + Rieper | 1.7 (400 it) | 1.0856 | 0.01507 |
+| 225 x 65 | SA-neg | SLAU2 | 7.0 (360 it) | 1.0726 | 0.01604 |
+| 225 x 65 | SST | Roe + Rieper | 1.8 (400 it) | 1.0931 | 0.01715 |
+| 225 x 65 | SST | SLAU2 | 5.5 (400 it) | 1.0627 | 0.01579 |
+| 449 x 129 | SA-neg | Roe + Rieper | | 1.0914 | 0.01270 |
+| 449 x 129 | SA-neg | SLAU2 | 3.1 (400 it) | 1.0922 | 0.012748 |
+| 449 x 129 | SST | Roe + Rieper | (1200 it, drifting) | 1.0818 | 0.01280 |
+| 449 x 129 | SST | SLAU2 | 4.9 (596 it) | 1.0800 | 0.012824 |
+
+CFL3D: SA 225 1.0838 / 0.01449, SA 449 1.0909 / 0.01273; TMR SST 897
+1.0778 / 0.01236. On 449 SLAU2 reproduces Roe + Rieper within 0.2 % and the
+CFL3D values within 0.15 %; on 225 it converges 4-5 orders further (the
+frozen limiter stalls the Roe runs) but its pressure drag is higher (SA CD
++6 % vs Roe on this coarse grid).
+
+Default: `convective_flux` defaults to `slau2` for every compressible model;
+it stays `roe` when `numerics.low_mach_correction = true` is set. The Roe
+examples that quote Roe numbers (`naca0012_euler_m05/m08`, `ramp_10deg_m2`,
+`naca0012_laminar_m05`) set `convective_flux = "roe"` explicitly. Not yet
+run with SLAU2: laminar flow; RAE 2822 case 6 files are `examples/cases/rae2822_case6_roe.toml` and `rae2822_case6_slau2.toml` (user runs).
+
 ## References
 
 - Ghia, U., Ghia, K. N., Shin, C. T. (1982): High-Re solutions for
@@ -1120,6 +1193,11 @@ need their volume, page or paper number checked.
 - Economon, T. D. (2020): Simulation and adjoint-based design for variable
   density incompressible flows with heat transfer. AIAA J. 58(2), 757–769 †.
   The artificial-compressibility formulation of the incompressible solver.
+- Shima, E., Kitamura, K. (2011): Parameter-free simple low-dissipation
+  AUSM-family scheme for all speeds. AIAA J. 49(8), 1693–1709 †.
+- Kitamura, K., Shima, E. (2013): Towards shock-stable and accurate
+  hypersonic heating computations: a new pressure flux for AUSM-family
+  schemes. J. Comput. Phys. 245, 62–83 †.
 - Rieper, F. (2011): A low-Mach number fix for Roe's approximate Riemann
   solver. J. Comput. Phys. 230(13), 5263–5287 †.
 - Krakos, J. A., Wang, Q., Hall, S. R., Darmofal, D. L. (2012): Sensitivity

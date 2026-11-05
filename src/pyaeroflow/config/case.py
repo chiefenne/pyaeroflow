@@ -752,11 +752,22 @@ def _flow_rules(data, boundaries, farfields, compressible, problems, notices):
     num = data["numerics"]
     flux = num["convective_flux"]
     if flux is None:
-        num["convective_flux"] = "roe" if compressible else "fds"
-    elif (flux == "roe") != compressible:
+        if not compressible:
+            num["convective_flux"] = "fds"
+        elif not num["low_mach_correction"]:
+            # SLAU2 is Mach independent where Roe is not and converges better
+            # on the TMR NACA 0012 cases (validation 16)
+            num["convective_flux"] = "slau2"
+        else:
+            num["convective_flux"] = "roe"
+    elif (flux in ("roe", "slau2")) != compressible:
         problems.append(
             f"numerics.convective_flux = {flux}: needs physics.flow = "
-            + ("compressible" if flux == "roe" else "incompressible")
+            + ("compressible" if flux in ("roe", "slau2") else "incompressible")
+        )
+    elif flux == "slau2" and num["low_mach_correction"]:
+        notices.append(
+            "numerics.low_mach_correction ignored: slau2 is an all-speed flux"
         )
     if not compressible:
         if fluid["density"] is None:

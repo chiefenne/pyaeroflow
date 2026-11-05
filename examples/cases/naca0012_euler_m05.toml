@@ -16,6 +16,7 @@ model = "euler"
 
 [numerics]
 limiter = "venkatakrishnan-wang"
+convective_flux = "roe"           # default for Euler is slau2
 
 [solver]
 max_iterations = 200

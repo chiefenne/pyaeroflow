@@ -99,6 +99,7 @@ def solve(
     k_omega=None,
     mach=None,
     low_mach_correction=False,
+    convective_flux="roe",
 ):
     """Run the turbulent flat plate and evaluate C_f(x) and the drag.
 
@@ -107,7 +108,8 @@ def solve(
     inlet with T = 1, static-pressure outlet at p_inf, Sutherland's law with
     the TMR reference temperature of 540 R. C_f and C_D use q = rho U^2 / 2
     of the freestream as in the incompressible case. ``low_mach_correction``
-    switches on Rieper's correction of the Roe flux.
+    switches on Rieper's correction of the Roe flux; ``convective_flux``
+    selects "roe" or "slau2".
 
     ``transition = "bcm"`` with ``turbulence_intensity`` (percent) runs the
     transitional plate (T3-series style) instead of the fully turbulent one;
@@ -132,7 +134,15 @@ def solve(
     mesh = plate_mesh(nx_plate, nx_front, ny, reynolds)
     if mach is not None:
         return _solve_compressible(
-            mesh, mach, nu, turb, settings, coupling, low_mach_correction, turbulence
+            mesh,
+            mach,
+            nu,
+            turb,
+            settings,
+            coupling,
+            low_mach_correction,
+            turbulence,
+            convective_flux,
         )
     conditions = {
         "left": {"type": "velocity-inlet", "velocity": (u_inf, 0.0), **turb},
@@ -166,7 +176,15 @@ def solve(
 
 
 def _solve_compressible(
-    mesh, mach, nu, turb, settings, coupling, low_mach_correction, turbulence
+    mesh,
+    mach,
+    nu,
+    turb,
+    settings,
+    coupling,
+    low_mach_correction,
+    turbulence,
+    convective_flux="roe",
 ):
     r_gas, ff = comp.freestream_conditions(mach)
     conditions = {
@@ -189,6 +207,7 @@ def _solve_compressible(
         coupling=coupling,
         limiter="none",  # smooth flow; as the incompressible default
         low_mach_correction=low_mach_correction,
+        convective_flux=convective_flux,
     )
     problem = IncompressibleProblem(mesh, model, conditions)
     k_omega = (turb["k"], turb["omega"]) if turbulence == "sst" else None

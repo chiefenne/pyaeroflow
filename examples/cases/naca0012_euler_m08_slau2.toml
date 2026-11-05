@@ -1,0 +1,38 @@
+# NACA 0012, inviscid compressible flow at M = 0.8, alpha = 1.25 deg
+# (physics.flow = "compressible", L1). Transonic: shocks on both sides
+# (AGARD-AR-211 test case 1; Vassberg & Jameson 2010).
+# Mesh: python examples/cases/make_meshes.py (O-grid 192 x 64, farfield at
+# 100 chords, sharp trailing edge).
+
+[case]
+name = "naca0012_euler_m08_slau2"
+
+[mesh]
+file = "naca0012_euler_ogrid_192x64.su2"   # boundary faces: airfoil, farfield
+
+[physics]
+flow = "compressible"
+model = "euler"
+
+[numerics]
+limiter = "venkatakrishnan-wang"
+convective_flux = "slau2"        # all-speed AUSM-family flux (Kitamura and Shima 2013)
+# jacobian_flux = "roe"          # first-order Jacobian flux: "auto" follows convective_flux
+
+[solver]
+max_iterations = 200
+residual_drop = 10.0
+linear_solver = { type = "pardiso" }   # remove or use "direct" without pypardiso
+
+[boundary.airfoil]
+type = "wall"                     # slip wall in Euler mode
+
+[boundary.farfield]
+type = "farfield"
+mach = 0.8
+angle_of_attack = 1.25            # deg
+pressure = 101325.0               # Pa, absolute
+temperature = 288.15              # K
+
+[output]
+directory = "output/naca0012_euler_m08_slau2_slau2"
