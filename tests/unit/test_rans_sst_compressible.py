@@ -265,3 +265,23 @@ def test_restart_between_sa_and_sst_keeps_the_mean_flow(tmp_path):
     assert n == 4
     np.testing.assert_allclose(w[:, :4], 1.0)
     np.testing.assert_allclose(w[:, 4:], 7.0)
+
+
+def test_source_time_step_limit_caps_the_time_term():
+    """Phase A: the source-term limit only raises the pseudo-time diagonal."""
+    prob, ff = _box()
+    w = _perturbed(prob, ff, 7)
+    params = prob.scheme_parameters(w)
+    nt = prob.physics.NT
+    j = np.asarray(prob.physics.source_jacobian(prob.model, prob.geom, prob.bc, w))
+    assert j.shape == (w.shape[0], w.shape[1] - nt, w.shape[1] - nt)
+    assert np.isfinite(j).all()
+    cap = prob.source_cfl_cap(w, params, 0.9)
+    assert (cap > 0.0).all()
+    cfl = 1.0e6
+    plain = prob.time_term(w, params, cfl).diagonal()
+    limited = prob.time_term(w, params, cfl, source_limit=0.9).diagonal()
+    nonzero = plain != 0.0
+    # The cell blocks are scaled by a factor >= 1 (diagonals of either sign).
+    assert np.all(limited[nonzero] / plain[nonzero] >= 1.0 - 1e-12)
+    assert prob.source_limited_cells == int(np.count_nonzero(cap < cfl))

@@ -374,6 +374,31 @@ def source_blocks(model, geom, bc, w):
     return blocks.at[:, NW, NW].set(reference_viscosity(model) * a * 2.0 * beta * omega)
 
 
+@partial(jax.jit, static_argnums=0)
+def source_jacobian(model, geom, bc, w):
+    """Full cell-local d(-area row_scale rho src)/d(k, omega), shape (n, 2, 2).
+
+    Production, destruction and cross diffusion at frozen rho, strain, div v,
+    F1, F2 and grad k . grad omega; for the source-term time-step limit.
+    """
+    w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
+    grad = lsq_gradient(geom, w, w_b)
+    strain, f1, f2, _, kgw, rho, _ = cell_quantities(model, geom, w, grad)
+    div = grad[:, U, 0] + grad[:, V, 1]
+    switch = 1.0 if geom.production_switch is None else geom.production_switch
+    switch = jnp.broadcast_to(jnp.asarray(switch, dtype=float), strain.shape)
+    scale = _row_scale(model)
+
+    def cell(t, s, a, b, c, sw, dv, r):
+        s_k, s_w = sst.sources(
+            t[0], jnp.maximum(t[1], OMEGA_MIN), s, a, b, c, sw, divergence=dv
+        )
+        return -r * jnp.stack([s_k, s_w]) * scale
+
+    jac = jax.vmap(jax.jacfwd(cell))(w[:, NK:], strain, f1, f2, kgw, switch, div, rho)
+    return geom.area[:, None, None] * jac
+
+
 def segregated_mask(n_var):
     """Block mask of the segregated coupling: mean flow and turbulence apart."""
     mask = jnp.zeros((n_var, n_var))

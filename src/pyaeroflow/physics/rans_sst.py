@@ -77,6 +77,7 @@ __all__ = [
     "boundary_flux",
     "jacobian_coefficients",
     "source_blocks",
+    "source_jacobian",
     "time_term_blocks",
     "segregated_mask",
     "cell_quantities",
@@ -428,6 +429,44 @@ def source_blocks(model, geom, bc, w):
     blocks = blocks.at[:, NK, NW].set(a * d_fac * sst.BETA_STAR * k)
     nu = kinematic_viscosity(model)
     return blocks.at[:, NW, NW].set(nu * a * 2.0 * beta * omega)
+
+
+@partial(jax.jit, static_argnums=0)
+def source_jacobian(model, geom, bc, w):
+    """Full cell-local Jacobian of the source part of the residual.
+
+    Shape (n_cells, n_t, n_t) over the turbulence (and transition) columns:
+    d(-area row_scale src)/d(k, omega[, gamma, Re_thetat]) with production,
+    destruction and cross diffusion, the stencil quantities (strain,
+    vorticity, F1, F2, grad k . grad omega, dU/ds) frozen and the exact gamma
+    linearization (no ``positive_jacobian``). Its negative eigenvalues are
+    the growth rates of the sources that the source-term time-step limit of
+    Piotrowski & Zingg (2020) bounds.
+    """
+    w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
+    grad = lsq_gradient(geom, w, w_b)
+    strain, f1, f2, _, kgw = cell_quantities(model, geom, w, grad)
+    switch = 1.0 if geom.production_switch is None else geom.production_switch
+    switch = jnp.broadcast_to(jnp.asarray(switch, dtype=float), strain.shape)
+    vort, speed, du_ds = _flow_inputs(w, grad)
+    nu = kinematic_viscosity(model)
+    scale = _row_scale(model)
+    lm_on = model.transition == "lm"
+
+    def cell(t, s, a, b, c, sw, vo, d, sp, dd):
+        k, om = t[0], jnp.maximum(t[1], OMEGA_MIN)
+        g_eff, extra = None, []
+        if lm_on:
+            largs = (t[2], t[3], jnp.maximum(k, 0.0), om, nu, s, vo, d, sp, dd)
+            g_eff = lm.effective_intermittency(*largs[:9])
+            extra = list(lm.sources(*largs))
+        s_k, s_w = sst.sources(k, om, s, a, b, c, sw, g_eff)
+        return -jnp.stack([s_k, s_w] + extra) * scale
+
+    jac = jax.vmap(jax.jacfwd(cell))(
+        w[:, NK:], strain, f1, f2, kgw, switch, vort, geom.wall_distance, speed, du_ds
+    )
+    return geom.area[:, None, None] * jac
 
 
 @partial(jax.jit, static_argnums=0)

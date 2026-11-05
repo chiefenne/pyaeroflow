@@ -424,6 +424,28 @@ def source_blocks(model, geom, bc, w):
 
 
 @partial(jax.jit, static_argnums=0)
+def source_jacobian(model, geom, bc, w):
+    """Full cell-local Jacobian d(-area src)/d(turbulence columns), (n, n_t, n_t).
+
+    Production included (unlike :func:`source_blocks`), stencil inputs and
+    the BCM intermittency frozen; for the source-term time-step limit.
+    """
+    w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
+    grad = lsq_gradient(geom, w, w_b)
+    grad_v, grad_sq, switch, h_l = _source_inputs(model, geom, w, w_b, grad)
+
+    def cell_source(t, gv, d, gs, sw, hl):
+        return _turbulence_sources(
+            model, t[None], gv[None], d[None], gs[None], sw[None], hl[None], None
+        )[0]
+
+    jac = jax.vmap(jax.jacfwd(cell_source))(
+        w[:, NT:], grad_v, geom.wall_distance, grad_sq, switch, h_l
+    )
+    return -geom.area[:, None, None] * jac
+
+
+@partial(jax.jit, static_argnums=0)
 def time_term_blocks(model, geom, w, beta2, cfl):
     """Pseudo-time blocks: Gamma (mean flow) and 1 (turbulence), times Lambda / CFL."""
     lam = inc.spectral_radius(model, geom, w[:, :3], beta2)

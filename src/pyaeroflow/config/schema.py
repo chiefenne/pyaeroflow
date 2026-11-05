@@ -446,6 +446,55 @@ SCHEMA = {
             "no_transition with physics.transition.model = lm",
             choices=("all", "no_transition"),
         ),
+        "step_control": Opt(
+            "string",
+            "unsteady",
+            "Step acceptance (implicit): unsteady (default since 1.3; HANIM, "
+            "Wang et al. 2021: a step must lower the pseudo-time residual "
+            "a T du + R(u + a du); quadratic under-relaxation a, a partial "
+            "step holds the CFL, a failed step is retried at cfl.cut_factor "
+            "with the existing factorization) or merit (the 1.2 loop: halve a "
+            "step that raises the steady residual RMS, reject above "
+            "cfl.reject_factor)",
+            choices=("merit", "unsteady"),
+        ),
+        "step_alpha_min": Opt(
+            "float",
+            0.1,
+            "step_control = unsteady: smallest under-relaxation a step is "
+            "accepted with",
+            minimum=0.0,
+        ),
+        "source_time_step": {
+            "limit": Opt(
+                "float",
+                0.9,
+                "RANS: source-term time-step limit (Piotrowski & Zingg 2020): "
+                "the local pseudo-time step of every cell obeys "
+                "lambda_max(dS/dQ) dt <= limit, lambda_max the largest growth "
+                "rate of the cell-local turbulence/transition source Jacobian "
+                "(production included); 0.9 in the paper (default since 1.3). "
+                "0 switches it off (the 1.2 behaviour)",
+                minimum=0.0,
+            ),
+            "release_after": Opt(
+                "int",
+                5,
+                "Switch the limit off after this many consecutive full "
+                "Newton-Krylov steps; any cut or rejected step arms it again",
+                minimum=1,
+            ),
+            "release_ramp": Opt(
+                "float",
+                1.0,
+                "Gradual release: after release_after clean steps the limit is "
+                "multiplied by this factor on every further clean step (off "
+                "above 1e8 times the base), and a cut or rejected step divides "
+                "it by the factor instead of re-arming it fully. 1 = release "
+                "and re-arm at once (default); 10 is the value to try",
+                minimum=1.0,
+            ),
+        },
         "refactor_interval": Opt(
             "int",
             3,
@@ -522,6 +571,16 @@ SCHEMA = {
             ),
             "cut_factor": Opt(
                 "float", 0.1, "CFL reduction after a rejected update", minimum=0.0
+            ),
+            "floor_exponent": Opt(
+                "float",
+                None,
+                "SER floor: after an accepted step, and with no failed step in "
+                "the last 5 iterations, CFL >= start (R_0 / R)^p (R the residual "
+                "RMS, R_0 that of the start), bounded by max (max_approximate "
+                "before the Newton-Krylov switch); 0.5 is a common choice. Off "
+                "by default",
+                minimum=0.0,
             ),
             "reject_factor": Opt(
                 "float",

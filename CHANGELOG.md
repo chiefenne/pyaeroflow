@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.3.0 – control loop (Phase A of the solver roadmap, 2026-11-05)
+
+Changed defaults (the 1.2 behaviour stays reachable, see below). A full
+validation rerun is still to do.
+
+- `solver.step_control = "unsteady"` is the default: steps are accepted on
+  the pseudo-time residual a T du + R(u + a du) (HANIM, Wang, Diskin, Nielsen
+  and Liu 2021), with quadratic under-relaxation, partial steps holding the
+  CFL, and a CFL/10 retry that reuses the existing factorization. `"merit"`
+  restores the 1.2 loop. Dual-time (unsteady) runs keep `merit` for the inner
+  iterations.
+- `solver.source_time_step.limit = 0.9` is the default for RANS: per-cell CFL
+  cap from the full cell-local source Jacobian (Piotrowski and Zingg 2020),
+  released after 5 clean Newton steps. `limit = 0` restores 1.2. It replaces
+  the Langtry-Menter default `solver.cfl.max = 2000`, which is gone. SD7003
+  320k LM fresh polar alpha 0, 2, 4: 7071 s and 239 iterations against
+  14290 s and 939 for 1.2, forces identical. NACA 0012 225 SST alpha 15
+  impulsive start: converged in 344 iterations (1.2: 5.3 orders in 400).
+- New opt-in: `solver.cfl.floor_exponent` (SER floor),
+  `solver.source_time_step.release_ramp` (gradual release; not yet validated),
+  `solver.step_alpha_min`.
+- Log: `step 0.37` for quadratic under-relaxation, `src-dt N`, `source dt
+  limit released/armed`.
+
 ## Unreleased – compressible Euler, laminar, SA-neg and SST solver (L1, stages C0–C4)
 
 - SLAU2 as second compressible convective flux (C5, replaces the planned JST):

@@ -8,7 +8,7 @@ Living document, updated after each requirement step.
 - **X** – not planned
 - **O** – open requirement step, with the current proposal
 
-Status: requirements complete since 2026-10-13 (steps 1–13); stages 0–6 and L2, L3, L4, L6, L7 are implemented (1.2.0, 2026-11-02); L1 stages C0, C1 (compressible Euler), C2 (compressible laminar) and C3 (compressible SA-neg) implemented after 1.2.0; open: L1 C4–C5, L5 and the "possible later" items.
+Status: requirements complete since 2026-10-13 (steps 1–13); stages 0–6 and L2, L3, L4, L6, L7 are implemented (1.2.0, 2026-11-02; control loop 1.3.0); L1 stages C0, C1 (compressible Euler), C2 (compressible laminar) and C3 (compressible SA-neg) implemented after 1.2.0; open: L1 C4–C5, L5 and the "possible later" items.
 
 
 ## 1. Purpose and scope

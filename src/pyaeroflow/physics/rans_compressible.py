@@ -322,6 +322,26 @@ def source_blocks(model, geom, bc, w):
     return blocks.at[:, NT, NT].set(-geom.area * jnp.minimum(d_src, 0.0))
 
 
+@partial(jax.jit, static_argnums=0)
+def source_jacobian(model, geom, bc, w):
+    """Cell-local d(-area src)/d nu_tilde with production, shape (n, 1, 1).
+
+    Stencil inputs and the mean flow frozen; for the source-term time-step
+    limit.
+    """
+    w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
+    grad = lsq_gradient(geom, w, w_b)
+    vort, grad_sq, cross, switch = _source_inputs(geom, w, grad)
+
+    def one(nt, wc, vo, d, gs, cr, sw):
+        return cell_source(model, wc.at[NT].set(nt), vo, d, gs, cr, sw)
+
+    d_src = jax.vmap(jax.grad(one))(
+        w[:, NT], w, vort, geom.wall_distance, grad_sq, cross, switch
+    )
+    return (-geom.area * d_src)[:, None, None]
+
+
 def segregated_mask(n_var):
     """Block mask of the segregated coupling: mean flow and turbulence apart."""
     mask = jnp.zeros((n_var, n_var))
