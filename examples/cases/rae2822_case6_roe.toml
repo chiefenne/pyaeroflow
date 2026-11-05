@@ -32,7 +32,6 @@ reynolds_number = 6.5e6           # rho U c / mu of the freestream (Sutherland m
 [reference]
 length = 1.0                      # chord (m)
 moment_center = [0.25, 0.0]       # quarter chord
-vortex_correction = true          # farfield correction for the lift
 
 [initial]
 from_boundary = "Inlet"
