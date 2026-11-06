@@ -197,3 +197,21 @@ def test_probe_spectrum_and_strouhal(tmp_path, capsys):
 def test_cli_lists_builtin_references(capsys):
     assert main(["plot", "refs"]) == 0
     assert "tmr_naca0012_cp_gregory" in capsys.readouterr().out
+
+
+def test_show_keeps_figures_open_and_writes_nothing(tmp_path, monkeypatch):
+    plt = pytest.importorskip("matplotlib.pyplot")
+    from pyaeroflow.plotting import common
+
+    (tmp_path / "c.log").write_text(STEADY)
+    shown = []
+    monkeypatch.setattr(
+        common, "show_figures", lambda: shown.append(len(plt.get_fignums()))
+    )
+    try:
+        assert main(["plot", "log", str(tmp_path / "c.log"), "--show"]) == 0
+    finally:
+        common.set_show(False)
+        plt.close("all")
+    assert not list(tmp_path.glob("*.png"))
+    assert shown == [4]  # residuals, solver, coeffs, diffs

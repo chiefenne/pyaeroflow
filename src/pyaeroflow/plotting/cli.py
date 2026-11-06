@@ -35,6 +35,11 @@ def add_parser(sub):
     p.add_argument("--ref", action="append", default=[], help="reference data (repeat)")
     p.add_argument("--title", help="figure title (default: the file names)")
     p.add_argument(
+        "--show",
+        action="store_true",
+        help="open the figures in windows (zoom, pan) instead of writing PNG files",
+    )
+    p.add_argument(
         "--panels",
         help="comma list; log: residuals,solver,coeffs,diffs; "
         "wall: cp,cf,y_plus,t,q_w; polar: cl,drag,cm,ld,cd; probes: p,u,v,t",
@@ -102,6 +107,9 @@ def detect(path):
 
 def run(args):
     """Execute ``pyaeroflow plot``; returns the exit code."""
+    from pyaeroflow.plotting.common import set_show, show_figures
+
+    set_show(args.show)
     items = list(args.items)
     kind = items.pop(0) if items[0] in KINDS else detect(items[0])
     panels = [s.strip() for s in args.panels.split(",")] if args.panels else None
@@ -159,4 +167,6 @@ def run(args):
                 item, args.output if len(items) == 1 else None, panels, args.spectrum,
                 args.x_from, args.length, args.velocity, args.title,
             )  # fmt: skip
+    if args.show:
+        show_figures()
     return 0

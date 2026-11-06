@@ -3,7 +3,7 @@
 `pyaeroflow plot` makes PNG figures from the files a run writes. It needs matplotlib
 (`pip install pyaeroflow[plot]`). The kind of plot is detected from the file name,
 or given first: `pyaeroflow plot [log|wall|polar|probes|refs] FILE ...`.
-`pyaeroflow plot --help` lists every option. Each figure is written next to the
+`pyaeroflow plot --help` lists every option. `--show` opens the figures in windows (zoom, pan) instead of writing PNG files; it needs a display and an interactive matplotlib backend. Without it the file backend (Agg) is used, so no display is needed. Each figure is written next to the
 input as `<name>_<what>.png`, or under the prefix given with `-o`.
 
 | kind | input | figures |

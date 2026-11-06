@@ -5,13 +5,30 @@ from pathlib import Path
 
 import numpy as np
 
+_SHOW = False  # --show: open windows instead of writing PNG files
+
+
+def set_show(show):
+    """Open the figures in windows (``--show``) instead of writing PNG files.
+
+    Must be called before the first figure is made: the file backend (Agg) is
+    chosen otherwise, and the interactive backend of the system is used with
+    ``show``.
+    """
+    global _SHOW
+    _SHOW = bool(show)
+
 
 def pyplot():
-    """matplotlib.pyplot with the file backend (optional dependency, D46)."""
+    """Return matplotlib.pyplot (optional dependency, D46).
+
+    The file backend (Agg) is used unless ``set_show(True)`` was called, so a
+    run on a server or in a script never needs a display.
+    """
     try:
         import matplotlib
 
-        if matplotlib.get_backend().lower() not in ("agg", "pdf", "svg"):
+        if not _SHOW and matplotlib.get_backend().lower() not in ("agg", "pdf", "svg"):
             matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError as exc:
@@ -50,11 +67,28 @@ def save(fig, path, title=None, dpi=150):
                 )
                 top = max(top, box.y1 + 0.01)
         fig.suptitle(title, fontsize=13, y=top, va="bottom")
+    if _SHOW:
+        return None  # the figure stays open for show_figures()
     path = Path(path)
     fig.savefig(path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
     print(f"saved {path}")
     return path
+
+
+def show_figures():
+    """Open all figures made with ``set_show(True)`` and wait until they are closed."""
+    plt = pyplot()
+    if not plt.get_fignums():
+        return
+    if plt.get_backend().lower() in ("agg", "pdf", "svg", "ps", "cairo", "template"):
+        print(
+            "error: --show needs a display and an interactive matplotlib backend "
+            f"(now: {plt.get_backend()}); run without --show to write PNG files"
+        )
+        plt.close("all")
+        return
+    plt.show()
 
 
 # -- targets ---------------------------------------------------------------------
