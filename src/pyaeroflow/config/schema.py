@@ -544,6 +544,17 @@ SCHEMA = {
                 "T + J indefinite); 1e6 is the value to try",
                 minimum=0.0,
             ),
+            "release_drop": Opt(
+                "float",
+                None,
+                "Release the limit only once the residual measure has dropped "
+                "by this many orders (besides release_after clean steps and "
+                "release_cfl): the limit stays on through the transient, where "
+                "its absence makes GMRES fail (39k SD7003 LM alpha 2 restart), "
+                "and is lifted for the final quadratic phase. Default: off "
+                "(release after release_after clean steps); 2 is the value to try",
+                minimum=0.0,
+            ),
             "keep_transition": Opt(
                 "bool",
                 False,

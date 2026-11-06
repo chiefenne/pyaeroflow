@@ -152,3 +152,38 @@ def test_source_limit_release_waits_for_the_cfl():
     late = [c for c, lim in seen if lim is None]
     assert early and late
     assert min(early) < 20.0 and min(late) >= 20.0
+
+
+def test_source_limit_release_waits_for_the_residual_drop():
+    residual, jacobian, _, u0, _ = two_column_problem()
+    seen = []
+
+    def time_term(u, cfl, source_limit=None):
+        seen.append(float(np.abs(u - 1.0).max()))
+        seen_limit.append(source_limit)
+        return sp.diags(np.full(u.size, 1.0 / cfl))
+
+    seen_limit = []
+    kw = dict(
+        cfl_start=1.0,
+        growth_factor=1.5,
+        residual_drop=14.0,
+        nk_switch_residual_drop=0.0,
+        source_cfl_limit=0.9,
+        source_cfl_release=2,
+        max_iterations=60,
+    )
+    jvp = lambda u, du: du  # noqa: E731
+    solve_steady(residual, jacobian, time_term, u0, PseudoTimeSettings(**kw), jvp=jvp)
+    first_free = seen_limit.index(None)
+    seen_limit.clear()
+    seen.clear()
+    solve_steady(
+        residual,
+        jacobian,
+        time_term,
+        u0,
+        PseudoTimeSettings(source_release_drop=3.0, **kw),
+        jvp=jvp,
+    )
+    assert seen_limit.index(None) > first_free

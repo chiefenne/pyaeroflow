@@ -10,7 +10,7 @@
   for the k-omega rows too. No gain on the 39k SD7003 alpha 2 restart.
 - New opt-in: `solver.newton_krylov.equation_scaling` (GMRES on the system
   with every equation divided by its residual RMS), `solver.source_time_step
-  .release_cfl` and `.keep_transition`, `solver.cfl.growth_max` and
+  .release_cfl`, `.release_drop` and `.keep_transition`, `solver.cfl.growth_max` and
   `.full_step_growth`. Sandbox findings in
   analysis/ank_startup/phase_c_topic1.md (project files).
 

@@ -1091,6 +1091,7 @@ def _pseudo_time_settings(cfg):
         source_cfl_release=solver["source_time_step"]["release_after"],
         source_cfl_ramp=solver["source_time_step"]["release_ramp"],
         source_release_cfl=solver["source_time_step"]["release_cfl"],
+        source_release_drop=solver["source_time_step"]["release_drop"],
         linear=LinearSettings(**solver["linear_solver"]),
     )
 

@@ -250,6 +250,11 @@ class PseudoTimeSettings:
     source_release_cfl : float or None
         The source-term limit is released only once the CFL has reached this
         value (besides ``source_cfl_release`` clean steps); None = at any CFL.
+    source_release_drop : float or None
+        The source-term limit is released only once the residual measure has
+        dropped by this many orders (besides the other release conditions):
+        the limit stays on through the transient, where its absence makes
+        GMRES fail, and is lifted for the quadratic final phase. None = off.
     source_keep_columns : tuple of int or None
         Variables whose rows keep the source-term limit after its release,
         computed from their own source sub-block (``time_term`` keyword
@@ -336,6 +341,7 @@ class PseudoTimeSettings:
     nk_equation_scaling: bool = False
     source_keep_columns: tuple = None
     source_release_cfl: float = None
+    source_release_drop: float = None
     growth_max: float = None
     full_step_growth: bool = False
     local_cfl_columns: tuple = None
@@ -956,6 +962,8 @@ def solve_steady(
             if accepted and use_nk and step >= 1.0:
                 clean_nk += 1
                 high = s.source_release_cfl is None or cfl >= s.source_release_cfl
+                if s.source_release_drop is not None:
+                    high = high and norm <= 10.0 ** (-s.source_release_drop)
                 if clean_nk >= s.source_cfl_release and high:
                     if ramp and source_active:
                         source_level *= s.source_cfl_ramp
