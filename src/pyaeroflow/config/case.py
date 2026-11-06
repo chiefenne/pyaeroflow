@@ -336,6 +336,14 @@ def _check_value(dotted, opt, value, problems):
             )
         )
         value = [float(v) for v in value] if ok else value
+    elif opt.type == "float2_list":
+        ok = isinstance(value, list) and all(
+            isinstance(p, list)
+            and len(p) == 2
+            and all(isinstance(v, int | float) and not isinstance(v, bool) for v in p)
+            for p in value
+        )
+        value = [[float(v) for v in p] for p in value] if ok else value
     elif opt.type == "string_list":
         ok = isinstance(value, list) and all(isinstance(v, str) for v in value)
     elif opt.type == "int_list":
@@ -349,6 +357,7 @@ def _check_value(dotted, opt, value, problems):
     if not ok:
         kind = {
             "float2": "array of two numbers",
+            "float2_list": "array of [x, y] pairs",
             "string_list": "array of strings",
             "int_list": "array of integers",
             "table": "table",

@@ -54,14 +54,105 @@ class Field(NamedTuple):
     compute: Callable  # FieldContext -> ndarray, (n_cells,) or (n_cells, 2)
 
 
-class FieldContext:
-    """State a field is computed from; wall quantities are computed once."""
+class Freestream(NamedTuple):
+    """Freestream state of the derived fields (cp, total pressure), non-dimensional.
 
-    def __init__(self, problem, w, scaling, monitor=None, cell_residual=None):
+    ``q`` is the reference dynamic pressure 0.5 rho_ref U_ref^2 of the force
+    coefficients and of ``cp_wall`` (0.5 in the non-dimensional variables).
+    """
+
+    pressure: float
+    density: float
+    speed: float
+    temperature: float = 1.0
+    q: float = 0.5
+    gamma: float = 1.4  # compressible only
+    compressible: bool = False
+
+    @property
+    def mach(self):
+        """Freestream Mach number (compressible), from p = rho R T."""
+        return self.speed / np.sqrt(self.gamma * self.pressure / self.density)
+
+    @property
+    def total_pressure(self):
+        """Freestream total pressure (incompressible: p + rho U^2 / 2)."""
+        return _total_pressure(
+            self.pressure, self.density, self.speed, self.gamma, self.compressible
+        )
+
+    @classmethod
+    def from_config(cls, data, scaling, model, compressible):
+        """Build the freestream of the single farfield stream, else the reference.
+
+        Incompressible: farfield pressure (gauge) and velocity, the fluid
+        density; without exactly one farfield stream p = 0 and U = U_ref (as
+        ``cp_wall``). Compressible: farfield p, T and Mach, rho = p / (R T);
+        without exactly one farfield stream the reference state.
+        """
+        streams = {
+            tuple(b.get(k) for k in ("pressure", "velocity", "mach", "temperature"))
+            for b in data["boundary"].values()
+            if b["type"] == "farfield"
+        }
+        one = streams.pop() if len(streams) == 1 else None
+        if compressible:
+            r, g = model.gas_constant, model.gamma
+            if one is None:
+                return cls(r, 1.0, 1.0, 1.0, 0.5, g, True)
+            p = one[0] / scaling.pressure
+            t = one[3] / scaling.temperature
+            return cls(p, p / (r * t), one[2] * np.sqrt(g * r * t), t, 0.5, g, True)
+        if one is None:
+            return cls(0.0, model.density, 1.0)
+        return cls(one[0] / scaling.pressure, model.density, one[1] / scaling.velocity)
+
+
+def _total_pressure(p, rho, speed, gamma, compressible):
+    if compressible:
+        mach2 = speed**2 * rho / (gamma * p)
+        return p * (1.0 + 0.5 * (gamma - 1.0) * mach2) ** (gamma / (gamma - 1.0))
+    return p + 0.5 * rho * speed**2
+
+
+class FieldContext:
+    """State a field is computed from; wall quantities and gradients once."""
+
+    def __init__(
+        self, problem, w, scaling, monitor=None, cell_residual=None, freestream=None
+    ):
         self.problem, self.w, self.scaling = problem, np.asarray(w), scaling
         self.monitor = monitor
         self.cell_residual = cell_residual
+        self.freestream = freestream
         self._wall = None
+        self._gradient = None
+
+    def gradient(self):
+        """Least-squares cell gradients (n_cells, n_var, 2), non-dimensional."""
+        if self._gradient is None:
+            self._gradient = self.problem.gradient(self.w)
+        return self._gradient
+
+    def velocity_gradient(self):
+        """(du/dx, du/dy, dv/dx, dv/dy) per cell, non-dimensional."""
+        g = self.gradient()
+        return g[:, 1, 0], g[:, 1, 1], g[:, 2, 0], g[:, 2, 1]
+
+    def density_nd(self):
+        """Density per cell, non-dimensional."""
+        m = self.problem.model
+        if self.problem.compressible:
+            return self.w[:, 0] / (m.gas_constant * self.w[:, 3])
+        return np.full(self.w.shape[0], m.density)
+
+    def total_pressure_nd(self):
+        """Total pressure per cell, non-dimensional (as :class:`Freestream`)."""
+        speed = np.hypot(self.w[:, 1], self.w[:, 2])
+        gamma = getattr(self.problem.model, "gamma", 1.4)
+        return _total_pressure(
+            self.w[:, 0], self.density_nd(), speed, gamma, self.problem.compressible
+        )
 
     @property
     def nu_si(self):
@@ -149,7 +240,58 @@ def _mach(c):
 
 
 def _vorticity(c):
-    return c.problem.vorticity(c.w) * c.scaling.velocity / c.scaling.length
+    return (
+        c.problem.vorticity(c.w, c.gradient()) * c.scaling.velocity / c.scaling.length
+    )
+
+
+def _q_criterion(c):
+    # Q = (|Omega|^2 - |S|^2) / 2 with the full strain (dilatation included),
+    # Frobenius norms; in 2D Omega_12 = (du/dy - dv/dx) / 2.
+    ux, uy, vx, vy = c.velocity_gradient()
+    omega2 = 0.5 * (uy - vx) ** 2
+    strain2 = ux**2 + vy**2 + 0.5 * (uy + vx) ** 2
+    return 0.5 * (omega2 - strain2) * (c.scaling.velocity / c.scaling.length) ** 2
+
+
+def _strain_rate(c):
+    ux, uy, vx, vy = c.velocity_gradient()
+    s = np.sqrt(2.0 * (ux**2 + vy**2) + (uy + vx) ** 2)
+    return s * c.scaling.velocity / c.scaling.length
+
+
+def _divergence(c):
+    ux, _, _, vy = c.velocity_gradient()
+    return (ux + vy) * c.scaling.velocity / c.scaling.length
+
+
+def _cp(c):
+    f = c.freestream
+    return (c.w[:, 0] - f.pressure) / f.q
+
+
+def _total_pressure_field(c):
+    return c.total_pressure_nd() * c.scaling.pressure
+
+
+def _total_pressure_loss(c):
+    f = c.freestream
+    return (f.total_pressure - c.total_pressure_nd()) / f.q
+
+
+def _entropy(c):
+    # (s - s_inf) / c_v = ln[(p / p_inf) (rho_inf / rho)^gamma]
+    f, g = c.freestream, c.problem.model.gamma
+    return np.log(c.w[:, 0] / f.pressure * (f.density / c.density_nd()) ** g)
+
+
+def _density_gradient(c):
+    # rho = p / (R T): grad rho = grad p / (R T) - p grad T / (R T^2)
+    r = c.problem.model.gas_constant
+    g = c.gradient()
+    p, t = c.w[:, 0], c.w[:, 3]
+    grad = g[:, 0, :] / (r * t)[:, None] - (p / (r * t**2))[:, None] * g[:, 3, :]
+    return np.hypot(grad[:, 0], grad[:, 1]) * c.scaling.density / c.scaling.length
 
 
 def _kinematic_viscosity(c):
@@ -359,12 +501,77 @@ FIELDS = (
         _mach,
     ),
     Field(
+        "cp",
+        "1",
+        "Pressure coefficient (p - p_inf) / q_inf, freestream of the farfield",
+        "always",
+        _always,
+        _cp,
+    ),
+    Field(
+        "total_pressure",
+        "Pa",
+        "p + rho |v|^2 / 2 (compressible: isentropic p (1 + (gamma-1)/2 M^2)^"
+        "(gamma/(gamma-1)))",
+        "always",
+        _always,
+        _total_pressure_field,
+    ),
+    Field(
+        "total_pressure_loss",
+        "1",
+        "(p0_inf - p0) / q_inf: wakes, separation, numerical losses",
+        "always",
+        _always,
+        _total_pressure_loss,
+    ),
+    Field(
+        "entropy",
+        "1",
+        "(s - s_inf) / c_v = ln[(p / p_inf) (rho_inf / rho)^gamma]",
+        "compressible",
+        _compressible,
+        _entropy,
+    ),
+    Field(
+        "density_gradient",
+        "kg/m^4",
+        "|grad rho| (numerical schlieren) from the least-squares gradient",
+        "compressible",
+        _compressible,
+        _density_gradient,
+    ),
+    Field(
         "vorticity",
         "1/s",
         "dv/dx - du/dy from the least-squares gradient (signed)",
         "always",
         _always,
         _vorticity,
+    ),
+    Field(
+        "q_criterion",
+        "1/s^2",
+        "Q = (|Omega|^2 - |S|^2) / 2 from the velocity gradient; Q > 0: vortex",
+        "always",
+        _always,
+        _q_criterion,
+    ),
+    Field(
+        "strain_rate",
+        "1/s",
+        "sqrt(2 S_ij S_ij) from the velocity gradient",
+        "always",
+        _always,
+        _strain_rate,
+    ),
+    Field(
+        "divergence",
+        "1/s",
+        "du/dx + dv/dy (compressible: dilatation; incompressible: mass error)",
+        "always",
+        _always,
+        _divergence,
     ),
     Field(
         "kinematic_viscosity",

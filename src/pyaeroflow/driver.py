@@ -686,14 +686,22 @@ class FlowProblem:
             self.physics.wall_heat_flux(self.model, self.geom, self.bc, jnp.asarray(w))
         )
 
-    def vorticity(self, w):
-        """Signed vorticity dv/dx - du/dy per cell (non-dimensional)."""
+    def gradient(self, w):
+        """Least-squares cell gradients (n_cells, n_var, 2), non-dimensional.
+
+        The boundary-face values are the boundary states of ``w``, as in the
+        residual.
+        """
         w = jnp.asarray(w)
         w_b = self.physics.boundary_state(
             self.bc, self.geom.b_normal, w[self.geom.b_owner]
         )
-        grad = lsq_gradient(self.geom, w, w_b)
-        return np.asarray(grad[:, 2, 0] - grad[:, 1, 1])
+        return np.asarray(lsq_gradient(self.geom, w, w_b))
+
+    def vorticity(self, w, grad=None):
+        """Signed vorticity dv/dx - du/dy per cell (non-dimensional)."""
+        grad = self.gradient(w) if grad is None else grad
+        return grad[:, 2, 0] - grad[:, 1, 1]
 
     def intermittency(self, w):
         """Transition intermittency per cell (ones without a transition model)."""

@@ -26,7 +26,9 @@ TURBULENCE_FORMS = {
 class Opt(NamedTuple):
     """One configuration option."""
 
-    type: str  # "float", "int", "bool", "string", "float2", "string_list", "int_list"
+    # "float", "int", "bool", "string", "float2", "float2_list", "string_list",
+    # "int_list", "table", "table_list"
+    type: str
     default: object
     description: str
     unit: str = ""
@@ -925,6 +927,21 @@ SCHEMA = {
             minimum=0,
         ),
         "history": Opt("bool", True, "Write the convergence history (CSV and .log)"),
+        "probes": Opt(
+            "float2_list",
+            [],
+            "Point probes [[x, y], ...] (m, mesh coordinates after mesh.scale): "
+            "p, u, v (compressible also T) interpolated at each point, one row "
+            "per iteration (steady) or time step (unsteady) in "
+            "<name>.probes.csv; empty = none",
+            "m",
+        ),
+        "probe_interval": Opt(
+            "int",
+            1,
+            "Write a probe row every n iterations (steady) or time steps (unsteady)",
+            minimum=1,
+        ),
         "restart_interval": Opt(
             "int",
             0,
