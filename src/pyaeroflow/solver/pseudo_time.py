@@ -47,6 +47,7 @@ from functools import partial
 from typing import NamedTuple
 
 import numpy as np
+import scipy.sparse as sp
 
 from pyaeroflow.solver.linear import (
     LinearSettings,
@@ -247,6 +248,27 @@ class PseudoTimeSettings:
         Largest number of Newton steps per factorization (``adaptive``).
     pc_lag_growth : float
         GMRES growth factor that triggers a new factorization (``adaptive``).
+    sfd_chi : float or None
+        Selective frequency damping (Akervik et al. 2006; Arnould &
+        Laurendeau 2025): gain chi of the control term chi M (u - u_bar) that
+        is added to the residual, with the diagonal mass ``sfd_weight`` of
+        :func:`solve_steady` (cell area, rho area on the momentum rows) and
+        u_bar a low-pass filter of the iterates. The term enters the
+        Newton-Krylov products exactly and the preconditioner as chi M on the
+        diagonal: it acts like an implicit physical time step 1/chi about
+        u_bar and therefore does not vanish at a large CFL. chi is in units of
+        the convective time (U / L). None = off.
+    sfd_delta : float
+        Filter width Delta in iterations: after every accepted iteration
+        u_bar += (1 - exp(-1 / Delta)) (u - u_bar). Arnould & Laurendeau: 2 T
+        with T the period of the limit cycle in iterations.
+    sfd_reset : int or None
+        Reset u_bar = u every this many iterations after the start (Liguori
+        et al.; Arnould & Laurendeau: larger than Delta). None = never.
+    sfd_start : int
+        SFD is switched on after this iteration (0 = from the start; a larger
+        value lets the limit cycle develop first, "method 1" of Arnould &
+        Laurendeau, which can converge to a different steady solution).
     linear : LinearSettings
         Sparse linear solver of phase 1 and preconditioner of phase 2.
     """
@@ -296,6 +318,10 @@ class PseudoTimeSettings:
     pc_lagging: str = "adaptive"
     pc_lag_max: int = 10
     pc_lag_growth: float = 1.5
+    sfd_chi: float = None
+    sfd_delta: float = 100.0
+    sfd_reset: int = None
+    sfd_start: int = 0
     linear: LinearSettings = LinearSettings()
 
 
@@ -354,6 +380,7 @@ def solve_steady(
     resume=None,
     debug=None,
     linearize_approximate=None,
+    sfd_weight=None,
 ):
     """Drive ``residual(u)`` to zero by implicit pseudo-time stepping.
 
@@ -423,6 +450,13 @@ def solve_steady(
         ``limit_step``), ``trials`` ((factor, RMS, RMS per variable) of every
         line-search evaluation), ``new`` (residual of the last trial),
         ``accepted``, ``step``, ``error`` (failed linear solve).
+    sfd_weight : array, optional
+        Diagonal mass M of the selective frequency damping term (shaped like
+        ``u``; ``settings.sfd_chi``). The steps then solve
+        R(u) + chi M (u - u_bar) = 0 (line search and acceptance judge this
+        residual), while convergence, the history and the callback use R(u)
+        itself. A continuation (``resume`` with ``iteration``) takes over
+        u_bar (``sfd_filter``).
 
     Convergence is measured per equation (D54): every variable's RMS
     residual is divided by the largest value it has had so far (or by
@@ -441,19 +475,44 @@ def solve_steady(
     """
     s = settings or PseudoTimeSettings()
     u = np.array(u0, dtype=float)
+    resume = resume or {}
+    it0 = int(resume.get("iteration", 0))
+    # Selective frequency damping: chi M and the filtered state (None = off).
+    sfd_use = s.sfd_chi is not None and s.sfd_chi > 0.0 and sfd_weight is not None
+    sfd = {"bar": None, "since": 0}
+    if sfd_use:
+        sfd_chim = float(s.sfd_chi) * np.broadcast_to(
+            np.asarray(sfd_weight, dtype=float), u.shape
+        )
+        sfd_diag = sp.diags(sfd_chim.ravel())
+        sfd_relax = 1.0 - np.exp(-1.0 / max(float(s.sfd_delta), 1.0e-12))
+        if it0 and resume.get("sfd_filter") is not None:
+            sfd["bar"] = np.array(resume["sfd_filter"], dtype=float)
+            sfd["since"] = int(resume.get("sfd_since", 0))
+
+    def sfd_term(u):
+        return sfd_chim * (u - sfd["bar"])
 
     def res(u, it):
         with timers.section("residual"):
             if residual_startup is not None and it <= s.first_order_iterations:
-                return np.asarray(residual_startup(u))
-            return np.asarray(residual(u))
+                r = np.asarray(residual_startup(u))
+            else:
+                r = np.asarray(residual(u))
+        if sfd["bar"] is not None:
+            r = r + sfd_term(u)
+        return r
 
-    resume = resume or {}
-    it0 = int(resume.get("iteration", 0))
+    def steady(r, u):
+        """R(u) from the residual the steps work with (without the SFD term)."""
+        return r - sfd_term(u) if sfd["bar"] is not None else r
+
     r = res(u, it0 + 1)
     tiny = np.finfo(float).tiny
     scale = np.maximum(
-        rms_per_variable(r) if reference_norm is None else np.asarray(reference_norm),
+        rms_per_variable(steady(r, u))
+        if reference_norm is None
+        else np.asarray(reference_norm),
         tiny,
     )
     if "scale" in resume and it0:
@@ -469,7 +528,7 @@ def solve_steady(
         return rms(r if cols is None else np.asarray(r)[:, cols])
 
     norm_abs = merit(r)
-    norm = measure(r)
+    norm = measure(steady(r, u))
     target = 10.0 ** (-s.residual_drop)
 
     def done(norm, norm_abs):
@@ -483,16 +542,16 @@ def solve_steady(
     eta = float(resume.get("eta", s.nk_linear_tolerance))
     hist = {
         "iteration": [it0],
-        "residual": [norm_abs],
+        "residual": [merit(steady(r, u))],
         "measure": [norm],
-        "residuals": [rms_per_variable(r)],
+        "residuals": [rms_per_variable(steady(r, u))],
         "cfl": [cfl],
         "accepted": [True],
         "newton_krylov": [False],
         "linear_iterations": [0],
         "step_factor": [1.0],
     }
-    converged = done(norm, norm_abs)
+    converged = done(norm, merit(steady(r, u)))
     # CFL cap of the Newton-Krylov phase, adapted to the GMRES effort: the
     # first-order preconditioner degrades as the pseudo-time term vanishes,
     # so expensive linear solves lower the cap and cheap ones raise it.
@@ -538,6 +597,11 @@ def solve_steady(
             "source_active": source_active,
             "source_level": source_level,
             "approximate_products": approx_on,
+            **(
+                {"sfd_filter": sfd["bar"].copy(), "sfd_since": sfd["since"]}
+                if sfd["bar"] is not None
+                else {}
+            ),
         }
 
     state["it"] = it0
@@ -545,7 +609,7 @@ def solve_steady(
     if info is not None:
         info["solver_state"] = snapshot
         # The residual array of the last accepted iteration (field output).
-        info["cell_residual"] = lambda: r
+        info["cell_residual"] = lambda: steady(r, u)
     if callback is not None:
         if info is not None:
             info["measure"] = norm
@@ -565,6 +629,10 @@ def solve_steady(
             break
         info = getattr(callback, "info", None)
         dbg = {"it": it, "cfl": cfl} if debug is not None else None
+        if sfd_use and sfd["bar"] is None and it > s.sfd_start:
+            # Switch SFD on: u_bar = u, so the residual is unchanged.
+            sfd["bar"], sfd["since"] = u.copy(), 0
+            _note(callback, "SFD on")
         if info is not None and info.pop("residual_changed", False):
             # The callback changed the residual operator (limiter frozen or
             # released): the reference for acceptance and convergence is the
@@ -575,8 +643,8 @@ def solve_steady(
             norm_abs = merit(r)
             if dbg is not None:
                 dbg["re_evaluated"] = (before, norm_abs)
-            scale = np.maximum(scale, rms_per_variable(r))
-            norm = measure(r)
+            scale = np.maximum(scale, rms_per_variable(steady(r, u)))
+            norm = measure(steady(r, u))
         startup = residual_startup is not None and it <= s.first_order_iterations
         if (
             s.first_order_iterations
@@ -585,8 +653,8 @@ def solve_steady(
         ):
             r = res(u, it)  # switch to the full residual
             norm_abs = merit(r)
-            scale = np.maximum(scale, rms_per_variable(r))
-            norm = measure(r)
+            scale = np.maximum(scale, rms_per_variable(steady(r, u)))
+            norm = measure(steady(r, u))
         by_iteration = s.nk_switch_iteration is not None and it > s.nk_switch_iteration
         immediate = s.nk_switch_residual_drop <= 0.0  # dual-time inner iterations
         nk_on = nk_on or immediate or norm <= nk_threshold or by_iteration
@@ -626,6 +694,8 @@ def solve_steady(
             if not reuse:
                 with timers.section("assemble matrix"):
                     matrix = jacobian(u) + t_matrix
+                    if sfd["bar"] is not None:
+                        matrix = matrix + sfd_diag
                 with timers.section("factorize"):
                     lin = factorize(matrix, s.linear)
                 del matrix
@@ -644,6 +714,8 @@ def solve_steady(
                         product = linearize(u)
                 else:
                     product = partial(jvp, u)
+                if sfd["bar"] is not None:
+                    product = _with_diagonal(product, sfd_chim)
                 tolerance = eta if s.nk_forcing else s.nk_linear_tolerance
                 operator = _newton_operator(t_matrix, product, u.shape)
                 precondition = _timed("preconditioner", lin.precondition)
@@ -681,6 +753,8 @@ def solve_steady(
                 # new matrix only has a larger diagonal).
                 with timers.section("assemble matrix"):
                     matrix = jacobian(u) + t_matrix
+                    if sfd["bar"] is not None:
+                        matrix = matrix + sfd_diag
                 with timers.section("direct solve"):
                     du, lin_its = solve_matrix_free(
                         matrix.dot,
@@ -831,10 +905,24 @@ def solve_steady(
                 eta = min(s.nk_forcing_max, max(s.nk_linear_tolerance, eta_new))
                 eta_prev = eta
             u, r, norm_abs = u_new, r_new, abs_new
+            if sfd["bar"] is not None:
+                # Filter step (exact for a frozen u), or the periodic reset;
+                # the residual of the steps changes with u_bar.
+                r_steady = steady(r, u)
+                sfd["since"] += 1
+                if s.sfd_reset is not None and sfd["since"] % s.sfd_reset == 0:
+                    sfd["bar"] = u.copy()
+                    _note(callback, "SFD reset")
+                else:
+                    sfd["bar"] = sfd["bar"] + sfd_relax * (u - sfd["bar"])
+                r = r_steady + sfd_term(u)
+                norm_abs = merit(r)
+            else:
+                r_steady = r
             # Peaks of the per-variable residuals set the scales (D54).
-            scale = np.maximum(scale, rms_per_variable(r))
-            norm = measure(r)
-            converged = done(norm, norm_abs)
+            scale = np.maximum(scale, rms_per_variable(r_steady))
+            norm = measure(r_steady)
+            converged = done(norm, merit(r_steady))
             fails_in_row, retry_pc = 0, False
         else:
             cfl *= s.cut_factor
@@ -878,9 +966,10 @@ def solve_steady(
             if info is not None and was_active != source_active:
                 note = "source dt limit " + ("armed" if source_active else "released")
                 info["note"] = f"{info['note']}, {note}" if info.get("note") else note
-        hist["residual"].append(norm_abs)
+        r_steady = steady(r, u)
+        hist["residual"].append(merit(r_steady))
         hist["measure"].append(norm)
-        hist["residuals"].append(rms_per_variable(r))
+        hist["residuals"].append(rms_per_variable(r_steady))
         if callback is not None:
             info = getattr(callback, "info", None)
             if info is not None:
@@ -971,6 +1060,15 @@ def _variable_scaling(operator, precondition, u):
         return full * y
 
     return apply, pre, unscale
+
+
+def _with_diagonal(product, diagonal):
+    """Return du -> product(du) + diagonal * du (the SFD term of the Jacobian)."""
+
+    def apply(du):
+        return np.asarray(product(du)) + diagonal * du
+
+    return apply
 
 
 def _newton_operator(t_matrix, product, shape):

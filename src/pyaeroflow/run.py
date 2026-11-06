@@ -1322,6 +1322,15 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     vortex = None
     if solver["method"] == "implicit":
         settings = _pseudo_time_settings(cfg)
+        if solver["sfd"]["chi"]:
+            # chi in 1/s -> per convective time unit L / U of the solver
+            settings = dataclasses.replace(
+                settings,
+                sfd_chi=solver["sfd"]["chi"] * scaling.length / scaling.velocity,
+                sfd_delta=solver["sfd"]["delta"],
+                sfd_reset=solver["sfd"]["reset_interval"],
+                sfd_start=solver["sfd"]["start_iteration"],
+            )
         if (
             solver["line_search_merit"] == "no_transition"
             and problem.model.transition == "lm"

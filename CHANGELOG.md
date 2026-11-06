@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased – selective frequency damping (Phase C topic 2)
+
+- New opt-in `solver.sfd = { chi, delta, reset_interval, start_iteration }`
+  (off by default, no change to any default run): selective frequency
+  damping (Åkervik et al. 2006; Arnould & Laurendeau 2025, J. Aircraft) for
+  steady runs whose pseudo-time iteration ends in a limit cycle. The term
+  χ M (u − ū) is part of the implicit system (exact in the Newton-Krylov
+  products, χM on the preconditioner diagonal), ū is an exponential filter
+  of the iterates with width Δ iterations, optionally reset every r
+  iterations; convergence and the log use the undamped residual. Restart
+  continuations keep ū; polar angles start with ū = u.
+
 ## 1.4.0 – Newton cost (Phase B of the solver roadmap, 2026-11-05)
 
 Changed defaults (the 1.3 behaviour stays reachable, see below). A full

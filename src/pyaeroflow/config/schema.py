@@ -509,6 +509,51 @@ SCHEMA = {
                 minimum=1.0,
             ),
         },
+        "sfd": {
+            "chi": Opt(
+                "float",
+                None,
+                "Selective frequency damping (Akervik et al. 2006; Arnould & "
+                "Laurendeau 2025), steady implicit runs: gain chi of the control "
+                "term chi M (u - u_bar) added to the residual, M the cell mass "
+                "(area; rho area on u, v), u_bar a low-pass filter of the "
+                "iterates. Damps a limit cycle of the pseudo-time iteration so "
+                "that it converges to the (possibly unstable) steady solution; "
+                "at convergence u = u_bar and the term vanishes. The term acts "
+                "like an implicit physical time step 1/chi about u_bar and is "
+                "part of the Newton system at any CFL. Start with 1/(2 T) for T "
+                "the period of a time-accurate oscillation, or about U/L. "
+                "none = off",
+                unit="1/s",
+                minimum=0.0,
+            ),
+            "delta": Opt(
+                "float",
+                100.0,
+                "Filter width Delta in iterations: u_bar += (1 - exp(-1/Delta)) "
+                "(u - u_bar) after every accepted iteration; Arnould & "
+                "Laurendeau use 2 T with T the period of the limit cycle in "
+                "iterations (from the CL history)",
+                minimum=1.0,
+            ),
+            "reset_interval": Opt(
+                "int",
+                None,
+                "Reset u_bar = u every this many iterations after SFD starts "
+                "(the filter forgets the early iterates; Arnould & Laurendeau: "
+                "larger than delta). none = never",
+                minimum=1,
+            ),
+            "start_iteration": Opt(
+                "int",
+                0,
+                "Switch SFD on after this iteration of the run (0 = from the "
+                "start). Starting after the limit cycle has formed can converge "
+                "to a different steady solution than starting at once (Arnould "
+                "& Laurendeau 2025)",
+                minimum=0,
+            ),
+        },
         "refactor_interval": Opt(
             "int",
             3,

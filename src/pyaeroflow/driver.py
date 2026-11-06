@@ -1146,6 +1146,7 @@ class FlowProblem:
             ),
             resume=resume,
             debug=debug,
+            sfd_weight=self.sfd_weight(),
         )
         return result._replace(state={**result.state, **driver_state()})
 
@@ -1372,6 +1373,18 @@ class FlowProblem:
         rho = self.model.density
         diag = [0.0, rho, rho] + [1.0] * (self.model.n_var - 3)
         return area[:, None] * np.array(diag)
+
+    def sfd_weight(self):
+        """Diagonal mass of the selective frequency damping term.
+
+        The dual-time mass (:meth:`mass`: 0 on p, rho * area on u, v, area on
+        the turbulence variables); compressible flow: area on every
+        conservative variable.
+        """
+        if self.compressible:
+            area = np.asarray(self.geom.area)
+            return area[:, None] * np.ones(self.model.n_var)
+        return self.mass()
 
     def solve_unsteady(
         self,
