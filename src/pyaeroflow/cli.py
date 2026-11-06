@@ -1,4 +1,4 @@
-"""Command line: run, check, polar, fields, init-case, check-mesh, clean, ..."""
+"""Command line: run, check, polar, fields, init-case, check-mesh, clean, plot, ..."""
 
 import argparse
 import sys
@@ -97,6 +97,9 @@ def main(argv=None):
         help="everything above plus resolved configuration and polar CSV",
     )
     clean.add_argument("--yes", action="store_true", help="delete (default: only list)")
+    from pyaeroflow.plotting.cli import add_parser as add_plot
+
+    add_plot(sub)
     args = parser.parse_args(argv)
 
     try:
@@ -129,6 +132,10 @@ def main(argv=None):
             return 0
         if args.command == "clean":
             return _clean(args)
+        if args.command == "plot":
+            from pyaeroflow.plotting.cli import run as run_plot
+
+            return run_plot(args)
         if args.command == "polar":
             from pyaeroflow.run import run_polar
 
@@ -141,7 +148,7 @@ def main(argv=None):
     except ConfigError as exc:
         print(exc, file=sys.stderr)
         return 1
-    except (OSError, ValueError, MeshError) as exc:
+    except (OSError, ValueError, MeshError, ImportError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
