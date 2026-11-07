@@ -3,8 +3,7 @@
 2D unstructured cell-centred finite-volume Navier–Stokes/RANS solver in
 JAX, developed as a companion to
 [PyAero](https://github.com/chiefenne/PyAero).
-Command and package: `pyaeroflow`. Formerly named *aerojax* (renamed in 0.8;
-not related to other projects of that name).
+Command and package: `pyaeroflow`.
 
 **Status:** 1.1. Steady and unsteady incompressible laminar, inviscid and
 RANS flow (Spalart–Allmaras SA-neg and k-ω SST, artificial-compressibility formulation) with the
