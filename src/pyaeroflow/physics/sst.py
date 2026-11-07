@@ -67,14 +67,22 @@ def blending(k, omega, nu, distance, k_grad_omega):
     return f1, f2
 
 
-def zeta(omega, strain, f2):
-    """max(omega, S F2 / a1): nu_t = k / zeta."""
-    return jnp.maximum(omega, strain * f2 / A1)
+def zeta(omega, strain, f2, a1=None):
+    """max(omega, S F2 / a1): nu_t = k / zeta.
+
+    ``a1`` (per cell) replaces the Bradshaw coefficient in the S F2 branch only
+    (the separation sensor of :mod:`pyaeroflow.physics.separation`, nu_t =
+    a1' k / (S F2) where a1 omega <= S F2); the switch between the branches
+    keeps the standard a1.
+    """
+    if a1 is None:
+        return jnp.maximum(omega, strain * f2 / A1)
+    return jnp.where(omega > strain * f2 / A1, omega, strain * f2 / a1)
 
 
-def eddy_viscosity(k, omega, strain, f2):
+def eddy_viscosity(k, omega, strain, f2, a1=None):
     """nu_t = a1 k / max(a1 omega, S F2), zero for k <= 0."""
-    return jnp.maximum(k, 0.0) / zeta(omega, strain, f2)
+    return jnp.maximum(k, 0.0) / zeta(omega, strain, f2, a1)
 
 
 def sources(
@@ -88,6 +96,7 @@ def sources(
     gamma_eff=None,
     divergence=None,
     gamma_smooth=0.0,
+    a1=None,
 ):
     """Return the sources per unit volume (s_k, s_omega) of SST-2003m.
 
@@ -108,9 +117,12 @@ def sources(
     its -2/3 rho k delta_ij part, P_k = nu_t S^2 - 2/3 k div v, and
     P_omega = gamma P_k / nu_t, i.e.
     S^2 - 2/3 zeta div v in place of S^2, both before the limiter.
+
+    ``a1`` (per cell, optional): coefficient a1' of the separation sensor in
+    nu_t (see :func:`zeta`); P_k and P_omega follow through nu_t and zeta.
     """
     k_pos = jnp.maximum(k, 0.0)
-    z = zeta(omega, strain, f2)
+    z = zeta(omega, strain, f2, a1)
     nu_t = k_pos / z
     s2 = strain**2
     p_k_raw = nu_t * s2

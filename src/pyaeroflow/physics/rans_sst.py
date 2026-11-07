@@ -45,7 +45,7 @@ from pyaeroflow.numerics import (
     reconstruct,
 )
 from pyaeroflow.physics import incompressible as inc
-from pyaeroflow.physics import lm, sst
+from pyaeroflow.physics import lm, separation, sst
 from pyaeroflow.physics.incompressible import (
     FARFIELD,
     TOTAL_PRESSURE_INLET,
@@ -124,10 +124,56 @@ def _omega(w):
     return jnp.maximum(w[:, NW], OMEGA_MIN)
 
 
+def separation_a1(model, geom, w, grad):
+    """a1' per cell of the separation sensor, or None when it is off.
+
+    The composite criterion uses the transported intermittency (clipped to
+    [0, 1]) with Langtry-Menter and gamma = 1 otherwise.
+    """
+    if model.separation == "none":
+        return None
+    gamma = 1.0
+    if model.transition == "lm":
+        gamma = jnp.clip(w[:, NGL], 0.0, 1.0)
+    return separation.a1_field(
+        w[:, U],
+        w[:, V],
+        grad[:, U : V + 1, :],
+        geom.wall_normal,
+        geom.wall_distance,
+        kinematic_viscosity(model),
+        sst.A1,
+        model.a1_apg,
+        gamma,
+        model.separation_gamma,
+    )
+
+
+@partial(jax.jit, static_argnums=0)
+def separation_fields(model, geom, bc, w):
+    """(lambda_theta, lambda_theta,c, a1') per cell, evaluated whether or not on."""
+    w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
+    grad = lsq_gradient(geom, w, w_b)
+    gamma = jnp.clip(w[:, NGL], 0.0, 1.0) if model.transition == "lm" else 1.0
+    lam, lam_c = separation.sensor(
+        w[:, U],
+        w[:, V],
+        grad[:, U : V + 1, :],
+        geom.wall_normal,
+        geom.wall_distance,
+        kinematic_viscosity(model),
+        gamma,
+        model.separation_gamma,
+    )
+    on = (lam < lam_c) & (model.separation != "none")
+    return lam, lam_c, jnp.where(on, model.a1_apg, sst.A1)
+
+
 def cell_quantities(model, geom, w, grad):
     """Per-cell strain rate, F1, F2, nu_t and grad k . grad omega.
 
-    With Langtry-Menter F1 is max(F1, F3).
+    With Langtry-Menter F1 is max(F1, F3). With the separation sensor nu_t
+    uses a1' (:func:`separation_a1`).
     """
     nu = kinematic_viscosity(model)
     k = jnp.maximum(w[:, NK], 0.0)
@@ -137,7 +183,7 @@ def cell_quantities(model, geom, w, grad):
     f1, f2 = sst.blending(k, omega, nu, geom.wall_distance, kgw)
     if model.transition == "lm":
         f1 = jnp.maximum(f1, lm.blending_f3(k, nu, geom.wall_distance))
-    nu_t = sst.eddy_viscosity(k, omega, strain, f2)
+    nu_t = sst.eddy_viscosity(k, omega, strain, f2, separation_a1(model, geom, w, grad))
     return strain, f1, f2, nu_t, kgw
 
 
@@ -210,6 +256,7 @@ def limiter(model, geom, bc, w):
 
 _cell_quantities_remat = jax.checkpoint(cell_quantities, static_argnums=(0,))
 _sst_sources_remat = jax.checkpoint(sst.sources, static_argnums=(9,))
+_separation_a1_remat = jax.checkpoint(separation_a1, static_argnums=(0,))
 
 
 def _lm_sources_remat(*args, positive, smooth=0.0):
@@ -298,6 +345,7 @@ def residual(model, geom, bc, w, order, beta2, psi=None, gamma=None):
         g_eff,
         None,
         model.lm_jacobian_smoothing if model.transition == "lm" else 0.0,
+        _separation_a1_remat(model, geom, w, grad),
     )
     r = r.at[:, NK].add(-geom.area * s_k)
     r = r.at[:, NW].add(-geom.area * s_w)
@@ -465,19 +513,31 @@ def source_jacobian(model, geom, bc, w):
     nu = kinematic_viscosity(model)
     scale = _row_scale(model)
     lm_on = model.transition == "lm"
+    a1p = separation_a1(model, geom, w, grad)
+    a1p = jnp.full(strain.shape, sst.A1) if a1p is None else a1p
 
-    def cell(t, s, a, b, c, sw, vo, d, sp, dd):
+    def cell(t, s, a, b, c, sw, vo, d, sp, dd, a1):
         k, om = t[0], jnp.maximum(t[1], OMEGA_MIN)
         g_eff, extra = None, []
         if lm_on:
             largs = (t[2], t[3], jnp.maximum(k, 0.0), om, nu, s, vo, d, sp, dd)
             g_eff = lm.effective_intermittency(*largs[:9])
             extra = list(lm.sources(*largs))
-        s_k, s_w = sst.sources(k, om, s, a, b, c, sw, g_eff)
+        s_k, s_w = sst.sources(k, om, s, a, b, c, sw, g_eff, a1=a1)
         return -jnp.stack([s_k, s_w] + extra) * scale
 
     jac = jax.vmap(jax.jacfwd(cell))(
-        w[:, NK:], strain, f1, f2, kgw, switch, vort, geom.wall_distance, speed, du_ds
+        w[:, NK:],
+        strain,
+        f1,
+        f2,
+        kgw,
+        switch,
+        vort,
+        geom.wall_distance,
+        speed,
+        du_ds,
+        a1p,
     )
     return geom.area[:, None, None] * jac
 

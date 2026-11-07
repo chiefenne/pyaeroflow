@@ -346,6 +346,18 @@ def _blending_f1(c):
     return c.problem.blending_f1(c.w)
 
 
+def _lambda_theta(c):
+    return c.problem.separation_fields(c.w)[0]
+
+
+def _lambda_theta_critical(c):
+    return c.problem.separation_fields(c.w)[1]
+
+
+def _a1_effective(c):
+    return c.problem.separation_fields(c.w)[2]
+
+
 def _wall_distance(c):
     return np.asarray(c.problem.geom.wall_distance) * c.scaling.length
 
@@ -686,6 +698,34 @@ FIELDS = (
         "rans with transition.model = lm",
         _lm,
         _effective_intermittency,
+    ),
+    Field(
+        "lambda_theta",
+        "1",
+        "Local pressure-gradient parameter lambda_theta = clip(-7.57e-3 d^2/nu "
+        "d(u.n)/dn + 0.0128, -1, 1) of the separation sensor (Griffin et al., "
+        "2026); evaluated whether or not physics.separation is on",
+        "rans with turbulence = sst",
+        _sst,
+        _lambda_theta,
+    ),
+    Field(
+        "lambda_theta_critical",
+        "1",
+        "Critical value lambda_theta,c = (1 - gamma)(-0.0681) + gamma Gamma "
+        "Re_theta^(3/4) of the separation sensor (gamma = 1 without Langtry-Menter)",
+        "rans with turbulence = sst",
+        _sst,
+        _lambda_theta_critical,
+    ),
+    Field(
+        "a1_effective",
+        "1",
+        "Coefficient a1' of the SST eddy viscosity: a1,APG (0.275) where the "
+        "separation sensor is active (lambda_theta < lambda_theta,c), else 0.31",
+        "rans with turbulence = sst",
+        _sst,
+        _a1_effective,
     ),
     Field(
         "residual_p",

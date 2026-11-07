@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- SST separation sensor (L5): `physics.separation.model = "lambda-theta"`
+  (Griffin et al. 2026) lowers a1 in the SST eddy viscosity near separation
+  to bring stall onset forward; incompressible and compressible, off by
+  default. VTU fields `lambda_theta`, `lambda_theta_critical`, `a1_effective`.
+
 ## 1.5.0 – post-processing and the compressible solver (2026-11-07)
 
 First release with the compressible solver (the entry "compressible Euler,

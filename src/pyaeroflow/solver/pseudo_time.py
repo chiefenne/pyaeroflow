@@ -603,6 +603,7 @@ def solve_steady(
             else:
                 t_matrix = time_term(u, cfl)
         accepted, lin_its, step, linear_failed = False, 0, 1.0, False
+        unsteady_now = False  # set below; a failed linear solve skips that
         try:
             if adaptive_pc and use_nk:
                 reuse = lin is not None and (

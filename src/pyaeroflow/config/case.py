@@ -501,6 +501,17 @@ def _consistency(data, explicit, problems, notices, path):
         notices.append(
             "physics.transition.critical_amplification ignored: model = none"
         )
+    sep = physics["separation"]
+    if sep["model"] != "none":
+        if not (rans and physics["turbulence"] == "sst"):
+            problems.append(
+                "physics.separation.model = lambda-theta needs physics.model = rans "
+                "with turbulence = sst"
+            )
+    else:
+        for key in ("a1_apg", "gamma"):
+            if f"physics.separation.{key}" in explicit:
+                notices.append(f"physics.separation.{key} ignored: model = none")
     if rans and physics["turbulence"] != "sst" and tr["model"] == "lm":
         problems.append("physics.transition.model = lm needs turbulence = sst")
     if rans and physics["turbulence"] == "sst":

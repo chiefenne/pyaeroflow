@@ -53,7 +53,7 @@ from pyaeroflow.numerics import (
     lsq_gradient,
 )
 from pyaeroflow.physics import compressible as comp
-from pyaeroflow.physics import sst
+from pyaeroflow.physics import separation, sst
 from pyaeroflow.physics.compressible import (
     FARFIELD,
     TOTAL_PRESSURE_INLET,
@@ -130,8 +130,50 @@ def _omega(w):
     return jnp.maximum(w[:, NW], OMEGA_MIN)
 
 
+def separation_a1(model, geom, w, grad):
+    """a1' per cell of the separation sensor (fully turbulent), or None when off."""
+    if model.separation == "none":
+        return None
+    nu = comp.laminar_viscosity(model, w[:, T]) / comp.density(model.gas_constant, w)
+    return separation.a1_field(
+        w[:, U],
+        w[:, V],
+        grad[:, U : V + 1, :],
+        geom.wall_normal,
+        geom.wall_distance,
+        nu,
+        sst.A1,
+        model.a1_apg,
+        1.0,
+        model.separation_gamma,
+    )
+
+
+@partial(jax.jit, static_argnums=0)
+def separation_fields(model, geom, bc, w):
+    """(lambda_theta, lambda_theta,c, a1') per cell, evaluated whether or not on."""
+    w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
+    grad = lsq_gradient(geom, w, w_b)
+    nu = comp.laminar_viscosity(model, w[:, T]) / comp.density(model.gas_constant, w)
+    lam, lam_c = separation.sensor(
+        w[:, U],
+        w[:, V],
+        grad[:, U : V + 1, :],
+        geom.wall_normal,
+        geom.wall_distance,
+        nu,
+        1.0,
+        model.separation_gamma,
+    )
+    on = (lam < lam_c) & (model.separation != "none")
+    return lam, lam_c, jnp.where(on, model.a1_apg, sst.A1)
+
+
 def cell_quantities(model, geom, w, grad):
-    """Per-cell strain rate, F1, F2, kinematic nu_t, grad k . grad omega, rho, mu."""
+    """Per-cell strain rate, F1, F2, kinematic nu_t, grad k . grad omega, rho, mu.
+
+    With the separation sensor nu_t uses a1' (:func:`separation_a1`).
+    """
     rho = comp.density(model.gas_constant, w)
     mu = comp.laminar_viscosity(model, w[:, T])
     k = jnp.maximum(w[:, NK], 0.0)
@@ -139,7 +181,8 @@ def cell_quantities(model, geom, w, grad):
     strain = strain_rate(grad[:, U : V + 1, :])
     kgw = jnp.sum(grad[:, NK, :] * grad[:, NW, :], axis=1)
     f1, f2 = sst.blending(k, omega, mu / rho, geom.wall_distance, kgw)
-    nu_t = sst.eddy_viscosity(k, omega, strain, f2)
+    a1p = separation_a1(model, geom, w, grad)
+    nu_t = sst.eddy_viscosity(k, omega, strain, f2, a1p)
     return strain, f1, f2, nu_t, kgw, rho, mu
 
 
@@ -186,7 +229,15 @@ def _sources(model, geom, w, grad, quantities):
     div = grad[:, U, 0] + grad[:, V, 1]
     switch = 1.0 if geom.production_switch is None else geom.production_switch
     s_k, s_w = sst.sources(
-        w[:, NK], _omega(w), strain, f1, f2, kgw, switch, divergence=div
+        w[:, NK],
+        _omega(w),
+        strain,
+        f1,
+        f2,
+        kgw,
+        switch,
+        divergence=div,
+        a1=separation_a1(model, geom, w, grad),
     )
     return rho * s_k, rho * s_w
 
@@ -388,14 +439,18 @@ def source_jacobian(model, geom, bc, w):
     switch = 1.0 if geom.production_switch is None else geom.production_switch
     switch = jnp.broadcast_to(jnp.asarray(switch, dtype=float), strain.shape)
     scale = _row_scale(model)
+    a1p = separation_a1(model, geom, w, grad)
+    a1p = jnp.full(strain.shape, sst.A1) if a1p is None else a1p
 
-    def cell(t, s, a, b, c, sw, dv, r):
+    def cell(t, s, a, b, c, sw, dv, r, a1):
         s_k, s_w = sst.sources(
-            t[0], jnp.maximum(t[1], OMEGA_MIN), s, a, b, c, sw, divergence=dv
+            t[0], jnp.maximum(t[1], OMEGA_MIN), s, a, b, c, sw, divergence=dv, a1=a1
         )
         return -r * jnp.stack([s_k, s_w]) * scale
 
-    jac = jax.vmap(jax.jacfwd(cell))(w[:, NK:], strain, f1, f2, kgw, switch, div, rho)
+    jac = jax.vmap(jax.jacfwd(cell))(
+        w[:, NK:], strain, f1, f2, kgw, switch, div, rho, a1p
+    )
     return geom.area[:, None, None] * jac
 
 

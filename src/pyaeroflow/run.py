@@ -304,6 +304,9 @@ def setup(config, mesh=None):
             if rans and tr_cfg["model"] == "lm"
             else 0.0
         ),
+        separation=physics["separation"]["model"] if rans else "none",
+        a1_apg=float(physics["separation"]["a1_apg"]),
+        separation_gamma=float(physics["separation"]["gamma"]),
     )
     regions = None
     if rans and physics["transition"]["mode"] == "prescribed":
@@ -437,6 +440,11 @@ def _setup_compressible(config, mesh):
         turbulence_spatial_order=num["turbulence_spatial_order"],
         prandtl_turbulent=fluid["prandtl_turbulent"],
         coupling=cfg["solver"]["turbulence_coupling"],
+        separation=(
+            cfg["physics"]["separation"]["model"] if turb_model == "sst" else "none"
+        ),
+        a1_apg=float(cfg["physics"]["separation"]["a1_apg"]),
+        separation_gamma=float(cfg["physics"]["separation"]["gamma"]),
     )
     turbulence = {}  # reported values per inflow boundary and "initial"
 

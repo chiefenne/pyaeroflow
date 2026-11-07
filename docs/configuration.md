@@ -232,6 +232,14 @@ file (either byte order). Formats 1 and 3 are rejected; export the mesh as
 | `boundary`, `ramp`, `by_alpha` | string, float (m), array of tables | – | Transition locations per angle of attack: `by_alpha = [{ alpha = 0, upper = 0.45, lower = 0.45 }, …]` (deg; metres from the leading edge, XFOIL's `xtr` times the chord), interpolated linearly to the case's angle (`reference.angle_of_attack`, by default the farfield value; end rows held beyond the table) and turned into two `laminar_region` entries on `boundary` with the given `ramp`. Used by `pyaeroflow polar` per angle | D15 |
 | `laminar_region` | array of tables | – | Regions where SA production is switched off, e.g. `[{ boundary = "airfoil", side = "upper", x_max = 0.35 }]`: cells whose nearest wall face belongs to `boundary` (required), optionally only on one `side` (`"upper"`: the fluid lies above the wall, `"lower"`: below) and within `x_min`, `x_max`, `y_min`, `y_max` (m); `ramp` (m) blends the production in linearly over that distance inside each bound instead of a hard cut, which keeps the SA source differentiable at the transition front | D15 |
 
+`[physics.separation]`, only for `model = "rans"` with `turbulence = "sst"` (L5):
+
+| Key | Type | Default | Description | # |
+|-----|------|---------|-------------|---|
+| `model` | `"none"` \| `"lambda-theta"` | `"none"` | Separation correction of the SST eddy viscosity: the pressure-gradient sensor of Griffin et al. (2026) lowers a1 from 0.31 to `a1_apg` in the S·F2 branch of ν_t where the local λθ is below its critical value ([validation §17](validation.md#sec-17)). Fully turbulent criterion; with `transition.model = "lm"` blended with the laminar one by the transported γ. Moves stall to a lower angle of attack; no effect in attached flow. Incompressible and compressible | L5 |
+| `a1_apg` | float | `0.275` | a1,APG of the sensor | L5 |
+| `gamma` | float | `-5e-4` | Γ of the turbulent criterion λθ,c = Γ Re_θ^{3/4} (continuously critical boundary layer) | L5 |
+
 ### `[fluid]`
 
 | Key | Type | Default | Description | # |
@@ -693,6 +701,9 @@ The table is generated from the field registry (`pyaeroflow.io.fields`); a colum
 | `amplification_factor` | 1 | Amplification factor n of SA-AFT | rans with transition.model = aft |  |  |  |  |  |  |  | x |  |  |  |
 | `re_theta_t` | 1 | Transported transition-onset momentum-thickness Reynolds number Re_thetat of Langtry-Menter | rans with transition.model = lm |  |  |  |  |  |  |  |  |  |  | x |
 | `intermittency_effective` | 1 | Effective intermittency max(gamma, gamma_sep) on the SST production (gamma_sep > 1 marks separation-induced transition) | rans with transition.model = lm |  |  |  |  |  |  |  |  |  |  | x |
+| `lambda_theta` | 1 | Local pressure-gradient parameter lambda_theta = clip(-7.57e-3 d^2/nu d(u.n)/dn + 0.0128, -1, 1) of the separation sensor (Griffin et al., 2026); evaluated whether or not physics.separation is on | rans with turbulence = sst |  |  |  |  |  |  |  |  | x | x | x |
+| `lambda_theta_critical` | 1 | Critical value lambda_theta,c = (1 - gamma)(-0.0681) + gamma Gamma Re_theta^(3/4) of the separation sensor (gamma = 1 without Langtry-Menter) | rans with turbulence = sst |  |  |  |  |  |  |  |  | x | x | x |
+| `a1_effective` | 1 | Coefficient a1' of the SST eddy viscosity: a1,APG (0.275) where the separation sensor is active (lambda_theta < lambda_theta,c), else 0.31 | rans with turbulence = sst |  |  |  |  |  |  |  |  | x | x | x |
 | `residual_p` | 1 | Pressure (continuity) residual per cell volume | steady, implicit, incompressible | x |  | x |  | x |  | x | x | x |  | x |
 | `residual_u` | 1 | x-momentum residual per cell volume | steady, implicit, incompressible | x |  | x |  | x |  | x | x | x |  | x |
 | `residual_v` | 1 | y-momentum residual per cell volume | steady, implicit, incompressible | x |  | x |  | x |  | x | x | x |  | x |

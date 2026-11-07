@@ -67,6 +67,32 @@ SCHEMA = {
             "variant) or sst (Menter k-omega SST-2003m, NASA TMR); default sa-neg",
             choices=("sa-neg", "sst"),
         ),
+        "separation": {
+            "model": Opt(
+                "string",
+                "none",
+                "Separation correction of the k-omega SST eddy viscosity "
+                "(turbulence = sst): lambda-theta = pressure-gradient sensor of "
+                "Griffin et al. (2026) that lowers a1 to a1_apg where the local "
+                "lambda_theta is below its critical value (fully turbulent "
+                "criterion; with model = lm blended with the laminar one by gamma). "
+                "Promotes earlier stall; no effect in attached flow",
+                choices=("none", "lambda-theta"),
+            ),
+            "a1_apg": Opt(
+                "float",
+                0.275,
+                "a1,APG of model = lambda-theta (a1 = 0.31 elsewhere)",
+                minimum=0.0,
+            ),
+            "gamma": Opt(
+                "float",
+                -5.0e-4,
+                "Gamma of model = lambda-theta: critical lambda_theta of the "
+                "turbulent boundary layer = Gamma Re_theta^(3/4) (Buri/Allan "
+                "continuously critical theory)",
+            ),
+        },
         "transition": {
             "clip": Opt(
                 "bool",

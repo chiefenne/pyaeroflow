@@ -100,6 +100,7 @@ def solve(
     mach=None,
     low_mach_correction=False,
     convective_flux="roe",
+    separation="none",
 ):
     """Run the turbulent flat plate and evaluate C_f(x) and the drag.
 
@@ -121,6 +122,9 @@ def solve(
     ``turbulence = "sst"`` runs k-omega SST with the freestream ``k_omega`` =
     (k, omega); default the NASA TMR SST values for this case, k = 9e-9 a^2
     at M = 0.2 (k = 2.25e-7 U^2, Tu = 0.039 %) and mu_t / mu = 0.009.
+    ``separation = "lambda-theta"`` switches on the SST separation sensor
+    (:mod:`pyaeroflow.physics.separation`); the zero-pressure-gradient plate
+    must not change.
     """
     u_inf, nu = 1.0, 1.0 / reynolds
     nt_inf = nu_tilde_ratio * nu
@@ -143,6 +147,7 @@ def solve(
             low_mach_correction,
             turbulence,
             convective_flux,
+            separation,
         )
     conditions = {
         "left": {"type": "velocity-inlet", "velocity": (u_inf, 0.0), **turb},
@@ -164,6 +169,7 @@ def solve(
         transition=transition,
         turbulence_intensity=turbulence_intensity,
         critical_amplification=critical_amplification,
+        separation=separation,
     )
     problem = IncompressibleProblem(mesh, model, conditions)
     result = problem.solve(
@@ -185,6 +191,7 @@ def _solve_compressible(
     low_mach_correction,
     turbulence,
     convective_flux="roe",
+    separation="none",
 ):
     r_gas, ff = comp.freestream_conditions(mach)
     conditions = {
@@ -208,6 +215,7 @@ def _solve_compressible(
         limiter="none",  # smooth flow; as the incompressible default
         low_mach_correction=low_mach_correction,
         convective_flux=convective_flux,
+        separation=separation,
     )
     problem = IncompressibleProblem(mesh, model, conditions)
     k_omega = (turb["k"], turb["omega"]) if turbulence == "sst" else None
