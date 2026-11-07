@@ -5,7 +5,7 @@ JAX, developed as a companion to
 [PyAero](https://github.com/chiefenne/PyAero).
 Command and package: `pyaeroflow`.
 
-**Status:** version 1.4.0, with post-processing output unreleased (see the [changelog](CHANGELOG.md)).
+**Status:** version 1.5.0 (see the [changelog](CHANGELOG.md)).
 
 **Incompressible flow** (artificial compressibility, `physics.flow = "incompressible"`)
 - Models: laminar, inviscid (Euler), and RANS with Spalart–Allmaras (SA-neg) or k-ω SST
@@ -21,7 +21,7 @@ Command and package: `pyaeroflow`.
 - Validated on oblique shock, transonic NACA 0012, Mach 0.5 laminar NACA 0012, SA and SST
   ([validation §12–16](docs/validation.md#sec-12))
 
-**Post-processing** (unreleased)
+**Post-processing**
 - Derived VTU fields: Q-criterion, vorticity, cp, total pressure loss, entropy, numerical schlieren
 - Point probes written to CSV
 - `pyaeroflow plot`: convergence logs, wall Cp/Cf, polars and probe spectra, with reference overlays and built-in NASA data ([plotting guide](docs/plotting.md))

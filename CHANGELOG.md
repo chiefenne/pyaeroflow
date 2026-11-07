@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased – post-processing
+## 1.5.0 – post-processing and the compressible solver (2026-11-07)
+
+First release with the compressible solver (the entry "compressible Euler,
+laminar, SA-neg and SST solver" further down) and the new post-processing.
+
 
 - New VTU fields (opt-in via `output.fields`): `cp`, `total_pressure`,
   `total_pressure_loss` (farfield freestream), `q_criterion`, `strain_rate`,
@@ -75,7 +79,7 @@ validation rerun is still to do.
 - Log: `step 0.37` for quadratic under-relaxation, `src-dt N`, `source dt
   limit released/armed`.
 
-## Unreleased – compressible Euler, laminar, SA-neg and SST solver (L1, stages C0–C4)
+## Compressible Euler, laminar, SA-neg and SST solver (L1, stages C0–C4), released in 1.5.0
 
 - SLAU2 as second compressible convective flux (C5, replaces the planned JST):
   `numerics.convective_flux = "slau2"` (Shima and Kitamura 2011, Kitamura and
