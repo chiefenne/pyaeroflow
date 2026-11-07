@@ -5,18 +5,39 @@ JAX, developed as a companion to
 [PyAero](https://github.com/chiefenne/PyAero).
 Command and package: `pyaeroflow`.
 
-**Status:** 1.1. Steady and unsteady incompressible laminar, inviscid and
-RANS flow (Spalart–Allmaras SA-neg and k-ω SST, artificial-compressibility formulation) with the
-transition models BCM, SA-AFT2019b and Langtry–Menter γ-Re_θ, a Newton–Krylov
-solver and BDF2 dual time stepping. Verified and validated against Couette and
-Poiseuille flow, the lid-driven cavity, the DFG cylinder benchmarks, the NASA
-TMR flat plate and NACA 0012, ERCOFTAC T3, the Eppler 387 and the SD7003
-([validation](docs/validation.md)). A density-based compressible solver
-(`physics.flow = "compressible"`) covers the Euler, the
-laminar Navier–Stokes and the SA-neg RANS equations so far; SST follows. Meshes come from PyAero (`.su2`) or Gmsh
-(`.msh`). The 1.0 milestone is recorded in
-[requirements §4a](docs/requirements.md#4a-milestone-10-reached-2026-10-30);
-changes are in the [changelog](CHANGELOG.md).
+**Status:** version 1.4.0, with post-processing output unreleased (see the [changelog](CHANGELOG.md)).
+
+**Incompressible flow** (artificial compressibility, `physics.flow = "incompressible"`)
+- Models: laminar, inviscid (Euler), and RANS with Spalart–Allmaras (SA-neg) or k-ω SST
+- Transition: BCM, SA-AFT2019b and Langtry–Menter γ-Re_θ on SST
+- Steady (Newton–Krylov) and unsteady (BDF2 dual time stepping) solvers
+- Validated against Couette and Poiseuille flow, the lid-driven cavity, DFG cylinder,
+  NASA TMR flat plate and NACA 0012, ERCOFTAC T3, Eppler 387 and SD7003
+  ([validation](docs/validation.md))
+
+**Compressible flow** (density-based, `physics.flow = "compressible"`, steady only)
+- Models: Euler, laminar Navier–Stokes, RANS with SA-neg and k-ω SST
+- Convective flux: SLAU2 by default, Roe optional; MUSCL reconstruction
+- Validated on oblique shock, transonic NACA 0012, Mach 0.5 laminar NACA 0012, SA and SST
+  ([validation §12–16](docs/validation.md#sec-12))
+
+**Post-processing** (unreleased)
+- Derived VTU fields: Q-criterion, vorticity, cp, total pressure loss, entropy, numerical schlieren
+- Point probes written to CSV
+- `pyaeroflow plot`: convergence logs, wall Cp/Cf, polars and probe spectra, with reference overlays and built-in NASA data ([plotting guide](docs/plotting.md))
+
+**Solver and workflow**
+- Control files (`.stop`, `.result_N`) and restart and backup files
+- Meshes from PyAero (`.su2`) or Gmsh (`.msh`); airfoil workflow with `init-case` and `check-mesh`
+- `pyaeroflow run`, `pyaeroflow polar` (angle-of-attack sweeps), and a Python API
+
+**Not yet available**
+- Unsteady compressible flow
+- Vortex correction for compressible farfields
+- Turbulence models beyond SA-neg and SST
+
+The 1.0 milestone is recorded in
+[requirements §4a](docs/requirements.md#4a-milestone-10-reached-2026-10-30).
 
 ![SD7003 at alpha 4 deg, Re = 60 000, SST-2003m-LM2009](docs/figures/lm_sd7003_a4_re60000.png)
 
