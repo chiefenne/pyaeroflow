@@ -3,8 +3,7 @@
 2D unstructured cell-centred finite-volume Navier–Stokes/RANS solver in
 JAX, developed as a companion to
 [PyAero](https://github.com/chiefenne/PyAero).
-Command and package: `pyaeroflow`. Formerly named *aerojax* (renamed in 0.8;
-not related to other projects of that name).
+Command and package: `pyaeroflow`.
 
 **Status:** 1.1. Steady and unsteady incompressible laminar, inviscid and
 RANS flow (Spalart–Allmaras SA-neg and k-ω SST, artificial-compressibility formulation) with the
@@ -88,9 +87,13 @@ Eppler 387, SD7003, and a RAE 2822 mesh for later), described in
 is [docs/configuration.md](docs/configuration.md); the same setup is available
 from Python through `pyaeroflow.driver.IncompressibleProblem`.
 
-`plot_log.py` in the repository root plots a solver `.log` (residuals, solver
-effort, coefficients, differences, four PNG files):
-`python plot_log.py output/case.log`; see its header for the options.
+`pyaeroflow plot` makes PNG figures of a run: the convergence history from the `.log`,
+Cp and Cf along a wall, polars and probe time series and spectra. It can overlay
+reference data, including built-in NASA TMR and NASA TM 4062 data, e.g.
+`pyaeroflow plot output/case.log` or
+`pyaeroflow plot output/case.wall_airfoil.csv --ref builtin:tmr_naca0012_cp_cfl3d_sa:alpha=10`.
+See [docs/plotting.md](docs/plotting.md). It needs `pip install pyaeroflow[plot]`.
+`plot_log.py` in the repository root is kept as a shortcut for `pyaeroflow plot log`.
 
 ## Tests and examples
 

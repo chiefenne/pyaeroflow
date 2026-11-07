@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased – post-processing
+
+- New VTU fields (opt-in via `output.fields`): `cp`, `total_pressure`,
+  `total_pressure_loss` (farfield freestream), `q_criterion`, `strain_rate`,
+  `divergence` (one shared least-squares gradient per file), compressible
+  `entropy` and `density_gradient`.
+- Point probes: `output.probes = [[x, y], ...]`, `output.probe_interval`;
+  p, u, v (compressible also T) per iteration or time step in
+  `<name>.probes.csv`.
+- `pyaeroflow plot` (docs/plotting.md): log, wall Cp/Cf, polar and probe
+  plots with spectra and Strouhal number, reference overlays, built-in NASA
+  TMR and TM 4062 data. `plot_log.py` now calls `pyaeroflow plot log`; its
+  log reader reads the columns by position (empty NK/GMRES cells) and takes
+  the `--no-notes` option.
+
 ## 1.4.0 – Newton cost (Phase B of the solver roadmap, 2026-11-05)
 
 Changed defaults (the 1.3 behaviour stays reachable, see below). A full

@@ -46,10 +46,12 @@ from pyaeroflow.io.fields import (
     FIELDS,
     Capabilities,
     FieldContext,
+    Freestream,
     compute_fields,
     n_columns,
     resolve_fields,
 )
+from pyaeroflow.io.probes import ProbeSampler, ProbeWriter
 from pyaeroflow.mesh import Mesh, read_mesh
 from pyaeroflow.mesh.ordering import order_boundary_faces
 from pyaeroflow.physics import compressible as comp
@@ -732,9 +734,20 @@ class FieldWriter:
     """
 
     def __init__(
-        self, out_dir, name, mesh, scaling, problem, monitor, output, after=0, caps=None
+        self,
+        out_dir,
+        name,
+        mesh,
+        scaling,
+        problem,
+        monitor,
+        output,
+        after=0,
+        caps=None,
+        freestream=None,
     ):
         self.capabilities = caps
+        self.freestream = freestream
         self.out_dir, self.name, self.mesh = out_dir, name, mesh
         self.scaling, self.problem, self.monitor = scaling, problem, monitor
         self.names = list(output["fields"])
@@ -760,7 +773,9 @@ class FieldWriter:
 
     def write(self, path, w, cell_residual=None, names=None):
         """Write the selected fields (or ``names``) of the state ``w``."""
-        ctx = FieldContext(self.problem, w, self.scaling, self.monitor, cell_residual)
+        ctx = FieldContext(
+            self.problem, w, self.scaling, self.monitor, cell_residual, self.freestream
+        )
         write_vtu(path, self.mesh, cell_data=compute_fields(names or self.names, ctx))
 
     def due(self, number, good=True):
@@ -1179,6 +1194,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     control = ControlFiles(out_dir, after or 0)
     for line in control.notices("iteration"):
         log.write(line)
+    probes = _probe_writer(log, cfg, problem, scaling, out_dir, name, False, after)
     log.iteration_header(names, extra_names)
     fields = FieldWriter(
         out_dir,
@@ -1190,6 +1206,9 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
         cfg["output"],
         after=after or 0,
         caps=Capabilities.from_config(cfg),
+        freestream=Freestream.from_config(
+            cfg, scaling, problem.model, problem.compressible
+        ),
     )
     restarts = RestartWriter(
         out_dir,
@@ -1238,6 +1257,8 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
             if diagnose
             else (),
         )
+        if probes and accepted:
+            probes.row(it, w)
         for n in control.due_reloads(it, bool(accepted)):
             change = _apply_reload(
                 log, config, n, "iteration", LIVE_STEADY, out_dir, fields, restarts
@@ -1367,6 +1388,8 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
             callback=callback,
         )
     history.close()
+    if probes:
+        probes.close()
     if debug_log is not None:
         debug_log.close()
     if timing["setup"] is None:  # a restart that is converged already
@@ -1448,6 +1471,29 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     log.table(rows)
     _log_timing(log, log.elapsed - offset)
     return result, coefficients
+
+
+def _probe_writer(log, cfg, problem, scaling, out_dir, name, unsteady, after):
+    """Return the probe CSV writer of ``output.probes`` (None without probes)."""
+    points = cfg["output"]["probes"]
+    if not points:
+        return None
+    sampler = ProbeSampler(problem, points, scaling)
+    every = cfg["output"]["probe_interval"]
+    unit = "time step" if unsteady else "iteration"
+    log.write(
+        f"probes: {len(points)} points ({', '.join(sampler.columns)}) every "
+        f"{every} {unit}{'s' if every > 1 else ''} to {name}.probes.csv"
+    )
+    for line in sampler.describe():
+        log.write(f"  {line}")
+    return ProbeWriter(
+        out_dir / f"{name}.probes.csv",
+        sampler,
+        every,
+        unsteady=unsteady,
+        resume_after=after,
+    )
 
 
 def _control_loop_rows(solver, rans):
@@ -1623,6 +1669,7 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
     control = ControlFiles(out_dir, after or 0)
     for line in control.notices("step"):
         log.write(line)
+    probes = _probe_writer(log, cfg, problem, scaling, out_dir, name, True, after)
     log.step_header(names, ("GMRES",) + tuple((c, 11) for c in coeff_names))
     series = []
     fields = FieldWriter(
@@ -1635,6 +1682,9 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         cfg["output"],
         after=after or 0,
         caps=Capabilities.from_config(cfg),
+        freestream=Freestream.from_config(
+            cfg, scaling, problem.model, problem.compressible
+        ),
     )
     restarts = RestartWriter(
         out_dir,
@@ -1688,6 +1738,8 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
             log.elapsed,
             stats,
         )
+        if probes:
+            probes.row(step, w, t * t_scale)
         for n in control.due_reloads(step, bool(converged)):
             _apply_reload(
                 log, config, n, "step", LIVE_UNSTEADY, out_dir, fields, restarts
@@ -1760,6 +1812,8 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         resume=resume,
     )
     history.close()
+    if probes:
+        probes.close()
     if timing["setup"] is None:  # a restart at the end time already
         timing["setup"] = log.elapsed - offset
 
