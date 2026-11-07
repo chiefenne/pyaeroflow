@@ -150,6 +150,9 @@ class CompressibleModel(NamedTuple):
         1 or 2: convective states of the turbulence equation.
     prandtl_turbulent : float
         Turbulent Prandtl number of the eddy heat flux.
+    separation, a1_apg, separation_gamma :
+        SST separation sensor of Griffin et al. (2026), as in
+        :class:`pyaeroflow.physics.incompressible.IncompressibleModel`.
     pin, transition, coupling :
         Interface of the problem class: no pin, no transition model, the
         mean-flow/turbulence coupling of the first-order Jacobian.
@@ -177,6 +180,9 @@ class CompressibleModel(NamedTuple):
     prandtl_turbulent: float = 0.9
     transition: str = "none"
     coupling: str = "segregated"
+    separation: str = "none"
+    a1_apg: float = 0.275
+    separation_gamma: float = -5.0e-4
 
     @property
     def n_var(self):

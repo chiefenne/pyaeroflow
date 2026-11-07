@@ -1093,6 +1093,44 @@ examples that quote Roe numbers (`naca0012_euler_m05/m08`, `ramp_10deg_m2`,
 `naca0012_laminar_m05`) set `convective_flux = "roe"` explicitly. Not yet
 run with SLAU2: laminar flow; RAE 2822 case 6 files are `examples/cases/rae2822_case6_roe.toml` and `rae2822_case6_slau2.toml` (user runs).
 
+<a id="sec-17"></a>
+## 17. SST separation sensor (L5, SST-λθ)
+
+`physics.separation.model = "lambda-theta"` adds the pressure-gradient sensor of
+Griffin et al. (2026) to k-ω SST. Where the local parameter
+λθ = clip(−7.57·10⁻³ H_L + 0.0128, −1, 1), H_L = d²/ν ∂(u·n)/∂n, is below
+λθ,c = (1 − γ)(−0.0681) + γ Γ Re_θ^{3/4} (Γ = −5·10⁻⁴, Re_θ = d |u_s| / ν, γ = 1
+without a transition model), the Bradshaw coefficient of the limited eddy
+viscosity ν_t = a1 k / max(a1 ω, S F2) becomes a1,APG = 0.275 instead of 0.31 in
+the S F2 branch (the ω production follows through ν_t). The sensor is evaluated
+from the current state and held fixed in the Newton–Krylov linearisation
+(`stop_gradient`): a step switch has no useful derivative. The authors
+calibrated the two constants on the S809 airfoil (Re 2·10⁶) and tested them on
+S814, DU00-w-212, NLF(1)-0416 and NACA 23012 (Re 1.5–4·10⁶); nothing is known
+below Re 10⁶.
+
+Checks so far (unit tests, `tests/unit/test_separation.py`): switch values for
+the turbulent and laminar criteria, ν_t and sources with a1′ = a1 equal the
+standard model, the residual of the zero-pressure-gradient plate is unchanged
+where the sensor is quiet, the Newton–Krylov product with respect to k and ω is
+exact, the compressible SST runs with the sensor. VTU fields `lambda_theta`,
+`lambda_theta_critical` and `a1_effective` show the sensor (available for every
+SST case, with a1′ = 0.31 when the correction is off).
+
+Sandbox regression checks (2026-11-07), sensor on against off: TMR flat plate
+48 × 12 × 48, Re 5·10⁶, SST: C_f(0.97) and C_D identical to 1e-15 (the sensor
+fires in 87 of 2880 cells, all in the branch a1 ω > S F2 where it has no
+effect). NACA 0012 on the 225 × 65 TMR grid (frozen limiter), Re 6·10⁶:
+α = 0° C_D 0.008779 → 0.008773 (−0.07 %); α = 10° C_L 1.06264 → 1.06125
+(−0.13 %), C_D 0.017530 → 0.017493 (−0.2 %). The α = 10° run with the sensor
+stalls its line search at a residual of 10⁻¹⁰ (6.1 orders), the run without
+reaches 6.7 orders in 400 iterations; forces are constant to 5 digits in both.
+
+Validation plan (cases and results are added here when they have been run):
+flat plate (no change), NACA 0012 Re 6·10⁶ through stall against Ladson,
+S809 tripped (the authors' calibration case), then S814 and the transitional
+cases with SST-LM.
+
 ## References
 
 - Ghia, U., Ghia, K. N., Shin, C. T. (1982): High-Re solutions for
@@ -1159,6 +1197,14 @@ need their volume, page or paper number checked.
   engineering applications. AIAA J. 32(8), 1598–1605. SST-2003: Menter, F. R.,
   Kuntz, M., Langtry, R. (2003): Ten years of industrial experience with the
   SST turbulence model. Turbulence, Heat and Mass Transfer 4 †.
+- Griffin, K. P., Lee, B., Vijayakumar, G., Savino, B., Bornhoft, B. J.,
+  Shende, O. B., Whitmore, M. P. (2026): Predicting the onset of airfoil stall
+  in transitional and turbulent flows with a pressure-gradient-based
+  separation model for RANS simulations. arXiv:2610.33268 (preprint). The
+  sensor builds on Menter, F. R., Smirnov, P. E., Liu, T., Avancha, R. (2015):
+  A one-equation local correlation-based transition model. Flow, Turbulence
+  and Combustion 95, 583–619, and on the continuously critical turbulent
+  boundary layer of Buri (1931) and Allan (1963).
 - Langtry–Menter intermittency source and F_turb: Menter, F. R., Langtry, R.
   B., Völker, S. (2006): Transition modelling for general purpose CFD codes.
   Flow, Turbulence and Combustion 77, 277–303.

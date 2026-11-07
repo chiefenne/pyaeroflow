@@ -10,6 +10,7 @@ Command and package: `pyaeroflow`.
 **Incompressible flow** (artificial compressibility, `physics.flow = "incompressible"`)
 - Models: laminar, inviscid (Euler), and RANS with Spalart–Allmaras (SA-neg) or k-ω SST
 - Transition: BCM, SA-AFT2019b and Langtry–Menter γ-Re_θ on SST
+- Optional SST separation sensor (`physics.separation`, Griffin et al. 2026) for stall onset; under validation
 - Steady (Newton–Krylov) and unsteady (BDF2 dual time stepping) solvers
 - Validated against Couette and Poiseuille flow, the lid-driven cavity, DFG cylinder,
   NASA TMR flat plate and NACA 0012, ERCOFTAC T3, Eppler 387 and SD7003

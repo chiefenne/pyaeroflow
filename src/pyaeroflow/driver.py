@@ -259,7 +259,7 @@ class FlowProblem:
                     self._production_switch(mesh, regular, laminar_regions or [])
                 ),
             )
-            if model.transition == "aft":
+            if model.transition == "aft" or model.turbulence == "sst":
                 self.geom = self.geom._replace(
                     wall_normal=jnp.asarray(mesh_wall_normal(mesh, nearest))
                 )
@@ -781,6 +781,13 @@ class FlowProblem:
                 )
             )
         return np.asarray(self.physics.eddy_viscosity(self.model, jnp.asarray(w)))
+
+    def separation_fields(self, w):
+        """(lambda_theta, lambda_theta_c, a1prime) per cell (SST sensor)."""
+        out = self.physics.separation_fields(
+            self.model, self.geom, self.bc, jnp.asarray(w)
+        )
+        return tuple(np.asarray(x) for x in out)
 
     def blending_f1(self, w):
         """Menter's first SST blending function per cell (SST only)."""

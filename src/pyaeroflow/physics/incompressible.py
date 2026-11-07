@@ -121,6 +121,13 @@ class IncompressibleModel(NamedTuple):
         Langtry-Menter: width of the smooth switches in the derivatives of
         the sources (``smooth`` of :func:`pyaeroflow.physics.lm.sources`);
         0 is the exact linearization. The residual is the same.
+    separation : {"none", "lambda-theta"}
+        SST: pressure-gradient separation sensor of Griffin et al. (2026),
+        :mod:`pyaeroflow.physics.separation`; lowers a1 to ``a1_apg`` where the
+        local lambda_theta is below its critical value. Held fixed in the
+        linearisation.
+    a1_apg, separation_gamma : float
+        a1,APG (0.275) and Gamma (-5e-4) of the sensor.
     """
 
     density: float = 1.0
@@ -141,6 +148,9 @@ class IncompressibleModel(NamedTuple):
     critical_amplification: float = None  # AFT N_crit; None: from Tu
     lm_positive_jacobian: bool = True  # LM: positive linearization of the gamma source
     lm_jacobian_smoothing: float = 0.0  # LM: width of the smooth switch derivatives
+    separation: str = "none"  # SST: "lambda-theta" (Griffin et al., 2026)
+    a1_apg: float = 0.275  # separation: a1 in strong adverse pressure gradient
+    separation_gamma: float = -5.0e-4  # separation: Gamma of the turbulent criterion
 
     @property
     def n_var(self):
