@@ -279,3 +279,20 @@ def test_along_long_side():
     nu, nv = ref.along_long_side([0, 1], 3)
     np.testing.assert_array_equal(nu, [3, 3])
     np.testing.assert_array_equal(nv, [1, 1])
+
+
+def test_several_new_nodes_on_one_wall_face_do_not_fold():
+    """A 4-way split puts three nodes on one wall face; each moves from the face."""
+    m0 = ring(growth=1.3)
+    cells = m0.owner[m0.boundary_faces["cylinder"]]
+    ref = Refinement.from_mesh(m0, walls=["cylinder"])
+    ref.split(cells, *ref.along_long_side(cells, 4), column_aspect=5.0)
+    check(ref.mesh, ref.mesh.cell_area.sum())
+    # The same wall node whether it comes from a 2-way or a 4-way split.
+    two = Refinement.from_mesh(m0, walls=["cylinder"])
+    two.split(cells, *two.along_long_side(cells, 2), column_aspect=5.0)
+    wall = ref.mesh.face_nodes[ref.mesh.boundary_faces["cylinder"]].ravel()
+    wall2 = two.mesh.face_nodes[two.mesh.boundary_faces["cylinder"]].ravel()
+    p4 = {tuple(np.round(p, 12)) for p in ref.mesh.nodes[wall]}
+    p2 = {tuple(np.round(p, 12)) for p in two.mesh.nodes[wall2]}
+    assert p2 <= p4
