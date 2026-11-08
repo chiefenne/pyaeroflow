@@ -1113,19 +1113,22 @@ closed slot (`wall`). Suction: the measured 0.01518 kg/s over the 23 in slot
 span gives C_q = m/(rho U c b) = 1.509e-3 and `normal_velocity` = -C_q U / (L/c)
 = -0.33125 (uniform over the exit, normal to the wall).
 
-Results (sandbox, SuperLU, 7 orders: no flow 112 iterations / 4.3 min,
-suction 2 min), separation and reattachment where Cf changes sign:
+Results (409 x 109: sandbox, SuperLU, 7 orders, no flow 112 iterations / 4.3
+min, suction 2 min; 817 x 217: PARDISO, user runs; the figure shows 817 x
+217), separation and reattachment where Cf changes sign:
 
 | Case | Separation x/c | Reattachment x/c |
 |---|---|---|
 | No flow control, PyAeroFlow 409 x 109 | 0.662 | 1.271 |
+| No flow control, PyAeroFlow 817 x 217 | 0.661 | 1.263 |
 | No flow control, CFL3D / FUN3D SA 817 x 217 (TMR) | 0.661 | 1.26 - 1.27 |
 | No flow control, experiment | 0.665 | 1.11 |
 | Suction, PyAeroFlow 409 x 109 | 0.669 | 1.116 |
+| Suction, PyAeroFlow 817 x 217 | 0.669 | 1.119 |
 | Suction, RANS at the workshop (about) | | 1.10 - 1.11 |
 | Suction, experiment | | 0.94 |
 
-![NASA hump](figures/nasa_hump_sa_409.png)
+![NASA hump](figures/nasa_hump_sa_817.png)
 
 `python examples/cases/nasa_hump_plot.py NOFLOW.wall_wall.csv
 SUCTION.wall_wall.csv OUT.png` draws the figure (built-in references
@@ -1139,8 +1142,11 @@ about 0.17 c, and the suction reattachment matches the RANS results of the
 workshop: the known SA (and general RANS) shortfall of turbulent
 shear stress in the separated shear layer, not a transpiration error. The
 spike of Cf at the slot is the no-slip slot exit under suction (the sucked
-tangential momentum; see the NACA 0012 slot cases). The 817 x 217 runs (the
-TMR grid of the reference data) are still to do.
+tangential momentum; see the NACA 0012 slot cases).
+
+The 817 x 217 grid (the grid of the TMR reference data) moves the reattachment
+by less than 0.01 c, so the discrepancy is not a grid effect: without control
+PyAeroFlow 1.263 matches the CFL3D/FUN3D SA band 1.26 - 1.27.
 
 ## References
 
