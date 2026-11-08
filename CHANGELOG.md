@@ -26,6 +26,16 @@
   `max_factor`), splits thin cells (`aspect > aspect_target`) along their long
   side only (`n_max`) and the others 2 x 2, or all 2 x 2 (`direction = "iso"`);
   `plan` and `apply` return the marking, its summary and the parent map.
+- Local mesh refinement, stage R4: `[refinement]` refines during a steady
+  run (`cycles`, indicator and marking keys of R3, wall options of R2,
+  `residual_drop`, `iterations`, `cfl_reset`). The run is a chain of cycles
+  in `<output.directory>/cycle_<k>` like a polar; between cycles the marked
+  cells are split, the state is injected and the problem is rebuilt.
+  `<name>.refinement.csv` and `.refinement.log` summarise the cycles. Restart
+  files of a refined mesh store the refinement log; `initial.restart` with
+  such a file replays the splits on `mesh.file`, and with `[refinement]` the
+  chain continues from that cycle. `pyaeroflow polar` refuses `[refinement]`
+  for now.
 - New VTU fields `pressure_gradient` (vector, Pa/m) and
   `pressure_gradient_magnitude` (|grad p|) from the shared least-squares
   gradient, for all models; a candidate indicator for future mesh refinement.

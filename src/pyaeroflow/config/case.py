@@ -16,7 +16,13 @@ from pyaeroflow.config.schema import (
     TURBULENCE_FORMS,
     Opt,
 )
-from pyaeroflow.io.fields import Capabilities, resolve_fields
+from pyaeroflow.io.fields import BY_NAME, Capabilities, available, resolve_fields
+from pyaeroflow.mesh.indicator import (
+    GEOMETRY_NAMES,
+    IndicatorError,
+    RefineSpec,
+    names_used,
+)
 
 PRESSURE_FIXING = {"pressure-outlet", "farfield", "total-pressure-inlet"}
 
@@ -726,6 +732,79 @@ def _consistency(data, explicit, problems, notices, path):
         out["fields"], Capabilities.from_config(data)
     )
     problems += field_problems
+    _refinement_rules(data, problems)
+
+
+def _refinement_rules(data, problems):
+    """Local mesh refinement (``[refinement]``): indicator and case limits."""
+    rc = data["refinement"]
+    if not rc["cycles"]:
+        return
+    if data["time"]["mode"] != "steady":
+        problems.append("refinement: only steady runs can be refined")
+    types = {name: b["type"] for name, b in data["boundary"].items()}
+    if "periodic" in types.values():
+        problems.append("refinement: periodic boundaries cannot be refined yet")
+    if rc["indicator"] is None:
+        problems.append("refinement.indicator is required when refinement.cycles > 0")
+        return
+    try:
+        RefineSpec(**refine_spec_args(rc))
+        names = names_used(rc["indicator"])
+    except IndicatorError as exc:
+        problems.append(str(exc).replace("indicator:", "refinement.indicator:", 1))
+        return
+    caps = Capabilities.from_config(data)
+    have = set(available(caps))
+    for name in names:
+        if name in GEOMETRY_NAMES:
+            continue
+        if name.startswith("residual"):
+            problems.append(
+                f"refinement.indicator: '{name}' needs the live residual and "
+                "cannot drive the refinement"
+            )
+        elif name not in BY_NAME:
+            close = _close(name, list(BY_NAME) + list(GEOMETRY_NAMES))
+            problems.append(f"refinement.indicator: unknown name '{name}'{close}")
+        elif name not in have:
+            problems.append(
+                f"refinement.indicator: field '{name}' needs {BY_NAME[name].needs}"
+            )
+    walls = rc["walls"]
+    wall_types = ("wall", "slip-wall", "transpiration-wall")
+    if walls is not None:
+        for w in walls:
+            if w not in types:
+                problems.append(f"refinement.walls: no boundary '{w}'")
+            elif types[w] not in wall_types:
+                problems.append(f"refinement.walls: '{w}' is a {types[w]} boundary")
+    else:
+        rc["walls"] = [n for n, t in types.items() if t in wall_types]
+
+
+def refine_spec_args(rc):
+    """Keyword arguments of :class:`RefineSpec` from ``[refinement]``."""
+    keys = (
+        "indicator",
+        "threshold",
+        "quantile",
+        "top_fraction",
+        "max_cells",
+        "max_factor",
+        "direction",
+        "aspect_target",
+        "n_max",
+        "max_hanging",
+    )
+    args = {k: rc[k] for k in keys}
+    args["column_aspect"] = rc["column_aspect"] or None
+    return args
+
+
+def _close(name, candidates):
+    close = difflib.get_close_matches(name, candidates, n=1)
+    return f" (did you mean '{close[0]}'?)" if close else ""
 
 
 # Compressible defaults: sea-level standard atmosphere.
