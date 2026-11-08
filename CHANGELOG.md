@@ -17,6 +17,15 @@
   split along the wall to the thin cells above it; `along_long_side` picks
   the split direction from the cell shape; folded cells raise `MeshError`.
   Demo for ParaView: `examples/meshes/refine_demo.py`.
+- Local mesh refinement, stage R3: `pyaeroflow.mesh.indicator` evaluates an
+  indicator expression over cell fields with a whitelisted parser (no `eval`;
+  `+ - * / **`, comparisons, `sqrt abs log log10 exp tanh sign minimum maximum
+  clip where norm`), e.g. `pressure_gradient_magnitude * h`. Geometric names
+  `x y area h h_u h_v aspect factor_u factor_v` come with the mesh. `RefineSpec`
+  marks cells by `threshold`, `quantile` or `top_fraction` (with `max_cells`,
+  `max_factor`), splits thin cells (`aspect > aspect_target`) along their long
+  side only (`n_max`) and the others 2 x 2, or all 2 x 2 (`direction = "iso"`);
+  `plan` and `apply` return the marking, its summary and the parent map.
 - New VTU fields `pressure_gradient` (vector, Pa/m) and
   `pressure_gradient_magnitude` (|grad p|) from the shared least-squares
   gradient, for all models; a candidate indicator for future mesh refinement.
