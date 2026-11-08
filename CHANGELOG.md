@@ -8,6 +8,17 @@
   `examples/meshes/naca0012_tmr_449x129_slot.su2`, and
   `examples/meshes/split_marker.py` to cut a slot marker out of a wall.
 
+## 1.5.1 – polar restart of an interrupted angle (2026-11-08)
+
+- `pyaeroflow polar`: an angle that already has a backup in its
+  `alpha_<α>/` folder (an interrupted or earlier run) is continued from its
+  newest one, like `pyaeroflow run` with `initial.restart`: the iteration
+  counter, the residual reference and the log go on. Before, the angle
+  restarted from the nearest other angle with a new counter (iteration 0),
+  so a resumed polar threw away the progress of the interrupted angle.
+- `pyaeroflow polar`: the `initial.restart` of the case file is used for the
+  first angle (before, a neighbouring angle's backup replaced it).
+
 ## 1.5.0 – post-processing and the compressible solver (2026-11-07)
 
 First release with the compressible solver (the entry "compressible Euler,
