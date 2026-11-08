@@ -1,0 +1,63 @@
+# NACA 0012 with a slot on the upper surface, baseline,
+# the slot is a closed (no-slip) wall.
+# Re = 5e5, alpha = 12 deg, SA-neg, incompressible. Slot of 2.1 % chord at
+# x/c = 0.077 - 0.098 (3 wall faces of the TMR 449 x 129 C-grid, farfield
+# 500 chords, no vortex correction), set up after Huang et al. (2004),
+# J. Aircraft 41(5) (NACA 0012, Re 5e5, 2.5 % chord jet on the upper surface).
+# The three cases naca0012_slot_{base,suction,blowing}.toml differ only in
+# [boundary.slot]. Mesh: examples/meshes/naca0012_tmr_449x129_slot.su2, made
+# with make_tmr_naca0012.py (level 1) and split_marker.py ... airfoil slot
+# 0.075 0.1 upper. Result (449 x 129, 5 min, no PARDISO): CL = 1.1936,
+# CD = 0.02388, CM = -0.0146, 132 iterations, upper-surface separation from
+# x/c = 0.90.
+# Forces: airfoil + slot (the slot carries the pressure and the jet momentum).
+
+[case]
+name = "naca0012_slot_base"
+
+[mesh]
+file = "../meshes/naca0012_tmr_449x129_slot.su2"   # boundary faces: airfoil, slot, farfield
+
+[physics]
+model = "rans"
+turbulence = "sa-neg"
+
+[fluid]
+density = 1.0                     # kg/m^3
+viscosity = 2.0e-6                # Pa s: Re = 5e5 with U = 1 m/s, c = 1 m
+
+[reference]
+velocity = 1.0                    # m/s
+length = 1.0                      # m, chord
+moment_center = [0.25, 0.0]       # m, quarter chord
+
+[initial]
+from_boundary = "farfield"
+
+[boundary.airfoil]
+type = "wall"
+
+[boundary.slot]
+type = "wall"                     # closed slot: same as the airfoil
+
+[boundary.farfield]
+type = "farfield"
+velocity = 1.0                    # m/s
+angle_of_attack = 12.0            # deg
+pressure = 0.0                    # Pa
+turbulence = { nu_tilde_ratio = 3.0 }
+
+[numerics]
+limiter = "venkatakrishnan"
+limiter_freeze = { after_residual_drop = 1.5, after_iterations = 40, release = true }
+
+[solver]
+residual_drop = 7.0
+max_iterations = 600
+newton_krylov = { switch_at_residual_drop = 1.5, switch_at_iteration = 40 }
+# Intel MKL PARDISO (pypardiso); remove the line without it.
+linear_solver = { type = "pardiso" }
+
+[output]
+directory = "output/naca0012_slot_base"
+force_boundaries = ["airfoil", "slot"]

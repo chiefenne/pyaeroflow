@@ -2449,8 +2449,16 @@ def run_polar(path, angles, console=True):
     Every farfield boundary and ``reference.angle_of_attack`` take the angle;
     each run writes into ``<output.directory>/alpha_<angle>`` and the
     coefficients are collected in ``<output.directory>/<name>.polar.csv``
-    (merged with earlier angles). The first angle restarts from the nearest
-    angle computed before, if any.
+    (merged with earlier angles).
+
+    Each angle starts from the first of: (1) for the first angle, the
+    ``initial.restart`` of the case file; (2) the newest backup of the angle
+    itself in ``alpha_<angle>`` (an interrupted or earlier run of it);
+    (3) the final state of the previous angle of the chain; (4) for the
+    first angle, the nearest angle computed before. A file of the angle
+    itself is continued like ``pyaeroflow run`` with ``initial.restart``
+    (counter, residual reference and log go on); a file of another angle
+    gives its solver state only and a new counter.
 
     Returns
     -------
@@ -2463,15 +2471,25 @@ def run_polar(path, angles, console=True):
     out_dir.mkdir(parents=True, exist_ok=True)
     polar_csv = out_dir / f"{base.name}.polar.csv"
     rows = _read_polar(polar_csv)
+    explicit = base.data["initial"]["restart"]
     results, previous = [], None
-    for alpha in angles:
-        if previous is None:  # restart from the nearest angle computed before
-            previous = _nearest_restart(out_dir, base.name, alpha)
-        config = _polar_config(raw, path, base, alpha, previous)
-        config.reload = lambda a=alpha, p=previous: _polar_config(
+    for i, alpha in enumerate(angles):
+        name = f"{base.name}_alpha_{alpha:g}"
+        own = latest_backup(out_dir / f"alpha_{alpha:g}", name)
+        if i == 0 and explicit is not None:
+            start = base.resolve_path(explicit)
+        elif own is not None:  # this angle ran before: continue it
+            start = own
+        elif previous is not None:  # the restart chain
+            start = previous
+        else:  # restart from the nearest angle computed before
+            start = _nearest_restart(out_dir, base.name, alpha)
+        mode = "continue" if _is_state_of(start, name) else "state"
+        config = _polar_config(raw, path, base, alpha, start)
+        config.reload = lambda a=alpha, p=start: _polar_config(
             tomllib.loads(path.read_text()), path, base, a, p
         )
-        result = run_case(config, console=console, restart_mode="state")
+        result = run_case(config, console=console, restart_mode=mode)
         previous = result.restart_file
         c = result.coefficients
         rows = [r for r in rows if abs(r[0] - alpha) > 1e-9]
@@ -2500,6 +2518,11 @@ def run_polar(path, angles, console=True):
             fmt=["%.4f", "%.8e", "%.8e", "%.8e", "%.8e", "%.8e", "%d", "%d"],
         )
     return results
+
+
+def _is_state_of(file, name):
+    """Tell whether ``file`` is a backup or restart file of case ``name``."""
+    return file is not None and Path(file).name.startswith(f"{name}.")
 
 
 def _read_polar(path):

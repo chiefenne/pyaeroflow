@@ -5,6 +5,28 @@
 - New VTU fields `pressure_gradient` (vector, Pa/m) and
   `pressure_gradient_magnitude` (|grad p|) from the shared least-squares
   gradient, for all models; a candidate indicator for future mesh refinement.
+- Example: NACA 0012 with blowing and suction through a slot on the upper
+  surface (`examples/cases/naca0012_slot_{base,suction,blowing}.toml`, Re 5e5,
+  alpha 12 deg, SA-neg, `transpiration-wall`), mesh
+  `examples/meshes/naca0012_tmr_449x129_slot.su2`, and
+  `examples/meshes/split_marker.py` to cut a slot marker out of a wall.
+- Validation §17: NASA wall-mounted hump (CFDVAL2004 Case 3) without and
+  with steady suction through the slot exit (`transpiration-wall`), SA-neg,
+  TMR no-plenum grid (`examples/meshes/make_nasa_hump.py`,
+  `nasa_hump_409x109_slot.su2`, `examples/cases/nasa_hump_sa_{noflow,suction}.toml`,
+  `nasa_hump_plot.py`). Built-in plot references `tmr_hump_*` (experiment
+  Cp/Cf, CFL3D SA).
+
+## 1.5.1 – polar restart of an interrupted angle (2026-11-08)
+
+- `pyaeroflow polar`: an angle that already has a backup in its
+  `alpha_<α>/` folder (an interrupted or earlier run) is continued from its
+  newest one, like `pyaeroflow run` with `initial.restart`: the iteration
+  counter, the residual reference and the log go on. Before, the angle
+  restarted from the nearest other angle with a new counter (iteration 0),
+  so a resumed polar threw away the progress of the interrupted angle.
+- `pyaeroflow polar`: the `initial.restart` of the case file is used for the
+  first angle (before, a neighbouring angle's backup replaced it).
 
 ## 1.5.0 – post-processing and the compressible solver (2026-11-07)
 

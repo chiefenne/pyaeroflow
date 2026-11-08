@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyaeroflow"
-version = "1.5.0"
+version = "1.5.1"
 description = "PyAeroFlow: 2D unstructured cell-centred finite-volume Navier-Stokes/RANS solver in JAX (companion to PyAero)"
 readme = "README.md"
 license = "MIT"
