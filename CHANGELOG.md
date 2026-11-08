@@ -7,6 +7,12 @@
   alpha 12 deg, SA-neg, `transpiration-wall`), mesh
   `examples/meshes/naca0012_tmr_449x129_slot.su2`, and
   `examples/meshes/split_marker.py` to cut a slot marker out of a wall.
+- Validation §17: NASA wall-mounted hump (CFDVAL2004 Case 3) without and
+  with steady suction through the slot exit (`transpiration-wall`), SA-neg,
+  TMR no-plenum grid (`examples/meshes/make_nasa_hump.py`,
+  `nasa_hump_409x109_slot.su2`, `examples/cases/nasa_hump_sa_{noflow,suction}.toml`,
+  `nasa_hump_plot.py`). Built-in plot references `tmr_hump_*` (experiment
+  Cp/Cf, CFL3D SA).
 
 ## 1.5.1 – polar restart of an interrupted angle (2026-11-08)
 

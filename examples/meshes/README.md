@@ -13,6 +13,7 @@ not committed.
 | `naca0012_ogrid_256x128.su2` | 33k | `pyaeroflow.mesh.naca0012_ogrid(256, 128, reynolds=6e6)`, farfield 500 chords | airfoil, farfield | `naca0012_rans.toml`, `stage6_naca0012.py` |
 | `naca0012_tmr_225x65.su2` | 14 336 | `make_tmr_naca0012.py` from the TMR grid `naca0012_tmr_225x65.p2dfmt` (C-grid, farfield 500 chords, first cell 3.7·10⁻⁶ c, wake cut merged) | airfoil, farfield | `naca0012_sa_m015.toml`, validation §14 |
 | `naca0012_tmr_449x129_slot.su2` | 57 344 | `make_tmr_naca0012.py` level 1 (449 × 129), then `split_marker.py n0012_449.su2 naca0012_tmr_449x129_slot.su2 airfoil slot 0.075 0.1 upper`: slot of 3 faces (2.1 % chord) on the upper surface at x/c = 0.077 - 0.098 | airfoil, slot, farfield | `naca0012_slot_{base,suction,blowing}.toml` (transpiration wall: blowing and suction) |
+| `nasa_hump_409x109_slot.su2` | 44 064 | `make_nasa_hump.py hump2newtop_noplenumZ409x109.p2dfmt nasa_hump_409x109_slot.su2 0.6543 0.6584` from the TMR no-plenum grid (NASA zip `nasahump-grids.zip`), chord 1, inflow x = -6.39, outflow x = 4 | wall, slot (2 faces, x/c 0.6542 - 0.6585, L = 0.00456 c), top, inlet, outlet | `nasa_hump_sa_{noflow,suction}.toml`, validation §17 |
 | `e387_pyaero_y1.su2` | 209k | PyAero, C-mesh, 481 points per side, first cell 2·10⁻⁴ c | airfoil, inlet, outlet, top, bottom | `e387_transition.toml`, `e387_aft.toml`, validation §7, §8 |
 | `sd7003_C10_W25_320k_cells.su2` | 320 600 | PyAero, C-mesh, sharp trailing edge | airfoil, inlet, outlet, top, bottom | `aft_sd7003*.toml`, `sst_sd7003.toml`, `lm_sd7003*.toml`, validation §9, §10 (the mesh of the main validation runs) |
 | `sd7003_C10_W25_320k_cells_blunt_TE.su2` | 326 580 | same, trailing edge 0.3 % chord thick | same | `aft_sd7003_tu05_blunt.toml`, validation §9 |
@@ -24,6 +25,10 @@ the airfoil and `W25` the wake length of 25 chords behind the trailing edge.
 The chord is 1. The PyAero meshes are not scaled for a Reynolds number; check
 y⁺ with `pyaeroflow check-mesh MESH --re R`. The RAE 2822 mesh has capitalised
 boundary names: use them in the `[boundary.<name>]` sections of a case file.
+
+`make_nasa_hump.py` converts a TMR no-plenum hump grid (one block) to `.su2`
+and cuts the suction slot exit out of the wall; the 205 x 55 and 817 x 217
+grids give the same slot (1 and 4 faces, the same L = 0.00456 c).
 
 `split_marker.py` moves the faces of a marker in an x range (upper, lower or
 both sides) to a new marker, e.g. a slot for a `transpiration-wall`:

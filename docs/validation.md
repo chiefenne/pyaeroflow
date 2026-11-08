@@ -1093,6 +1093,61 @@ examples that quote Roe numbers (`naca0012_euler_m05/m08`, `ramp_10deg_m2`,
 `naca0012_laminar_m05`) set `convective_flux = "roe"` explicitly. Not yet
 run with SLAU2: laminar flow; RAE 2822 case 6 files are `examples/cases/rae2822_case6_roe.toml` and `rae2822_case6_slau2.toml` (user runs).
 
+## 17. Wall suction: NASA wall-mounted hump (CFDVAL2004 Case 3)
+
+Validation of `transpiration-wall` against an experiment: the NASA
+wall-mounted hump with steady suction through a slot (Greenblatt et al. 2006;
+CFDVAL2004 workshop Case 3, Rumsey et al. 2006; NASA TMR case 2DWMH). Re =
+936 000 per hump chord, incompressible SA-neg (the experiment runs at M 0.1).
+
+Setup (`examples/cases/nasa_hump_sa_{noflow,suction}.toml`): TMR no-plenum
+grid 409 x 109 (`examples/meshes/make_nasa_hump.py`), inflow at x/c = -6.39,
+outflow at x/c = 4, contoured slip upper wall. TMR boundary conditions
+converted to incompressible gauge values: inflow total pressure Pt/Pref =
+1.007 at M 0.1 gives `total_pressure = 0.5` (q_ref with U = 1), outflow
+P/Pref = 0.99962 gives `pressure = -0.027143`. The slot exit (x/c = 0.6542 -
+0.6585, the lip and the downstream corner of the slot of the CFDVAL2004 grid
+with plenum, length L = 0.00456 c) is its own marker; the workshop allows a
+boundary condition at the slot exit instead of the plenum. No flow control:
+closed slot (`wall`). Suction: the measured 0.01518 kg/s over the 23 in slot
+span gives C_q = m/(rho U c b) = 1.509e-3 and `normal_velocity` = -C_q U / (L/c)
+= -0.33125 (uniform over the exit, normal to the wall).
+
+Results (409 x 109: sandbox, SuperLU, 7 orders, no flow 112 iterations / 4.3
+min, suction 2 min; 817 x 217: PARDISO, user runs; the figure shows 817 x
+217), separation and reattachment where Cf changes sign:
+
+| Case | Separation x/c | Reattachment x/c |
+|---|---|---|
+| No flow control, PyAeroFlow 409 x 109 | 0.662 | 1.271 |
+| No flow control, PyAeroFlow 817 x 217 | 0.661 | 1.263 |
+| No flow control, CFL3D / FUN3D SA 817 x 217 (TMR) | 0.661 | 1.26 - 1.27 |
+| No flow control, experiment | 0.665 | 1.11 |
+| Suction, PyAeroFlow 409 x 109 | 0.669 | 1.116 |
+| Suction, PyAeroFlow 817 x 217 | 0.669 | 1.119 |
+| Suction, RANS at the workshop (about) | | 1.10 - 1.11 |
+| Suction, experiment | | 0.94 |
+
+![NASA hump](figures/nasa_hump_sa_817.png)
+
+`python examples/cases/nasa_hump_plot.py NOFLOW.wall_wall.csv
+SUCTION.wall_wall.csv OUT.png` draws the figure (built-in references
+`tmr_hump_*`). Without flow control PyAeroFlow reproduces the CFL3D SA Cp and
+Cf of the TMR (no Cp shift needed; the TMR shifted the CFL3D Cp by -0.015).
+With suction the computed suction peak ahead of the slot and the Cp recovery
+follow the experiment up to the slot; the computed bubble shrinks from 0.61 c
+to 0.45 c, the measured one from 0.45 c to about 0.28 c (taking the measured
+separation without control, 0.665, for both). Both bubbles are too long by
+about 0.17 c, and the suction reattachment matches the RANS results of the
+workshop: the known SA (and general RANS) shortfall of turbulent
+shear stress in the separated shear layer, not a transpiration error. The
+spike of Cf at the slot is the no-slip slot exit under suction (the sucked
+tangential momentum; see the NACA 0012 slot cases).
+
+The 817 x 217 grid (the grid of the TMR reference data) moves the reattachment
+by less than 0.01 c, so the discrepancy is not a grid effect: without control
+PyAeroFlow 1.263 matches the CFL3D/FUN3D SA band 1.26 - 1.27.
+
 ## References
 
 - Ghia, U., Ghia, K. N., Shin, C. T. (1982): High-Re solutions for
@@ -1204,3 +1259,10 @@ need their volume, page or paper number checked.
   analysis of limit cycle oscillations. J. Comput. Phys. 231(8), 3228–3245 †.
   Windowed time averages (Hann, Hann-squared, bump) of the unsteady Cauchy
   criterion.
+- Greenblatt, D., Paschal, K. B., Yao, C.-S., Harris, J., Schaeffler, N. W.,
+  Washburn, A. E. (2006): Experimental investigation of separation control
+  part 1: baseline and steady suction. AIAA J. 44(12), 2820–2830 (data:
+  TMR 2DWMH and CFDVAL2004 Case 3 pages).
+- Rumsey, C. L., Gatski, T. B., Sellers, W. L., Vatsa, V. N., Viken, S. A.
+  (2006): Summary of the 2004 computational fluid dynamics validation
+  workshop on synthetic jets. AIAA J. 44(2), 194–207 †.
