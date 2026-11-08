@@ -46,3 +46,13 @@ identical to the TMR grids.
 `make_sd7003_ogrid.py` needs the wall CSV of a run on the SD7003 C-mesh
 (`python make_sd7003_ogrid.py WALL.csv OUT.su2 [n_surface] [n_radial]`); the
 committed O-grid is the result.
+
+## Local refinement demo
+
+`refine_demo.py` refines an airfoil mesh in fixed regions (wall cells up to
+x = `--le` split along the wall, and the trailing-edge region within `--te`)
+and writes a `.vtu` for ParaView with the cell fields `split_u`, `split_v`,
+`n_nodes` (5 or more = hanging nodes), `aspect_ratio`, `cell_area` and
+`origin`. Example:
+
+    python examples/meshes/refine_demo.py examples/meshes/sd7003_C10_W25_320k_cells.su2 sd7003_refined.vtu --walls airfoil

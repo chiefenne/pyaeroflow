@@ -9,6 +9,14 @@
   nodes per side, children inherit the parent's directions, every split
   returns the parent map for injection, and a log replays the refinement on
   the original mesh. Not yet used by the solver (stages R2 to R4).
+- Local mesh refinement, stage R2: new wall nodes are placed on a centripetal
+  Catmull-Rom cubic through the neighbouring wall nodes (`walls=`, corners
+  above `corner_angle` are kept sharp); the wall displacement is carried up
+  the grid lines with a linear decay over `decay * |d|`, so thin near-wall
+  cells do not fold; boundary-layer column rule (`column_aspect`) passes a
+  split along the wall to the thin cells above it; `along_long_side` picks
+  the split direction from the cell shape; folded cells raise `MeshError`.
+  Demo for ParaView: `examples/meshes/refine_demo.py`.
 - New VTU fields `pressure_gradient` (vector, Pa/m) and
   `pressure_gradient_magnitude` (|grad p|) from the shared least-squares
   gradient, for all models; a candidate indicator for future mesh refinement.

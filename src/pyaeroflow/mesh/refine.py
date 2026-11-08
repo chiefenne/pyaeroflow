@@ -98,13 +98,36 @@ class Refinement:
     cells: list
     boundary_names: tuple
     log: list = field(default_factory=list)
+    curves: dict = field(default_factory=dict)  # wall line -> 4 control points
+    chains: dict = field(default_factory=dict)  # node -> grid lines ending there
+    decay: float = 20.0
+    _moved: list = field(default_factory=list)
     _mesh: Mesh = None
 
     # -- construction --------------------------------------------------------
 
     @classmethod
-    def from_mesh(cls, mesh):
-        """Refinement state of an unrefined mesh (no split yet)."""
+    def from_mesh(cls, mesh, walls=(), corner_angle=30.0, decay=20.0):
+        """Refinement state of an unrefined mesh (no split yet).
+
+        Parameters
+        ----------
+        mesh : Mesh
+            The original mesh.
+        walls : sequence of str
+            Boundary sets whose new nodes are placed on a curve instead of the
+            straight face: a centripetal Catmull-Rom cubic through the face's
+            two nodes and their neighbours along the wall.
+        corner_angle : float
+            Turning angle (degrees) between two wall faces above which their
+            common node is a corner (e.g. a sharp or blunt trailing edge); the
+            curve does not reach across a corner.
+        decay : float
+            A wall node moved by ``d`` onto the curve moves the nodes of the
+            grid lines that start at it by ``d * (1 - s / (decay * |d|))``,
+            ``s`` the distance from the wall, so thin near-wall cells move with
+            the wall instead of folding.
+        """
         nodes = [tuple(p) for p in mesh.nodes.tolist()]
         boundary_of_face = {}
         for name, faces in mesh.boundary_faces.items():
@@ -126,7 +149,8 @@ class Refinement:
                 lid = line_of_key[(a, b) if a < b else (b, a)]
                 sides.append((lid, _ZERO, _ONE) if a < b else (lid, _ONE, _ZERO))
             cells.append(_Cell(list(corners), sides, i))
-        ref = cls(nodes, lines, cells, tuple(mesh.boundary_faces))
+        ref = cls(nodes, lines, cells, tuple(mesh.boundary_faces), decay=decay)
+        ref.curves = _wall_curves(mesh, walls, corner_angle, line_of_key)
         ref._mesh = mesh
         return ref
 
@@ -183,7 +207,7 @@ class Refinement:
 
     # -- refinement ----------------------------------------------------------
 
-    def split(self, cells, nu=2, nv=2, max_hanging=1):
+    def split(self, cells, nu=2, nv=2, max_hanging=1, column_aspect=None):
         """Split leaf cells and balance the result.
 
         Parameters
@@ -199,6 +223,14 @@ class Refinement:
             this. A violating quad is split along that side into the fewest
             parts that satisfy the rule, repeated until no side violates it.
             ``None`` disables balancing.
+        column_aspect : float or None
+            Boundary-layer column rule: a split along one side is passed on
+            to the quad across that side if that quad is thinner than
+            ``1 / column_aspect`` across the side (its extent along the side
+            over its extent across it exceeds ``column_aspect``), and so on.
+            A tangential split of a wall cell then refines the whole
+            wall-normal column of thin cells, and the hanging nodes end up
+            where the cells are no longer thin. ``None`` disables the rule.
 
         Returns
         -------
@@ -219,6 +251,7 @@ class Refinement:
                 "nu": nu.tolist(),
                 "nv": nv.tolist(),
                 "max_hanging": max_hanging,
+                "column_aspect": column_aspect,
             }
         )
         factors = {}
@@ -227,18 +260,43 @@ class Refinement:
             factors[i] = (max(fu, a), max(fv, b))
         source = np.arange(self.n_cells, dtype=np.int64)
         while factors:
+            if column_aspect is not None:
+                factors = self._columns(factors, column_aspect)
             source = source[self._apply(factors)]
+            self._propagate()
             factors = {} if max_hanging is None else self._balance(max_hanging)
         self._mesh = None
         return source
 
     @classmethod
-    def replay(cls, mesh, log):
-        """Repeat a refinement log on the original mesh."""
-        ref = cls.from_mesh(mesh)
+    def replay(cls, mesh, log, **options):
+        """Repeat a refinement log on the original mesh.
+
+        ``options`` are those of :meth:`from_mesh` (walls, corner_angle,
+        decay) and must match the original run.
+        """
+        ref = cls.from_mesh(mesh, **options)
         for entry in log:
-            ref.split(entry["cells"], entry["nu"], entry["nv"], entry["max_hanging"])
+            ref.split(
+                entry["cells"],
+                entry["nu"],
+                entry["nv"],
+                entry["max_hanging"],
+                entry.get("column_aspect"),
+            )
         return ref
+
+    def along_long_side(self, cells, n):
+        """Split factors ``(nu, nv)`` that cut ``cells`` along their long side.
+
+        A cell longer in u than in v gets ``(n, 1)``, otherwise ``(1, n)``:
+        for a thin near-wall cell this is a split along the wall.
+        """
+        cells = np.atleast_1d(np.asarray(cells, dtype=np.int64))
+        ext = self.extents()[cells]
+        long_u = ext[:, 0] >= ext[:, 1]
+        n = np.broadcast_to(np.asarray(n, dtype=np.int64), cells.shape)
+        return np.where(long_u, n, 1), np.where(long_u, 1, n)
 
     def _apply(self, factors):
         """Split ``{leaf: (nu, nv)}``; return the old leaf of every new leaf."""
@@ -277,18 +335,100 @@ class Refinement:
         return factors
 
     def _node_on(self, lid, t):
-        """Node of line ``lid`` at parameter ``t``, created if missing."""
+        """Node of line ``lid`` at parameter ``t``, created if missing.
+
+        A new node lies between its two neighbours on the line (linear in
+        the parameter), or on the wall curve for wall lines.
+        """
         line = self.lines[lid]
         j = bisect_left(line.params, t)
         if line.params[j] == t:
             return line.nodes[j]
-        (x0, y0), (x1, y1) = self.nodes[line.first], self.nodes[line.last]
-        s = float(t)
-        self.nodes.append((x0 + s * (x1 - x0), y0 + s * (y1 - y0)))
-        node = len(self.nodes) - 1
+        ta, tb = line.params[j - 1], line.params[j]
+        (x0, y0), (x1, y1) = self.nodes[line.nodes[j - 1]], self.nodes[line.nodes[j]]
+        s = float((t - ta) / (tb - ta))
+        straight = (x0 + s * (x1 - x0), y0 + s * (y1 - y0))
+        node = len(self.nodes)
+        if lid in self.curves:
+            p = _catmull_rom(self.curves[lid], float(t))
+            self.nodes.append(p)
+            self._moved.append((node, (p[0] - straight[0], p[1] - straight[1])))
+        else:
+            self.nodes.append(straight)
         line.params.insert(j, t)
         line.nodes.insert(j, node)
         return node
+
+    def _add_chain(self, chain):
+        chain = list(chain)
+        self.chains.setdefault(chain[0], []).append(chain)
+        self.chains.setdefault(chain[-1], []).append(chain)
+
+    def _propagate(self):
+        """Carry the wall displacement of new wall nodes along their grid lines."""
+        moved, self._moved = self._moved, []
+        for start, d in moved:
+            size = np.hypot(*d)
+            if size == 0.0:
+                continue
+            reach = self.decay * size
+            p0 = self.nodes[start]
+            # Distances are measured on the positions before the move.
+            stack, seen = [(start, 0.0, (p0[0] - d[0], p0[1] - d[1]))], {start}
+            while stack:
+                node, s, origin = stack.pop()
+                for chain in self.chains.get(node, ()):
+                    path = chain if chain[0] == node else chain[::-1]
+                    if path[-1] in seen:
+                        continue
+                    prev = origin
+                    dist = s
+                    for k in path[1:]:
+                        p = self.nodes[k]
+                        dist += np.hypot(p[0] - prev[0], p[1] - prev[1])
+                        prev = p
+                        w = 1.0 - dist / reach
+                        if w <= 0.0:
+                            break
+                        self.nodes[k] = (p[0] + w * d[0], p[1] + w * d[1])
+                    else:
+                        seen.add(path[-1])
+                        stack.append((path[-1], dist, prev))
+
+    def _columns(self, factors, aspect):
+        """Pass splits on to thin quads across the split cell's sides."""
+        across = {}
+        for i, c in enumerate(self.cells):
+            if c.splittable:
+                for k, (lid, t0, t1) in enumerate(c.sides):
+                    key = (lid, min(t0, t1), max(t0, t1))
+                    across.setdefault(key, []).append((i, k))
+        ext = self.extents()
+        out = dict(factors)
+        stack = list(factors)
+        while stack:
+            i = stack.pop()
+            c = self.cells[i]
+            if not c.splittable:
+                continue
+            for k, (lid, t0, t1) in enumerate(c.sides):
+                f = out[i][k % 2]
+                if f == 1:
+                    continue
+                for j, kk in across.get((lid, min(t0, t1), max(t0, t1)), ()):
+                    if j == i:
+                        continue
+                    d = kk % 2
+                    if ext[j, d] <= aspect * ext[j, 1 - d]:
+                        continue
+                    old = out.get(j, (1, 1))
+                    if old[d] >= f:
+                        continue
+                    new = list(old)
+                    new[d] = f
+                    out[j] = tuple(new)
+                    stack.append(j)
+        return out
 
     def _new_line(self, first, last):
         self.lines.append(_Line(first, last))
@@ -326,6 +466,10 @@ class Refinement:
             for j in range(1, nv):  # interior nodes already exist on the rows
                 insort(line.params, fv[j])
                 line.nodes.insert(line.params.index(fv[j]), grid[j][i])
+        for i in range(1, nu):
+            self._add_chain([grid[j][i] for j in range(nv + 1)])
+        for j in range(1, nv):
+            self._add_chain(grid[j])
 
         children = []
         for j in range(nv):
@@ -377,19 +521,93 @@ class Refinement:
                 poly.append(corner)
                 poly.extend(self.lines[lid].inside(t0, t1))
             polygons.append(poly)
+        nodes = np.asarray(self.nodes, dtype=float)
+        ptr = np.concatenate(([0], np.cumsum([len(q) for q in polygons])))
+        flat = np.concatenate([np.asarray(q, dtype=np.int64) for q in polygons])
+        nxt = np.arange(flat.size) + 1
+        nxt[ptr[1:] - 1] = ptr[:-1]
+        a, b = nodes[flat], nodes[flat[nxt]]
+        cross = a[:, 0] * b[:, 1] - b[:, 0] * a[:, 1]
+        area = np.add.reduceat(cross, ptr[:-1])
+        bad = np.flatnonzero(area <= 0.0)
+        if bad.size:
+            where = ", ".join(
+                f"({x:.6g}, {y:.6g})"
+                for x, y in nodes[[polygons[i][0] for i in bad[:5]]]
+            )
+            raise MeshError(
+                f"refinement folded {bad.size} cells (non-positive area), e.g. at "
+                f"{where}; increase the decay length or refine less near walls"
+            )
         boundary = {name: [] for name in self.boundary_names}
         for line in self.lines:
             if line.boundary is not None:
                 n = line.nodes
                 boundary[line.boundary].extend(zip(n[:-1], n[1:], strict=True))
         return Mesh.from_cells(
-            np.asarray(self.nodes, dtype=float),
+            nodes,
             polygons,
             {
                 k: np.asarray(v, dtype=np.int64).reshape(-1, 2)
                 for k, v in boundary.items()
             },
         )
+
+
+def _wall_curves(mesh, walls, corner_angle, line_of_key):
+    """Catmull-Rom control points of every wall face, oriented low -> high node.
+
+    All ``walls`` together form the wall chains, so a curve continues across
+    the border of two wall sets (e.g. a slot cut out of an airfoil).
+    """
+    cos_max = np.cos(np.radians(corner_angle))
+    p = mesh.nodes
+    edges = []
+    for name in walls:
+        if name not in mesh.boundary_faces:
+            raise MeshError(f"refinement wall '{name}' is not a boundary set")
+        edges += mesh.face_nodes[mesh.boundary_faces[name]].tolist()
+    nbrs = {}
+    for a, b in edges:
+        nbrs.setdefault(a, []).append(b)
+        nbrs.setdefault(b, []).append(a)
+
+    def beyond(a, b):
+        """Wall node before a when walking b -> a, or None at a corner."""
+        others = [n for n in nbrs[a] if n != b]
+        if len(others) != 1:
+            return None
+        c = others[0]
+        t1, t2 = p[a] - p[c], p[b] - p[a]
+        cos = t1 @ t2 / (np.hypot(*t1) * np.hypot(*t2))
+        return c if cos >= cos_max else None
+
+    curves = {}
+    for a, b in edges:
+        lo, hi = (a, b) if a < b else (b, a)
+        p1, p2 = p[lo], p[hi]
+        c0, c3 = beyond(lo, hi), beyond(hi, lo)
+        p0 = p[c0] if c0 is not None else 2.0 * p1 - p2
+        p3 = p[c3] if c3 is not None else 2.0 * p2 - p1
+        curves[line_of_key[(lo, hi)]] = (p0, p1, p2, p3)
+    return curves
+
+
+def _catmull_rom(ctrl, s):
+    """Centripetal Catmull-Rom point between ctrl[1] (s=0) and ctrl[2] (s=1)."""
+    p0, p1, p2, p3 = ctrl
+    t0 = 0.0
+    t1 = t0 + np.sqrt(np.hypot(*(p1 - p0)))
+    t2 = t1 + np.sqrt(np.hypot(*(p2 - p1)))
+    t3 = t2 + np.sqrt(np.hypot(*(p3 - p2)))
+    t = t1 + s * (t2 - t1)
+    a1 = ((t1 - t) * p0 + (t - t0) * p1) / (t1 - t0)
+    a2 = ((t2 - t) * p1 + (t - t1) * p2) / (t2 - t1)
+    a3 = ((t3 - t) * p2 + (t - t2) * p3) / (t3 - t2)
+    b1 = ((t2 - t) * a1 + (t - t0) * a2) / (t2 - t0)
+    b2 = ((t3 - t) * a2 + (t - t1) * a3) / (t3 - t1)
+    c = ((t2 - t) * b1 + (t - t1) * b2) / (t2 - t1)
+    return float(c[0]), float(c[1])
 
 
 def refine_cells(mesh, cells, nu=2, nv=2, max_hanging=1):

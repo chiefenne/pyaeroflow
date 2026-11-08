@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from pyaeroflow.mesh import MeshError, rectangle
+from pyaeroflow.mesh import MeshError, annulus, rectangle, structured
 from pyaeroflow.mesh.refine import Refinement, inject, refine_cells
 from pyaeroflow.numerics.gradients import lsq_stencil
 
@@ -184,3 +184,98 @@ def test_extents_give_aspect_ratio():
     np.testing.assert_allclose(
         ref.extents()[ref.origin == 0], np.tile([0.5, 0.5], (4, 1))
     )
+
+
+# -- R2: wall curves, boundary-layer columns, displacement ------------------
+
+
+def ring(growth=1.3, n_radial=40):
+    """O-grid around a unit-diameter cylinder with very thin wall cells."""
+    return annulus(48, n_radial, radius=0.5, outer_radius=5.0, growth=growth)
+
+
+def wall_radius_error(mesh, nodes):
+    return np.abs(np.hypot(*mesh.nodes[nodes].T) - 0.5).max()
+
+
+def test_new_wall_nodes_lie_on_curve():
+    m0 = ring(growth=1.1, n_radial=10)
+    wall = m0.boundary_faces["cylinder"]
+    straight, _ = refine_cells(m0, m0.owner[wall], 2, 2, max_hanging=None)
+    ref = Refinement.from_mesh(m0, walls=["cylinder"])
+    ref.split(m0.owner[wall], 2, 2, max_hanging=None)
+    new = np.arange(m0.n_nodes, ref.mesh.n_nodes)
+    on_wall = np.intersect1d(
+        new, ref.mesh.face_nodes[ref.mesh.boundary_faces["cylinder"]]
+    )
+    assert on_wall.size == wall.size
+    sagitta = wall_radius_error(straight, on_wall)
+    assert sagitta > 1e-3
+    assert wall_radius_error(ref.mesh, on_wall) < 1e-2 * sagitta
+
+
+def test_straight_wall_and_corner_stay_exact():
+    xs = np.linspace(0.0, 1.0, 5)
+    m0 = structured(xs, xs)
+    ref = Refinement.from_mesh(m0, walls=["bottom", "right"])
+    ref.split(np.arange(m0.n_cells), 2, 2)
+    m = ref.mesh
+    bottom = m.face_nodes[m.boundary_faces["bottom"]].ravel()
+    right = m.face_nodes[m.boundary_faces["right"]].ravel()
+    np.testing.assert_array_equal(m.nodes[bottom, 1], 0.0)
+    np.testing.assert_allclose(m.nodes[right, 0], 1.0, atol=1e-15)
+    np.testing.assert_allclose(m.cell_area.sum(), 1.0, rtol=1e-14)
+
+
+def test_displacement_carried_up_prevents_folding():
+    m0 = ring()
+    wall = m0.boundary_faces["cylinder"]
+    first = m0.cell_area[m0.owner[wall]].max() / m0.face_length[wall].min()
+    cells = m0.owner[wall]
+    # Sagitta (~1.7e-3) is far larger than the first cell height.
+    assert first < 1e-4
+    with pytest.raises(MeshError, match="folded"):
+        ref = Refinement.from_mesh(m0, walls=["cylinder"], decay=1e-3)
+        ref.split(cells, 2, 1, column_aspect=5.0)
+        ref.mesh  # noqa: B018
+    ref = Refinement.from_mesh(m0, walls=["cylinder"])
+    ref.split(cells, *ref.along_long_side(cells, 2), column_aspect=5.0)
+    check(ref.mesh, ref.mesh.cell_area.sum())
+
+
+def test_column_rule_refines_thin_cells_above_the_wall():
+    xs = np.linspace(0.0, 1.0, 5)
+    ys = np.concatenate(([0.0], 1e-3 * 1.5 ** np.arange(14)))
+    ys = np.cumsum(np.diff(ys, prepend=0.0))
+    m0 = structured(xs, ys)
+    ext = Refinement.from_mesh(m0).extents()
+    thin = ext[:, 0] > 5.0 * ext[:, 1]
+    ref = Refinement.from_mesh(m0, walls=["bottom"])
+    source = ref.split([1], 3, 1, column_aspect=5.0)
+    nx = xs.size - 1
+    split = {int(s) for s in source if np.count_nonzero(source == s) == 3}
+    expected = {1 + nx * j for j in range(ys.size - 1) if thin[1 + nx * j]}
+    assert split == expected
+    # Hanging nodes only where the column ends.
+    h = ref.hanging_counts()
+    top = max(expected) + nx
+    assert h.max() <= 1 or set(np.flatnonzero(h.max(axis=1) > 1)) <= {top}
+    check(ref.mesh, ref.mesh.cell_area.sum())
+
+
+def test_replay_with_walls():
+    m0 = ring(growth=1.2, n_radial=20)
+    cells = m0.owner[m0.boundary_faces["cylinder"]][:10]
+    ref = Refinement.from_mesh(m0, walls=["cylinder"])
+    ref.split(cells, 2, 1, column_aspect=5.0)
+    ref.split(np.flatnonzero(ref.origin == cells[0]), 2, 2)
+    again = Refinement.replay(m0, ref.log, walls=["cylinder"])
+    np.testing.assert_array_equal(again.mesh.nodes, ref.mesh.nodes)
+
+
+def test_along_long_side():
+    m0 = rectangle(2, 2, x=(0.0, 4.0), y=(0.0, 1.0))
+    ref = Refinement.from_mesh(m0)
+    nu, nv = ref.along_long_side([0, 1], 3)
+    np.testing.assert_array_equal(nu, [3, 3])
+    np.testing.assert_array_equal(nv, [1, 1])
