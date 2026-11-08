@@ -6,7 +6,7 @@ from test_fields import vtu_arrays
 from test_run import COUETTE, UNSTEADY
 
 from pyaeroflow.config import resolve
-from pyaeroflow.io.fields import FieldContext, Freestream, compute_fields
+from pyaeroflow.io.fields import FieldContext, Freestream, compute_fields, n_columns
 from pyaeroflow.mesh import rectangle, write_su2
 from pyaeroflow.run import Scaling, run_case
 
@@ -58,6 +58,16 @@ def test_pure_shear_and_straining():
     assert np.allclose(f["divergence"], 2.0)
 
 
+def test_pressure_gradient():
+    problem = _Problem(0.0, 0.0, 0.0, 0.0)
+    problem.g[:, 0] = (3.0, -4.0)  # dp/dx, dp/dy
+    f = _fields(problem, ["pressure_gradient", "pressure_gradient_magnitude"])
+    assert f["pressure_gradient"].shape == (3, 2)
+    assert np.allclose(f["pressure_gradient"], [3.0, -4.0])
+    assert np.allclose(f["pressure_gradient_magnitude"], 5.0)
+    assert n_columns(["velocity", "pressure_gradient", "cp"]) == (1, 2)
+
+
 def test_cp_and_total_pressure_loss_incompressible():
     w = np.array([[0.0, 1.0, 0.0], [-0.5, 0.0, 0.0], [0.2, 0.5, 0.0]])
     fs = Freestream(pressure=0.0, density=1.0, speed=1.0)
@@ -86,7 +96,7 @@ def test_couette_derived_fields(tmp_path):
         'directory = "out"',
         'directory = "out"\nfields = ["velocity", "cp", "total_pressure", '
         '"total_pressure_loss", "vorticity", "q_criterion", "strain_rate", '
-        '"divergence"]',
+        '"divergence", "pressure_gradient"]',
     )
     _couette(tmp_path, text)
     a = vtu_arrays(tmp_path / "out" / "couette_test.vtu")
@@ -95,6 +105,8 @@ def test_couette_derived_fields(tmp_path):
     assert np.allclose(a["vorticity"], -6.0, rtol=1e-6)
     assert np.allclose(a["q_criterion"], 0.0, atol=1e-6)
     assert np.allclose(a["divergence"], 0.0, atol=1e-6)
+    assert a["pressure_gradient"].shape[1] == 3  # VTU vector
+    assert np.allclose(a["pressure_gradient"], 0.0, atol=1e-6)  # Couette: dp = 0
     assert np.allclose(a["total_pressure"], 0.5 * 2.0 * u**2 + a["cp"] * 9.0)
     p0 = 0.5 * 2.0 * u**2 + a["cp"] * 9.0
     assert np.allclose(a["total_pressure_loss"], (9.0 - p0) / 9.0)

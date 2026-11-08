@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- New VTU fields `pressure_gradient` (vector, Pa/m) and
+  `pressure_gradient_magnitude` (|grad p|) from the shared least-squares
+  gradient, for all models; a candidate indicator for future mesh refinement.
 - Example: NACA 0012 with blowing and suction through a slot on the upper
   surface (`examples/cases/naca0012_slot_{base,suction,blowing}.toml`, Re 5e5,
   alpha 12 deg, SA-neg, `transpiration-wall`), mesh

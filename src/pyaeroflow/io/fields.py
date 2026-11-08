@@ -294,6 +294,19 @@ def _density_gradient(c):
     return np.hypot(grad[:, 0], grad[:, 1]) * c.scaling.density / c.scaling.length
 
 
+def _pressure_gradient_nd(c):
+    return c.gradient()[:, 0, :]
+
+
+def _pressure_gradient(c):
+    return _pressure_gradient_nd(c) * c.scaling.pressure / c.scaling.length
+
+
+def _pressure_gradient_magnitude(c):
+    g = _pressure_gradient_nd(c)
+    return np.hypot(g[:, 0], g[:, 1]) * c.scaling.pressure / c.scaling.length
+
+
 def _kinematic_viscosity(c):
     if c.problem.compressible:  # mu(T) / rho per cell
         from pyaeroflow.physics import compressible as comp
@@ -540,6 +553,22 @@ FIELDS = (
         "compressible",
         _compressible,
         _density_gradient,
+    ),
+    Field(
+        "pressure_gradient",
+        "Pa/m",
+        "grad p (vector) from the least-squares gradient",
+        "always",
+        _always,
+        _pressure_gradient,
+    ),
+    Field(
+        "pressure_gradient_magnitude",
+        "Pa/m",
+        "|grad p| from the least-squares gradient (refinement indicator)",
+        "always",
+        _always,
+        _pressure_gradient_magnitude,
     ),
     Field(
         "vorticity",
@@ -844,6 +873,9 @@ FIELDS = (
 
 BY_NAME = {f.name: f for f in FIELDS}
 
+# Fields with two components (written as 3-component VTU vectors).
+VECTOR_NAMES = ("velocity", "pressure_gradient")
+
 # The fields written without ``output.fields`` (what the VTU always held).
 DEFAULT_NAMES = (
     "pressure",
@@ -918,7 +950,7 @@ def compute_fields(names, ctx):
 
 def n_columns(names):
     """(scalar fields, vector fields) among ``names``."""
-    vectors = sum(1 for n in names if n == "velocity")
+    vectors = sum(1 for n in names if n in VECTOR_NAMES)
     return len(names) - vectors, vectors
 
 
