@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- New VTU fields `pressure_gradient` (vector, Pa/m) and
+  `pressure_gradient_magnitude` (|grad p|) from the shared least-squares
+  gradient, for all models; a candidate indicator for future mesh refinement.
+
 ## 1.5.0 – post-processing and the compressible solver (2026-11-07)
 
 First release with the compressible solver (the entry "compressible Euler,
