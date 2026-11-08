@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Local mesh refinement, stage R1: `pyaeroflow.mesh.refine` splits
+  quadrilaterals `nu x nv` along their own directions (any integers, e.g.
+  1 x 4 along a wall) with hanging nodes; neighbours become polygons. Exact
+  rational line parameters keep the topology, a balance rule limits hanging
+  nodes per side, children inherit the parent's directions, every split
+  returns the parent map for injection, and a log replays the refinement on
+  the original mesh. Not yet used by the solver (stages R2 to R4).
 - New VTU fields `pressure_gradient` (vector, Pa/m) and
   `pressure_gradient_magnitude` (|grad p|) from the shared least-squares
   gradient, for all models; a candidate indicator for future mesh refinement.
