@@ -289,7 +289,7 @@ dependence: P7). Types marked "inflow" take a `turbulence` table
 | `"total-pressure-inlet"` | `total_pressure` (Pa, gauge), `flow_direction = [d_x, d_y]` (normalised internally); the velocity magnitude follows from p_total − p = ½ρ|v|² with the interior pressure; inflow: `turbulence`. Compressible flow: `total_pressure` absolute and `total_temperature` (K, required); p from the interior, M from p₀/p, T = T₀/(1 + (γ−1)M²/2) |
 | `"pressure-outlet"` | `pressure` (Pa, default 0). Compressible flow: absolute, required; the temperature follows the interior isentrope, a supersonic outflow takes the interior state |
 | `"periodic"` | `partner` (name of the matching boundary faces; gets no entry of its own), `translation = [dx, dy]` (m); driving force: `physics.mean_pressure_gradient` |
-| `"transpiration-wall"` | `normal_velocity` (m/s; + blowing into the domain, − suction), zero tangential velocity; time dependence: P7 (D18); inflow (blowing): `turbulence` |
+| `"transpiration-wall"` | `normal_velocity` (m/s; + blowing into the domain, − suction), zero tangential velocity (a jet normal to the wall); time dependence: P7 (D18); inflow (blowing): `turbulence`. Incompressible flow only. A slot on an airfoil needs its own marker: `examples/meshes/split_marker.py`; example cases `naca0012_slot_{base,suction,blowing}.toml` |
 
 #### k-ω SST
 

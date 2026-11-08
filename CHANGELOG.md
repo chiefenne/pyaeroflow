@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Example: NACA 0012 with blowing and suction through a slot on the upper
+  surface (`examples/cases/naca0012_slot_{base,suction,blowing}.toml`, Re 5e5,
+  alpha 12 deg, SA-neg, `transpiration-wall`), mesh
+  `examples/meshes/naca0012_tmr_449x129_slot.su2`, and
+  `examples/meshes/split_marker.py` to cut a slot marker out of a wall.
+
 ## 1.5.1 – polar restart of an interrupted angle (2026-11-08)
 
 - `pyaeroflow polar`: an angle that already has a backup in its

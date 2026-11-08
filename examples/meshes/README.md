@@ -12,6 +12,7 @@ not committed.
 | `naca0012_pyaero_300k_y1_s450.su2` | 295k | PyAero, 472 points per side | same | `naca0012_pyaero_rans_fine.toml` |
 | `naca0012_ogrid_256x128.su2` | 33k | `pyaeroflow.mesh.naca0012_ogrid(256, 128, reynolds=6e6)`, farfield 500 chords | airfoil, farfield | `naca0012_rans.toml`, `stage6_naca0012.py` |
 | `naca0012_tmr_225x65.su2` | 14 336 | `make_tmr_naca0012.py` from the TMR grid `naca0012_tmr_225x65.p2dfmt` (C-grid, farfield 500 chords, first cell 3.7·10⁻⁶ c, wake cut merged) | airfoil, farfield | `naca0012_sa_m015.toml`, validation §14 |
+| `naca0012_tmr_449x129_slot.su2` | 57 344 | `make_tmr_naca0012.py` level 1 (449 × 129), then `split_marker.py n0012_449.su2 naca0012_tmr_449x129_slot.su2 airfoil slot 0.075 0.1 upper`: slot of 3 faces (2.1 % chord) on the upper surface at x/c = 0.077 - 0.098 | airfoil, slot, farfield | `naca0012_slot_{base,suction,blowing}.toml` (transpiration wall: blowing and suction) |
 | `e387_pyaero_y1.su2` | 209k | PyAero, C-mesh, 481 points per side, first cell 2·10⁻⁴ c | airfoil, inlet, outlet, top, bottom | `e387_transition.toml`, `e387_aft.toml`, validation §7, §8 |
 | `sd7003_C10_W25_320k_cells.su2` | 320 600 | PyAero, C-mesh, sharp trailing edge | airfoil, inlet, outlet, top, bottom | `aft_sd7003*.toml`, `sst_sd7003.toml`, `lm_sd7003*.toml`, validation §9, §10 (the mesh of the main validation runs) |
 | `sd7003_C10_W25_320k_cells_blunt_TE.su2` | 326 580 | same, trailing edge 0.3 % chord thick | same | `aft_sd7003_tu05_blunt.toml`, validation §9 |
@@ -23,6 +24,12 @@ the airfoil and `W25` the wake length of 25 chords behind the trailing edge.
 The chord is 1. The PyAero meshes are not scaled for a Reynolds number; check
 y⁺ with `pyaeroflow check-mesh MESH --re R`. The RAE 2822 mesh has capitalised
 boundary names: use them in the `[boundary.<name>]` sections of a case file.
+
+`split_marker.py` moves the faces of a marker in an x range (upper, lower or
+both sides) to a new marker, e.g. a slot for a `transpiration-wall`:
+`python split_marker.py IN.su2 OUT.su2 airfoil slot XMIN XMAX upper`. The
+slot has whole wall faces, so its length depends on the surface spacing; the
+script prints it.
 
 `make_tmr_naca0012.py` converts the TMR NACA 0012 PLOT3D grid to `.su2` and
 rebuilds the finer TMR levels (449 × 129, 897 × 257), whose files are not in
