@@ -1,0 +1,71 @@
+# NASA wall-mounted hump (CFDVAL2004 Case 3, NASA TMR 2DWMH), condition 2, steady suction 0.01518 kg/s.
+# Re = 936 000 per hump chord, SA-neg, incompressible (the experiment runs at
+# M = 0.1). TMR no-plenum grid 409 x 109 (examples/meshes/make_nasa_hump.py);
+# the slot exit x/c = 0.6542 - 0.6585 is the marker 'slot' (2 faces,
+# L = 0.00456 c), modelled as a transpiration wall (allowed by the workshop:
+# "specify a boundary condition at the slot exit").
+# Boundary conditions as the TMR: inflow Pt/Pref = 1.007 -> total pressure
+# q_ref = 0.5 (gauge, U = 1), outflow P/Pref = 0.99962 -> p = -0.0543 q_ref
+# = -0.027143, upper wall contoured slip wall.
+# Experiment (Greenblatt et al., AIAA J. 44(12), 2006): reattachment x/c =
+# 1.11 (no flow) and 0.94 (suction); Cp and Cf (no flow) in
+# examples/reference/nasa_hump/.
+
+[case]
+name = "nasa_hump_sa_suction"
+
+[mesh]
+file = "../meshes/nasa_hump_409x109_slot.su2"   # boundary faces: wall, slot, top, inlet, outlet
+
+[physics]
+model = "rans"
+turbulence = "sa-neg"
+
+[fluid]
+density = 1.0                     # kg/m^3
+viscosity = 1.0683761e-6          # Pa s: Re = 936 000 with U = 1 m/s, c = 1 m
+
+[reference]
+velocity = 1.0                    # m/s
+length = 1.0                      # m, hump chord
+moment_center = [0.0, 0.0]
+
+[initial]
+velocity = [1.0, 0.0]
+pressure = 0.0
+turbulence = { nu_tilde_ratio = 3.0 }
+
+[boundary.inlet]
+type = "total-pressure-inlet"
+total_pressure = 0.5              # Pa (gauge): Pt/Pref = 1.007 at M 0.1
+flow_direction = [1.0, 0.0]
+turbulence = { nu_tilde_ratio = 3.0 }
+
+[boundary.outlet]
+type = "pressure-outlet"
+pressure = -0.027143              # Pa: P/Pref = 0.99962
+
+[boundary.top]
+type = "slip-wall"                # contoured for the end-plate blockage
+
+[boundary.wall]
+type = "wall"
+
+[boundary.slot]
+type = "transpiration-wall"
+normal_velocity = -0.33125        # m/s: C_q = 1.509e-3 (0.01518 kg/s over the 23 in slot) / L = 0.00456 c
+
+[numerics]
+limiter = "venkatakrishnan"
+limiter_freeze = { after_residual_drop = 1.5, after_iterations = 40, release = true }
+
+[solver]
+residual_drop = 7.0
+max_iterations = 800
+newton_krylov = { switch_at_residual_drop = 1.5, switch_at_iteration = 40 }
+# Intel MKL PARDISO (pypardiso); remove the line without it.
+linear_solver = { type = "pardiso" }
+
+[output]
+directory = "output/nasa_hump_sa_suction"
+force_boundaries = ["wall", "slot"]

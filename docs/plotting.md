@@ -98,8 +98,8 @@ Readable formats:
 Columns are found by name: `x` (or `x/c`), `cp`, `cf`, `alpha`, `cl`, `cd`, `cm`.
 
 Built-in data (`pyaeroflow plot refs` lists it, with its zones): NASA TMR NACA 0012
-Cp, Cf, CL/CD of CFL3D SA and SST, Gregory Cp, Ladson CL/CD, TMR flat-plate Cf
-(CC0-1.0), the E387 polar of NASA TM 4062 (public domain), and our XFOIL E387 polars.
+Cp, Cf, CL/CD of CFL3D SA and SST, Gregory Cp, Ladson CL/CD, TMR flat-plate Cf,
+NASA hump Cp/Cf (experiment without and with suction, CFL3D SA) (CC0-1.0), the E387 polar of NASA TM 4062 (public domain), and our XFOIL E387 polars.
 Sources and licences are in `src/pyaeroflow/plotting/reference/README.md`. Data whose
 redistribution terms are unclear (Penn State 2007, ERCOFTAC, Selig) is not included;
 pass such files with `--ref`.

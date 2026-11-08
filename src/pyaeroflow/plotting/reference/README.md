@@ -10,6 +10,9 @@ Only data that may be redistributed is kept here.
 | `tmr_naca0012_clcd_cfl3d_sa`, `_sst` | NACA 0012 CL, CD over alpha | same | CC0-1.0 |
 | `tmr_naca0012_cp_gregory` | Gregory & O'Reilly, NASA R&M 3726 (1970), upper surface Cp, Re 2.88e6, digitised (approximate) | TMR, same | CC0-1.0 |
 | `tmr_naca0012_clcd_ladson` | Ladson, NASA TM 4074 (1988), Re 6e6, tripped, three grit sizes | TMR, same | CC0-1.0 |
+| `tmr_hump_cp_exp_noflow`, `tmr_hump_cf_exp_noflow` | NASA wall-mounted hump (CFDVAL2004 Case 3), no flow control: centre-span Cp, oil-film Cf with uncertainty; Greenblatt et al., AIAA J. 44(12), 2006 | TMR, same (Nasahump_validation, fetched 2026-11-08) | CC0-1.0 |
+| `tmr_hump_cp_exp_suction` | same, steady suction 0.01518 kg/s: centre-span Cp | TMR, Other_exp_Data/CFDVAL2004/Case3_exp/suction_cp.dat (header made TMR-like) | CC0-1.0 |
+| `tmr_hump_cp_cfl3d_sa_noflow`, `tmr_hump_cf_cfl3d_sa_noflow` | same, no flow control, CFL3D SA, 817x217 no-plenum grid (Cp shifted by -0.015 by the TMR) | TMR, same | CC0-1.0 |
 | `tmr_flatplate_cf_sst` | Zero-pressure-gradient flat plate Cf, SST-V, CFL3D and FUN3D | TMR, same | CC0-1.0 |
 | `e387_tm4062_re200k` | E387 Re 2e5 polar, McGhee, Walker & Millard, NASA TM 4062 (1988) | NASA report | US government work, public domain |
 | `e387_xfoil_re200k` | E387 Re 2e5 XFOIL polars, N_crit 8.15/9/10.07/11 | generated for pyaeroflow | MIT, as this package |
