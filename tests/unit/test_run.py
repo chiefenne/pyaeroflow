@@ -204,6 +204,36 @@ def test_polar_runs_a_restart_chain(tmp_path):
     assert main(["polar", str(tmp_path / "cyl.toml"), "--alpha", "0", "--quiet"]) == 0
 
 
+def test_polar_continues_an_interrupted_angle(tmp_path):
+    """A polar run of an angle with its own backup continues its counter."""
+    from pyaeroflow.mesh import annulus
+    from pyaeroflow.run import run_polar
+
+    write_su2(tmp_path / "annulus.su2", annulus(32, 8, outer_radius=10.0, growth=1.3))
+    (tmp_path / "cyl.toml").write_text(
+        POLAR.replace("[solver]\n", "[solver]\nmax_iterations = 8\n")
+    )
+    (cut,) = run_polar(tmp_path / "cyl.toml", [0.0], console=False)
+    assert not cut.converged and cut.history["iteration"][-1] == 8
+    (tmp_path / "cyl.toml").write_text(POLAR)
+    first, second = run_polar(tmp_path / "cyl.toml", [0.0, 5.0], console=False)
+    assert first.converged and first.history["iteration"][0] == 8
+    assert second.history["iteration"][0] == 0  # a new angle: a new counter
+    log = (tmp_path / "out" / "alpha_0" / "cyl_alpha_0.log").read_text()
+    assert "continuing after iteration 8" in log
+    # The explicit initial.restart of the first angle wins; another angle's
+    # file gives a new counter.
+    (tmp_path / "cyl.toml").write_text(
+        POLAR.replace(
+            "[numerics]", f'[initial]\nrestart = "{first.restart_file}"\n[numerics]'
+        )
+    )
+    (third,) = run_polar(tmp_path / "cyl.toml", [10.0], console=False)
+    assert third.history["iteration"][0] == 0
+    notes = (tmp_path / "out" / "alpha_10" / "cyl_alpha_10.log").read_text()
+    assert first.restart_file.name in notes
+
+
 def test_polar_reset_restarts_the_cfl_ramp(tmp_path):
     from pyaeroflow.mesh import annulus
     from pyaeroflow.run import run_polar
