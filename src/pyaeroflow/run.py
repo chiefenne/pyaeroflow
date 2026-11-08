@@ -32,7 +32,7 @@ from pyaeroflow.driver import (
     SST_DEFAULT_VISCOSITY_RATIO,
     FlowProblem,
 )
-from pyaeroflow.housekeeping import backup_name, latest_backup
+from pyaeroflow.housekeeping import backup_name
 from pyaeroflow.io import (
     HistoryWriter,
     RunLog,
@@ -2525,6 +2525,12 @@ def run_polar(path, angles, console=True):
     (counter, residual reference and log go on); a file of another angle
     gives its solver state only and a new counter.
 
+    With ``[refinement]`` every angle is a refined run of its own
+    (:func:`pyaeroflow.refinement.run_refined`) in ``alpha_<angle>``: it
+    starts on the original mesh from the state of the previous angle
+    averaged onto it and refines for its own flow; an interrupted angle
+    continues its chain from the newest backup of its highest cycle.
+
     Returns
     -------
     list of RunResult
@@ -2532,11 +2538,6 @@ def run_polar(path, angles, console=True):
     path = Path(path)
     raw = tomllib.loads(path.read_text())
     base = load_case(path)
-    if base.data["refinement"]["cycles"]:
-        raise ValueError(
-            "pyaeroflow polar with [refinement] is not available yet: run the "
-            "angles with pyaeroflow run"
-        )
     out_dir = base.resolve_path(base.data["output"]["directory"])
     out_dir.mkdir(parents=True, exist_ok=True)
     polar_csv = out_dir / f"{base.name}.polar.csv"
@@ -2545,7 +2546,7 @@ def run_polar(path, angles, console=True):
     results, previous = [], None
     for i, alpha in enumerate(angles):
         name = f"{base.name}_alpha_{alpha:g}"
-        own = latest_backup(out_dir / f"alpha_{alpha:g}", name)
+        own = _latest_state(out_dir / f"alpha_{alpha:g}", name)
         if i == 0 and explicit is not None:
             start = base.resolve_path(explicit)
         elif own is not None:  # this angle ran before: continue it
@@ -2590,6 +2591,13 @@ def run_polar(path, angles, console=True):
     return results
 
 
+def _latest_state(directory, name):
+    """Newest backup of ``name`` in ``directory``, of the highest refinement cycle."""
+    from pyaeroflow.refinement import latest_chain_backup
+
+    return latest_chain_backup(directory, name)
+
+
 def _is_state_of(file, name):
     """Tell whether ``file`` is a backup or restart file of case ``name``."""
     return file is not None and Path(file).name.startswith(f"{name}.")
@@ -2614,7 +2622,7 @@ def _nearest_restart(out_dir, name, alpha):
             a = float(d.name[6:])
         except ValueError:
             continue
-        file = latest_backup(d, f"{name}_alpha_{a:g}")
+        file = _latest_state(d, f"{name}_alpha_{a:g}")
         if file is None or a == alpha:
             continue
         rank = (abs(a - alpha), a > alpha)

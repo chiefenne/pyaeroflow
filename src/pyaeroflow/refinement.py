@@ -12,15 +12,25 @@ A refined run is a chain of ordinary runs, one per cycle, like the angles of
   (:mod:`pyaeroflow.mesh.indicator`, :mod:`pyaeroflow.mesh.refine`), every
   new cell takes the state of its parent (injection) and the next cycle
   starts from it with the solver state of the previous cycle (CFL,
-  Newton-Krylov switch, limiter, vortex; like the next angle of a polar);
+  Newton-Krylov switch, released limiter, vortex; like the next angle of a
+  polar);
+* a frozen limiter is not passed on: every cycle after a refinement freezes
+  its own, by ``numerics.limiter_freeze`` or else after
+  ``refinement.limiter_freeze`` orders of the cycle (a captured shock on the
+  refined mesh makes the limiter chatter: NACA 0012 at M 0.8 stalled at 3
+  orders of cycle 2 and converges 10 orders with it frozen);
 * the problem is built anew on the refined mesh (geometry, gradient stencils,
   wall distance, Jacobian pattern, linear-solver analysis).
 
 Every restart and backup file of a refined cycle stores the refinement log
 (the splits, the wall options and the cycle number) as JSON. ``pyaeroflow
 run`` with such a file as ``initial.restart`` replays the splits on the
-original mesh file, so no new mesh format is needed; with ``[refinement]``
-the chain continues from that cycle.
+original mesh file, so no new mesh format is needed. With ``[refinement]`` a
+file of the case's own chain (``<name>_cycle_<k>`` or a cycle start file)
+continues the chain from that cycle; a file of another case (the previous
+angle of ``pyaeroflow polar``) gives its state averaged onto the original
+mesh (area-weighted over the children of each original cell) and the chain
+starts again at cycle 0, so every angle refines for its own flow.
 
 ``<output.directory>/<name>.refinement.csv`` lists the cycles (cells,
 iterations, residual drop, coefficients, marked cells) and
@@ -73,7 +83,53 @@ def _info_json(ref, options, cycle):
     return json.dumps({"log": ref.log, "options": options, "cycle": cycle})
 
 
-def _cycle_config(base, k, final, previous, mode, extra):
+def restrict(values, origin, area, n_cells):
+    """Area-weighted mean of leaf ``values`` over each original cell.
+
+    The inverse of the injection: ``origin`` maps every leaf cell to its
+    original cell (:attr:`~pyaeroflow.mesh.refine.Refinement.origin`), ``area``
+    is the leaf cell area and ``n_cells`` the number of original cells. A
+    constant field is kept exactly.
+    """
+    values = np.asarray(values, dtype=float)
+    w = np.asarray(area, dtype=float)
+    shape = (n_cells,) + values.shape[1:]
+    total = np.zeros(n_cells)
+    np.add.at(total, origin, w)
+    out = np.zeros(shape)
+    np.add.at(out, origin, values * w.reshape((-1,) + (1,) * (values.ndim - 1)))
+    return out / total.reshape((-1,) + (1,) * (values.ndim - 1))
+
+
+def own_chain(path, name):
+    """Tell whether ``path`` is a file of the refinement chain of case ``name``."""
+    file = Path(path).name
+    return file.startswith(f"{name}_cycle_") or file.startswith(f"{name}.cycle_")
+
+
+def latest_chain_backup(directory, name):
+    """Newest backup of a refined run of ``name`` in ``directory``, or None.
+
+    The backups of the highest cycle in ``<directory>/cycle_<k>`` win; a run
+    without refinement (backups of ``name`` itself) is the fallback.
+    """
+    from pyaeroflow.housekeeping import latest_backup
+
+    directory = Path(directory)
+    cycles = []
+    for d in directory.glob("cycle_*"):
+        try:
+            cycles.append((int(d.name[6:]), d))
+        except ValueError:
+            continue
+    for k, d in sorted(cycles, reverse=True):
+        found = latest_backup(d, f"{name}_cycle_{k}")
+        if found is not None:
+            return found
+    return latest_backup(directory, name)
+
+
+def _cycle_config(base, k, final, previous, mode, extra, refined=True):
     """Return the resolved configuration of cycle ``k`` (a copy of ``base``)."""
     data = copy.deepcopy(base.data)
     rc = data["refinement"]
@@ -88,15 +144,27 @@ def _cycle_config(base, k, final, previous, mode, extra):
         if rc["iterations"] is not None:
             data["solver"]["max_iterations"] = rc["iterations"]
         data["solver"]["residual_drop"] = rc["residual_drop"]
-    if mode == "state":
-        # The polar option decides whether the next run restarts the CFL ramp.
+    freeze = data["numerics"]["limiter_freeze"]
+    if (
+        k > 0
+        and rc["limiter_freeze"]
+        and freeze["after_iterations"] is None
+        and freeze["after_residual_drop"] is None
+    ):
+        # A shock captured on the refined mesh: the limiter chatters and the
+        # line search cuts every step (NACA 0012 M 0.8 stalled at 3 orders);
+        # frozen after an order the cycle converges.
+        freeze["after_residual_drop"] = rc["limiter_freeze"]
+    if mode == "state" and refined:
+        # After a refinement the polar option decides whether the CFL ramp
+        # starts again; a start from another case keeps solver.cfl.polar_reset.
         data["solver"]["cfl"]["polar_reset"] = rc["cfl_reset"]
     config = Resolved(data, set(base.explicit), base.path, list(base.notices))
     config.refinement_cycle = True
     config.restart_extra = extra
     if base.reload is not None:
         config.reload = lambda: _cycle_config(
-            base.reload(), k, final, previous, mode, extra
+            base.reload(), k, final, previous, mode, extra, refined
         )
     return config
 
@@ -119,33 +187,58 @@ def indicator_fields(result, config, names):
     return compute_fields(names, ctx)
 
 
-def _transfer(result, ref, source, out_dir, name, k, options):
-    """Write the injected start file of cycle ``k`` on the refined mesh."""
+def _start_file(file, mesh, mapping, path, extra, drop_frozen_limiter=False):
+    """Write the state of restart ``file`` as a start file on ``mesh``.
+
+    ``mapping`` takes an array over the cells of ``file`` (first axis) to
+    one over the cells of ``mesh``; it is applied to the state and to every
+    per-cell array of the solver state (limiter, lagged intermittency).
+    ``drop_frozen_limiter`` leaves out a frozen limiter (not a released one).
+    """
     from pyaeroflow.run import load_restart_state, save_restart
 
-    with np.load(result.restart_file) as data:
+    with np.load(file) as data:
         u = np.array(data["w"])
         step = int(data["step"]) if "step" in data.files else 0
         flow = str(data["flow"]) if "flow" in data.files else "incompressible"
     n_old = u.shape[0]
-    state = load_restart_state(result.restart_file) or {}
+    state = load_restart_state(file) or {}
     state.pop("iteration", None)
     state.pop("file", None)
+    if drop_frozen_limiter and "psi" in state and not np.all(state["psi"] == 1.0):
+        # A limiter frozen on the coarser mesh does not fit the split cells:
+        # the next cycle freezes its own (a released limiter, all ones, stays).
+        del state["psi"]
     for key, value in list(state.items()):
         if isinstance(value, np.ndarray) and value.ndim and value.shape[0] == n_old:
-            state[key] = value[source]
-    path = out_dir / f"{name}.cycle_{k}_start.npz"
-    save_restart(
-        path,
-        ref.mesh,
-        u[source],
-        step,
-        None,
-        state or None,
-        flow,
-        {"refinement": _info_json(ref, options, k)},
-    )
+            state[key] = mapping(value)
+    save_restart(path, mesh, mapping(u), step, None, state or None, flow, extra)
     return path
+
+
+def _transfer(result, ref, source, out_dir, name, k, options):
+    """Write the injected start file of cycle ``k`` on the refined mesh."""
+    return _start_file(
+        result.restart_file,
+        ref.mesh,
+        lambda v: v[source],
+        out_dir / f"{name}.cycle_{k}_start.npz",
+        {"refinement": _info_json(ref, options, k)},
+        drop_frozen_limiter=True,
+    )
+
+
+def _restricted_start(file, info, mesh, out_dir, name):
+    """Write the state of a refined restart ``file`` averaged onto ``mesh``."""
+    old = replay_refinement(mesh, info)
+    origin, area = old.origin, old.mesh.cell_area
+    return _start_file(
+        file,
+        mesh,
+        lambda v: restrict(v, origin, area, mesh.n_cells),
+        out_dir / f"{name}.restricted_start.npz",
+        None,
+    )
 
 
 def run_refined(config, console=True, mesh=None):
@@ -181,17 +274,18 @@ def run_refined(config, console=True, mesh=None):
     spec = RefineSpec(**refine_spec_args(rc))
     names = [n for n in names_used(rc["indicator"]) if n in BY_NAME]
 
-    previous, start = None, 0
+    previous, start, ref, restricted = None, 0, None, None
     if cfg["initial"]["restart"] is not None:
         previous = config.resolve_path(cfg["initial"]["restart"])
         info = read_refinement_info(previous)
-        if info is not None:
-            ref = replay_refinement(mesh, info)
+        if info is not None and own_chain(previous, name):
+            ref = replay_refinement(mesh, info)  # continue the chain
             start = int(info["cycle"])
             options = info["options"]
-        else:
-            ref = Refinement.from_mesh(mesh, **options)
-    else:
+        elif info is not None:  # another case: its state on the original mesh
+            restricted = previous
+            previous = _restricted_start(previous, info, mesh, out_dir, name)
+    if ref is None:
         ref = Refinement.from_mesh(mesh, **options)
 
     log_path = out_dir / f"{name}.refinement.log"
@@ -208,6 +302,11 @@ def run_refined(config, console=True, mesh=None):
         f"case '{name}': {rc['cycles']} refinements, indicator "
         f"'{rc['indicator']}', start at cycle {start} with {ref.n_cells} cells"
     )
+    if restricted is not None:
+        note(
+            f"start state from {Path(restricted).name} (a refined mesh of "
+            f"another case), averaged onto the original mesh: {previous.name}"
+        )
     result = None
     k = start
     while True:
@@ -217,7 +316,8 @@ def run_refined(config, console=True, mesh=None):
         if previous is None:
             mode = "continue"  # a fresh start: nothing to take over
         extra = {"refinement": _info_json(ref, options, k)} if ref.log else None
-        cycle_config = _cycle_config(config, k, final, previous, mode, extra)
+        refined = previous is not None and own_chain(previous, name)
+        cycle_config = _cycle_config(config, k, final, previous, mode, extra, refined)
         result = run_case(
             cycle_config, console=console, mesh=ref.mesh, restart_mode=mode
         )

@@ -1016,6 +1016,16 @@ SCHEMA = {
             "switch and the limiter are kept); otherwise the CFL of the "
             "previous cycle is continued",
         ),
+        "limiter_freeze": Opt(
+            "float",
+            1.0,
+            "Freeze the limiter in every cycle after a refinement once the "
+            "residual of the cycle fell by this many orders (0 = off); not "
+            "used when numerics.limiter_freeze is set. Without it the limiter "
+            "of a captured shock on a refined mesh can stall the Newton "
+            "iteration",
+            minimum=0.0,
+        ),
     },
     "output": {
         "directory": Opt(

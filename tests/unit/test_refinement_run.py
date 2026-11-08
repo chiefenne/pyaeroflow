@@ -7,8 +7,23 @@ import pytest
 
 from pyaeroflow.config import ConfigError, resolve
 from pyaeroflow.mesh import annulus, read_mesh, write_su2
-from pyaeroflow.refinement import read_refinement_info, replay_refinement
-from pyaeroflow.run import mesh_fingerprint, run_case, run_polar
+from pyaeroflow.mesh.refine import Refinement
+from pyaeroflow.refinement import (
+    _cycle_config,
+    _start_file,
+    latest_chain_backup,
+    own_chain,
+    read_refinement_info,
+    replay_refinement,
+    restrict,
+)
+from pyaeroflow.run import (
+    load_restart_state,
+    mesh_fingerprint,
+    run_case,
+    run_polar,
+    save_restart,
+)
 
 CYL = """
 [case]
@@ -120,6 +135,98 @@ def test_refined_run_and_restart_replay(cyl_dir):
     assert read_refinement_info(again.restart_file)["cycle"] == 1
 
 
-def test_polar_with_refinement_is_refused(cyl_dir):
-    with pytest.raises(ValueError, match="not available yet"):
-        run_polar(cyl_dir / "cyl.toml", [0.0], console=False)
+def test_limiter_frozen_in_the_cycles_after_a_refinement():
+    text = CYL.replace('limiter = "none"', 'limiter = "venkatakrishnan-wang"')
+    config = resolve(_raw(text))
+
+    def freeze(cfg, k):
+        c = _cycle_config(cfg, k, False, None, "continue", None)
+        return c.data["numerics"]["limiter_freeze"]["after_residual_drop"]
+
+    assert freeze(config, 0) is None
+    assert freeze(config, 1) == 1.0
+    assert config.data["numerics"]["limiter_freeze"]["after_residual_drop"] is None
+    off = resolve(_raw(text.replace("cycles = 1", "cycles = 1\nlimiter_freeze = 0")))
+    assert freeze(off, 1) is None
+    own = text.replace(
+        "[numerics]", "[numerics]\nlimiter_freeze = { after_iterations = 30 }"
+    )
+    assert freeze(resolve(_raw(own)), 1) is None
+
+
+@pytest.mark.parametrize("value,kept", [(0.5, False), (1.0, True)])
+def test_transfer_drops_a_frozen_limiter(tmp_path, value, kept):
+    mesh = annulus(8, 3)
+    psi = np.full((mesh.n_cells, 3), value)
+    file = tmp_path / "c_cycle_0.backup_000010.npz"
+    state = {"kind": "steady", "cfl": 50.0, "nk_on": True, "psi": psi}
+    save_restart(file, mesh, np.ones((mesh.n_cells, 3)), 10, None, state)
+    source = np.repeat(np.arange(mesh.n_cells), 2)
+    out = _start_file(file, mesh, lambda v: v[source], tmp_path / "s.npz", None, True)
+    new = load_restart_state(out)
+    assert new["cfl"] == 50.0 and new["nk_on"]
+    assert ("psi" in new) == kept
+    if kept:
+        assert new["psi"].shape == (2 * mesh.n_cells, 3)
+
+
+def test_restrict_undoes_injection():
+    ref = Refinement.from_mesh(annulus(8, 3))
+    n0 = ref.n_cells
+    ref.split([0, 5], 3, 1)
+    ref.split([1], 2, 2)
+    origin = ref.origin
+    v0 = np.arange(2.0 * n0).reshape(n0, 2)
+    back = restrict(v0[origin], origin, ref.mesh.cell_area, n0)
+    np.testing.assert_allclose(back, v0)
+    # Children with different values: the area-weighted mean of the parent.
+    leaf = np.arange(ref.n_cells, dtype=float)
+    area = ref.mesh.cell_area
+    i = origin == 1
+    mean = (leaf[i] * area[i]).sum() / area[i].sum()
+    assert restrict(leaf, origin, area, n0)[1] == pytest.approx(mean)
+
+
+def test_own_chain_and_latest_chain_backup(tmp_path):
+    assert own_chain("c_alpha_2_cycle_1.backup_000010.npz", "c_alpha_2")
+    assert own_chain("c_alpha_2.cycle_2_start.npz", "c_alpha_2")
+    assert not own_chain("c_alpha_2_cycle_1.backup_000010.npz", "c_alpha_4")
+    assert not own_chain("c_alpha_20_cycle_1.backup_000010.npz", "c_alpha_2")
+    assert not own_chain("c_alpha_2.restricted_start.npz", "c_alpha_2")
+    for k, n in ((0, 30), (1, 12), (1, 20)):
+        d = tmp_path / f"cycle_{k}"
+        d.mkdir(exist_ok=True)
+        (d / f"c_cycle_{k}.backup_{n:06d}.npz").touch()
+    (tmp_path / "cycle_2").mkdir()  # started, no backup yet
+    found = latest_chain_backup(tmp_path, "c")
+    assert found.name == "c_cycle_1.backup_000020.npz"
+    assert latest_chain_backup(tmp_path / "cycle_2", "c") is None
+
+
+def test_polar_refines_every_angle(cyl_dir):
+    results = run_polar(cyl_dir / "cyl.toml", [0.0, 10.0], console=False)
+    out = cyl_dir / "out"
+    assert len(results) == 2 and all(r.converged for r in results)
+    polar = np.genfromtxt(out / "cyl.polar.csv", delimiter=",", names=True)
+    assert list(polar["alpha"]) == [0.0, 10.0]
+    for alpha, r in zip((0, 10), results, strict=True):
+        a = out / f"alpha_{alpha}"
+        rows = np.genfromtxt(
+            a / f"cyl_alpha_{alpha}.refinement.csv", delimiter=",", names=True
+        )
+        assert list(rows["cycle"]) == [0, 1]
+        assert rows["cells"][0] == 256 and r.mesh.n_cells == rows["cells"][1]
+        assert r.restart_file.parent == a / "cycle_1"
+    # The second angle starts on the original mesh from the first angle's
+    # refined state, averaged onto it, and refines for its own flow.
+    log = (out / "alpha_10" / "cyl_alpha_10.refinement.log").read_text()
+    assert "averaged onto the original mesh" in log
+    start = out / "alpha_10" / "cyl_alpha_10.restricted_start.npz"
+    assert read_refinement_info(start) is None
+    with np.load(start) as data:
+        assert data["w"].shape[0] == 256
+    # A second polar run of an angle continues its own chain at the last cycle.
+    again = run_polar(cyl_dir / "cyl.toml", [10.0], console=False)
+    assert again[0].mesh.n_cells == results[1].mesh.n_cells
+    log = (out / "alpha_10" / "cyl_alpha_10.refinement.log").read_text()
+    assert "start at cycle 1" in log
