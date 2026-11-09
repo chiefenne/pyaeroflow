@@ -154,6 +154,31 @@ def test_limiter_frozen_in_the_cycles_after_a_refinement():
     assert freeze(resolve(_raw(own)), 1) is None
 
 
+def test_force_stop_in_the_cycles_after_a_refinement():
+    config = resolve(_raw(CYL))
+
+    def conv(cfg, k, final=False):
+        return _cycle_config(cfg, k, final, None, "continue", None).data["solver"][
+            "convergence"
+        ]
+
+    assert conv(config, 0)["fields"] == []
+    for final in (False, True):
+        c = conv(config, 1, final)
+        assert c["fields"] == ["cl", "cd"]
+        assert (c["cauchy_eps"], c["cauchy_elements"]) == (1.0e-6, 20)
+        assert c["min_residual_drop"] == 2.0
+    assert config.data["solver"]["convergence"]["fields"] == []
+    off = resolve(_raw(CYL.replace("cycles = 1", "cycles = 1\ncauchy_eps = 0")))
+    assert conv(off, 1)["fields"] == []
+    own = CYL.replace(
+        "[numerics]",
+        '[solver.convergence]\nfields = ["cm"]\ncauchy_eps = 1e-9\n[numerics]',
+    )
+    c = conv(resolve(_raw(own)), 1)
+    assert c["fields"] == ["cm"] and c["cauchy_eps"] == 1e-9
+
+
 @pytest.mark.parametrize("value,kept", [(0.5, False), (1.0, True)])
 def test_transfer_drops_a_frozen_limiter(tmp_path, value, kept):
     mesh = annulus(8, 3)

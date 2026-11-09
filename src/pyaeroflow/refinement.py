@@ -6,7 +6,10 @@ A refined run is a chain of ordinary runs, one per cycle, like the angles of
 * cycle ``k`` runs in ``<output.directory>/cycle_<k>`` with the case name
   ``<name>_cycle_<k>``; every cycle but the last ends after
   ``refinement.residual_drop`` orders or ``refinement.iterations``
-  iterations, the last one uses the ``solver`` settings;
+  iterations, the last one uses the ``solver`` settings; every cycle after
+  a refinement also ends when CL and CD stand still
+  (``refinement.cauchy_eps``), since its orders count from the transferred,
+  nearly converged state;
 * after a cycle the indicator (``refinement.indicator``) is computed from the
   final state, the marked cells are split
   (:mod:`pyaeroflow.mesh.indicator`, :mod:`pyaeroflow.mesh.refine`), every
@@ -145,6 +148,16 @@ def _cycle_config(base, k, final, previous, mode, extra, refined=True):
         if rc["iterations"] is not None:
             data["solver"]["max_iterations"] = rc["iterations"]
         data["solver"]["residual_drop"] = rc["residual_drop"]
+    conv = data["solver"]["convergence"]
+    if k > 0 and rc["cauchy_eps"] > 0 and not conv["fields"]:
+        # The orders of a refined cycle count from the transferred state,
+        # already near convergence: SD7003 LM alpha 4 on 346k cells had its
+        # forces fixed to 5 digits after ~70 of 203 iterations (7 orders).
+        conv["fields"] = ["cl", "cd"]
+        conv["cauchy_eps"] = rc["cauchy_eps"]
+        conv["cauchy_elements"] = rc["cauchy_elements"]
+        conv["min_residual_drop"] = rc["cauchy_min_residual_drop"]
+        conv["start_iteration"] = 0
     freeze = data["numerics"]["limiter_freeze"]
     if (
         k > 0
@@ -324,6 +337,17 @@ def run_refined(config, console=True, mesh=None):
         note(
             f"start state from {Path(restricted).name} (a refined mesh of "
             f"another case), averaged onto the original mesh: {previous.name}"
+        )
+    if (
+        previous is not None
+        and restricted is None
+        and not rc["refine_restart"]
+        and not own_chain(previous, name)
+    ):
+        note(
+            f"warning: cycle 0 runs from {Path(previous).name}; if that state "
+            "is already converged, refinement.refine_restart = true refines it "
+            "right away and saves the cycle 0 run"
         )
     k = start
     if rc["refine_restart"] and previous is not None and not own_chain(previous, name):

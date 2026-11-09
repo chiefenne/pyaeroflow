@@ -1023,6 +1023,32 @@ SCHEMA = {
             "another case) before any run: cycle 0 is not run, the chain starts "
             "with cycle 1 on the refined mesh. pyaeroflow polar: first angle only",
         ),
+        "cauchy_eps": Opt(
+            "float",
+            1.0e-6,
+            "Force stop of every cycle after a refinement: the cycle also ends "
+            "(converged) when CL and CD changed by less than this (mean "
+            "relative change per iteration) over cauchy_elements iterations, "
+            "each with at least cauchy_min_residual_drop orders. The residual "
+            "drop of such a cycle counts from the transferred state, which is "
+            "already close to converged, so its orders cost iterations that "
+            "no longer move the forces; 0 = off. Not used when "
+            "solver.convergence.fields is set",
+            minimum=0.0,
+        ),
+        "cauchy_elements": Opt(
+            "int",
+            20,
+            "Iterations in the Cauchy window of refinement.cauchy_eps",
+            minimum=2,
+        ),
+        "cauchy_min_residual_drop": Opt(
+            "float",
+            2.0,
+            "Residual drop in orders (drop column of the log) every iteration "
+            "of the refinement.cauchy_eps window needs",
+            minimum=0.0,
+        ),
         "limiter_freeze": Opt(
             "float",
             1.0,
