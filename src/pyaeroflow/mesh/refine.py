@@ -73,6 +73,7 @@ class _Cell:
     origin: int  # cell index in the original mesh
     nu: int = 1  # accumulated split factors along u and v
     nv: int = 1
+    box: tuple = (_ZERO, _ONE, _ZERO, _ONE)  # (u0, u1, v0, v1) in the origin cell
 
     @property
     def splittable(self):
@@ -101,13 +102,20 @@ class Refinement:
     curves: dict = field(default_factory=dict)  # wall line -> 4 control points
     chains: dict = field(default_factory=dict)  # node -> grid lines ending there
     decay: float = 20.0
+    placement: str = "smooth"
+    corner_angle: float = 30.0
+    _original: Mesh = None
+    _patches: dict = field(default_factory=dict)  # edge (a, b) -> 4 x 2 points
+    _continuation: dict = None
     _moved: list = field(default_factory=list)
     _mesh: Mesh = None
 
     # -- construction --------------------------------------------------------
 
     @classmethod
-    def from_mesh(cls, mesh, walls=(), corner_angle=30.0, decay=20.0):
+    def from_mesh(
+        cls, mesh, walls=(), corner_angle=30.0, decay=20.0, placement="smooth"
+    ):
         """Refinement state of an unrefined mesh (no split yet).
 
         Parameters
@@ -127,7 +135,21 @@ class Refinement:
             grid lines that start at it by ``d * (1 - s / (decay * |d|))``,
             ``s`` the distance from the wall, so thin near-wall cells move with
             the wall instead of folding.
+        placement : {"smooth", "linear"}
+            Where a new node goes inside its original cell. ``smooth``: by
+            shape-preserving (PCHIP) interpolation in the index space of the
+            original grid lines through the cell and its neighbours (as a
+            nested structured grid is refined), so the spacing grows smoothly
+            and the grid lines stay curved; a uniform 2 x 2 split of the TMR
+            225 x 65 grid lies close to the 449 x 129 grid. Where a grid line
+            of the cell ends (a corner such as a trailing edge, a node that
+            is not regular), the whole side of the patch is extrapolated
+            linearly, so neighbouring lines stay consistent. ``linear``: on the straight
+            line between the bracketing nodes (equal parts; the stretching
+            ratio then jumps at every original node).
         """
+        if placement not in ("smooth", "linear"):
+            raise MeshError(f"placement must be smooth or linear, not {placement!r}")
         nodes = [tuple(p) for p in mesh.nodes.tolist()]
         boundary_of_face = {}
         for name, faces in mesh.boundary_faces.items():
@@ -149,7 +171,16 @@ class Refinement:
                 lid = line_of_key[(a, b) if a < b else (b, a)]
                 sides.append((lid, _ZERO, _ONE) if a < b else (lid, _ONE, _ZERO))
             cells.append(_Cell(list(corners), sides, i))
-        ref = cls(nodes, lines, cells, tuple(mesh.boundary_faces), decay=decay)
+        ref = cls(
+            nodes,
+            lines,
+            cells,
+            tuple(mesh.boundary_faces),
+            decay=decay,
+            placement=placement,
+            corner_angle=corner_angle,
+        )
+        ref._original = mesh
         ref.curves = _wall_curves(mesh, walls, corner_angle, line_of_key)
         ref._mesh = mesh
         return ref
@@ -334,11 +365,12 @@ class Refinement:
                 factors[i] = tuple(need)
         return factors
 
-    def _node_on(self, lid, t):
+    def _node_on(self, lid, t, smooth=None):
         """Node of line ``lid`` at parameter ``t``, created if missing.
 
-        A new node lies between its two neighbours on the line (linear in
-        the parameter), or on the wall curve for wall lines.
+        A new node lies at ``smooth`` (the smooth position in its original
+        cell) if given, else between its two neighbours on the line (linear
+        in the parameter); a node of a wall line goes onto the wall curve.
         """
         line = self.lines[lid]
         j = bisect_left(line.params, t)
@@ -355,14 +387,21 @@ class Refinement:
             # nodes of the parallel grid lines above sit; measured from the
             # bracketing nodes it would be wrong once a neighbour on the same
             # face is already on the curve.
-            p = _catmull_rom(self.curves[lid], float(t))
             (a0, b0), (a1, b1) = self.nodes[line.first], self.nodes[line.last]
-            s = float(t)
-            straight = (a0 + s * (a1 - a0), b0 + s * (b1 - b0))
+            if smooth is None:
+                p = _catmull_rom(self.curves[lid], float(t))
+                s = float(t)
+                straight = (a0 + s * (a1 - a0), b0 + s * (b1 - b0))
+            else:
+                # The nodes above sit at their smooth positions: the wall
+                # node moves from its smooth position to the nearest curve
+                # point, and that (small) move is passed on.
+                p = _nearest_on_curve(self.curves[lid], smooth)
+                straight = smooth
             self.nodes.append(p)
             self._moved.append((node, (p[0] - straight[0], p[1] - straight[1])))
         else:
-            self.nodes.append(straight)
+            self.nodes.append(straight if smooth is None else smooth)
         line.params.insert(j, t)
         line.nodes.insert(j, node)
         return node
@@ -438,6 +477,67 @@ class Refinement:
                     stack.append(j)
         return out
 
+    def _edge_points(self, a, b):
+        """4 points along the grid line through original edge a -> b.
+
+        [before a, a, b, after b]: the grid line continued through the
+        neighbouring cells (see ``_continuations``), else extrapolated
+        linearly. Cached per edge, so both cells of an edge see one curve.
+        """
+        key = (a, b)
+        if key in self._patches:
+            return self._patches[key]
+        if (b, a) in self._patches:
+            pts = self._patches[(b, a)][::-1]
+            self._patches[key] = pts
+            return pts
+        if self._continuation is None:
+            self._continuation = _continuations(self._original, self.corner_angle)
+        cont, p = self._continuation, self._original.nodes
+        pts = np.full((4, 2), np.nan)
+        pts[1], pts[2] = p[a], p[b]
+        before, after = cont.get((b, a)), cont.get((a, b))
+        if before is not None:
+            pts[0] = p[before]
+        if after is not None:
+            pts[3] = p[after]
+        _extrapolate(pts)
+        self._patches[key] = pts
+        return pts
+
+    def _smooth_point(self, origin, u, v):
+        """Coons patch of original quad ``origin`` at (u, v) in [0, 1]^2.
+
+        Its 4 sides are cubic curves along the grid lines through the
+        quad's edges (``_grid_line_point``), so new nodes follow the
+        curvature and the stretching of the grid lines across the old nodes.
+        """
+        mesh = self._original
+        ptr, cn = mesh.cell_ptr, mesh.cell_nodes
+        c0, c1, c2, c3 = cn[ptr[origin] : ptr[origin + 1]].tolist()
+
+        def edge(a, b, s):
+            if s == 0.0:
+                return mesh.nodes[a]
+            if s == 1.0:
+                return mesh.nodes[b]
+            return _grid_line_point(self._edge_points(a, b), s)
+
+        e0, e2 = edge(c0, c1, u), edge(c3, c2, u)
+        e3, e1 = edge(c0, c3, v), edge(c1, c2, v)
+        p = mesh.nodes
+        q = (
+            (1 - v) * e0
+            + v * e2
+            + (1 - u) * e3
+            + u * e1
+            - (1 - u) * (1 - v) * p[c0]
+            - u * (1 - v) * p[c1]
+            - u * v * p[c2]
+            - (1 - u) * v * p[c3]
+        )
+        return float(q[0]), float(q[1])
+
     def _new_line(self, first, last):
         self.lines.append(_Line(first, last))
         return len(self.lines) - 1
@@ -452,20 +552,30 @@ class Refinement:
         s0, s1, s2, s3 = c.sides
         fu = [Fraction(i, nu) for i in range(nu + 1)]
         fv = [Fraction(j, nv) for j in range(nv + 1)]
+        u0, u1, v0, v1 = c.box
+        bu = [u0 + f * (u1 - u0) for f in fu]  # in the origin cell
+        bv = [v0 + f * (v1 - v0) for f in fv]
+        smooth = self.placement == "smooth" and self._original is not None
+
+        def pos(i, j):
+            if not smooth:
+                return None
+            return self._smooth_point(c.origin, float(bu[i]), float(bv[j]))
+
         # Grid nodes N[j][i] at (u, v) = (i/nu, j/nv).
         grid = [[None] * (nu + 1) for _ in range(nv + 1)]
         for i in range(nu + 1):
-            grid[0][i] = self._node_on(*at(s0, fu[i]))
-            grid[nv][i] = self._node_on(*at(s2, 1 - fu[i]))
+            grid[0][i] = self._node_on(*at(s0, fu[i]), pos(i, 0))
+            grid[nv][i] = self._node_on(*at(s2, 1 - fu[i]), pos(i, nv))
         for j in range(nv + 1):
-            grid[j][nu] = self._node_on(*at(s1, fv[j]))
-            grid[j][0] = self._node_on(*at(s3, 1 - fv[j]))
+            grid[j][nu] = self._node_on(*at(s1, fv[j]), pos(nu, j))
+            grid[j][0] = self._node_on(*at(s3, 1 - fv[j]), pos(0, j))
         horiz = [None] * (nv + 1)  # line of grid row j (0 < j < nv), along u
         for j in range(1, nv):
             lid = self._new_line(grid[j][0], grid[j][nu])
             horiz[j] = lid
             for i in range(1, nu):
-                grid[j][i] = self._node_on(lid, fu[i])
+                grid[j][i] = self._node_on(lid, fu[i], pos(i, j))
         vert = [None] * (nu + 1)  # line of grid column i (0 < i < nu), along v
         for i in range(1, nu):
             lid = self._new_line(grid[0][i], grid[nv][i])
@@ -515,6 +625,7 @@ class Refinement:
                         c.origin,
                         c.nu * nu,
                         c.nv * nv,
+                        (bu[i], bu[i + 1], bv[j], bv[j + 1]),
                     )
                 )
         return children
@@ -618,13 +729,13 @@ def _catmull_rom(ctrl, s):
     return float(c[0]), float(c[1])
 
 
-def refine_cells(mesh, cells, nu=2, nv=2, max_hanging=1):
+def refine_cells(mesh, cells, nu=2, nv=2, max_hanging=1, placement="smooth"):
     """One-shot refinement of an unrefined mesh.
 
     Returns ``(new_mesh, source)`` with ``source`` the original cell of every
     new cell. See :meth:`Refinement.split`.
     """
-    ref = Refinement.from_mesh(mesh)
+    ref = Refinement.from_mesh(mesh, placement=placement)
     source = ref.split(cells, nu, nv, max_hanging)
     return ref.mesh, source
 
@@ -632,3 +743,143 @@ def refine_cells(mesh, cells, nu=2, nv=2, max_hanging=1):
 def inject(values, source):
     """Transfer cell values to the refined mesh (children copy the parent)."""
     return np.asarray(values)[np.asarray(source)]
+
+
+def _continuations(mesh, corner_angle=30.0, kink_angle=1.0, kink_ratio=2.0):
+    """Continuation of grid lines: {(a, b): c} with b -> c continuing a -> b.
+
+    c is the edge at b that shares no cell with edge (a, b) and turns the
+    line by less than ``corner_angle``, where there is exactly one (the
+    opposite edge at a regular node of a quad grid, the next face along a
+    boundary, the wake line behind a trailing edge). The wake line at a
+    trailing edge has two (upper and lower wall) and ends there.
+
+    A line also ends at a kink: a node where it turns by more than
+    ``kink_angle`` and by more than ``kink_ratio`` times the sum of the turns
+    at the nodes before and after it (the rows of a C-grid at the trailing
+    edge turn by 8 deg in one node). A cubic across a kink would bend the
+    thin cells there out of shape; a leading edge turns by as much, but
+    over many nodes, and is followed.
+    """
+    cos_max = np.cos(np.radians(corner_angle))
+    p = mesh.nodes
+    nbrs = {}
+    for a, b in mesh.face_nodes.tolist():
+        nbrs.setdefault(a, set()).add(b)
+        nbrs.setdefault(b, set()).add(a)
+    cells_of = {}
+    ptr, cn = mesh.cell_ptr.tolist(), mesh.cell_nodes.tolist()
+    for i in range(mesh.n_cells):
+        for n in cn[ptr[i] : ptr[i + 1]]:
+            cells_of.setdefault(n, set()).add(i)
+    out = {}
+    for b, around in nbrs.items():
+        for a in around:
+            shared_ab = cells_of[a] & cells_of[b]
+            t1 = p[b] - p[a]
+            ahead = []
+            for c in around:
+                if c == a or cells_of[c] & shared_ab:
+                    continue
+                t2 = p[c] - p[b]
+                if t1 @ t2 >= cos_max * np.hypot(*t1) * np.hypot(*t2):
+                    ahead.append(c)
+            if len(ahead) == 1:
+                out[(a, b)] = ahead[0]
+
+    def turn(a, b, c):
+        t1, t2 = p[b] - p[a], p[c] - p[b]
+        cos = (t1 @ t2) / (np.hypot(*t1) * np.hypot(*t2))
+        return np.degrees(np.arccos(np.clip(cos, -1.0, 1.0)))
+
+    def turn_at(a, b):  # turn of the line a -> b at b (0 where it ends)
+        c = out.get((a, b))
+        return 0.0 if c is None else turn(a, b, c)
+
+    kinks = []
+    for (a, b), c in out.items():
+        here = turn(a, b, c)
+        around = turn_at(b, a) + turn_at(b, c)
+        if here > kink_angle and here > kink_ratio * around:
+            kinks.append((a, b))
+    for a, b in kinks:  # the line ends at a kink, from both sides
+        c = out.pop((a, b), None)
+        if c is not None and out.get((c, b)) == a:
+            out.pop((c, b))
+    return out
+
+
+def _extrapolate(row):
+    """Fill NaN ends of a 4-point row (2-vectors) by linear extrapolation."""
+    if np.isnan(row[1, 0]) or np.isnan(row[2, 0]):
+        return
+    if np.isnan(row[0, 0]):
+        row[0] = 2.0 * row[1] - row[2]
+    if np.isnan(row[3, 0]):
+        row[3] = 2.0 * row[2] - row[1]
+
+
+def _pchip4(f, s):
+    """PCHIP between f[1] (s = 0) and f[2] (s = 1), uniform index spacing.
+
+    Shape-preserving (Fritsch-Carlson) slopes per coordinate: no overshoot
+    in strongly stretched directions.
+    """
+
+    def slope(x, y):
+        den = np.where(x + y == 0.0, 1.0, x + y)
+        return np.where(x * y > 0.0, 2.0 * x * y / den, 0.0)
+
+    da, d0, db = f[1] - f[0], f[2] - f[1], f[3] - f[2]
+    m0, m1 = slope(da, d0), slope(d0, db)
+    s2, s3 = s * s, s * s * s
+    return (
+        (2 * s3 - 3 * s2 + 1) * f[1]
+        + (s3 - 2 * s2 + s) * m0
+        + (-2 * s3 + 3 * s2) * f[2]
+        + (s3 - s2) * m1
+    )
+
+
+def _grid_line_point(f, s):
+    """Point at index fraction s of the grid line f[1] -> f[2] (4 x 2 points).
+
+    Shape: cubic Hermite in chord length with the 3-point (Bessel) tangents,
+    so a circle is followed closely and a straight stretched line stays
+    straight. Position: PCHIP of the cumulative chord length in index
+    space, so the spacing changes smoothly across the old nodes (a
+    geometric progression of ratio q becomes one of ratio sqrt(q)).
+    """
+    h = np.hypot(*np.diff(f, axis=0).T)
+    knots = np.array([-h[0], 0.0, h[1], h[1] + h[2]])
+    t = float(_pchip4(knots, s))
+    d0, d1, d2 = [(f[k + 1] - f[k]) / h[k] for k in range(3)]
+    m1 = (h[0] * d1 + h[1] * d0) / (h[0] + h[1])
+    m2 = (h[2] * d1 + h[1] * d2) / (h[1] + h[2])
+    x = t / h[1]
+    x2, x3 = x * x, x * x * x
+    return (
+        (2 * x3 - 3 * x2 + 1) * f[1]
+        + (x3 - 2 * x2 + x) * h[1] * m1
+        + (-2 * x3 + 3 * x2) * f[2]
+        + (x3 - x2) * h[1] * m2
+    )
+
+
+def _nearest_on_curve(ctrl, q, n=24, iterations=40):
+    """Point of the wall curve of ``ctrl`` (s in [0, 1]) nearest to ``q``."""
+    q = np.asarray(q)
+    ss = np.linspace(0.0, 1.0, n + 1)
+    d = [np.hypot(*(np.asarray(_catmull_rom(ctrl, x)) - q)) for x in ss]
+    k = int(np.argmin(d))
+    lo, hi = ss[max(k - 1, 0)], ss[min(k + 1, n)]
+    g = (np.sqrt(5.0) - 1.0) / 2.0
+    for _ in range(iterations):  # golden section
+        a, b = hi - g * (hi - lo), lo + g * (hi - lo)
+        fa = np.hypot(*(np.asarray(_catmull_rom(ctrl, a)) - q))
+        fb = np.hypot(*(np.asarray(_catmull_rom(ctrl, b)) - q))
+        if fa < fb:
+            hi = b
+        else:
+            lo = a
+    return _catmull_rom(ctrl, 0.5 * (lo + hi))
