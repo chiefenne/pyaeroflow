@@ -32,7 +32,7 @@ from pyaeroflow.driver import (
     SST_DEFAULT_VISCOSITY_RATIO,
     FlowProblem,
 )
-from pyaeroflow.housekeeping import backup_name, latest_backup
+from pyaeroflow.housekeeping import backup_name
 from pyaeroflow.io import (
     HistoryWriter,
     RunLog,
@@ -102,6 +102,9 @@ class RunResult(NamedTuple):
         Final force coefficients over ``output.force_boundaries``.
     restart_file : Path or None
         The final backup ``<name>.backup_<iteration or step>.npz``.
+    problem, scaling : FlowProblem, Scaling or None
+        The non-dimensional problem of the run (the refinement indicator is
+        computed from it).
     """
 
     config: Resolved
@@ -112,6 +115,8 @@ class RunResult(NamedTuple):
     output_dir: Path
     coefficients: object = None
     restart_file: Path = None
+    problem: object = None
+    scaling: object = None
 
 
 class TurbulenceValues(NamedTuple):
@@ -219,6 +224,10 @@ def setup(config, mesh=None):
     cfg = config.data
     if mesh is None:
         mesh = read_mesh(config.resolve_path(cfg["mesh"]["file"]), cfg["mesh"]["scale"])
+        if cfg["initial"]["restart"] is not None:
+            mesh = refined_mesh_of_restart(
+                config, config.resolve_path(cfg["initial"]["restart"]), mesh
+            )
     if cfg["physics"]["flow"] == "compressible":
         return _setup_compressible(config, mesh)
     fluid, ref, physics = cfg["fluid"], cfg["reference"], cfg["physics"]
@@ -600,6 +609,27 @@ def _turbulence_entry(tv, mu_nd, rho_nd, scaling):
     }
 
 
+def refined_mesh_of_restart(config, path, mesh):
+    """Return the refined mesh a restart file belongs to, else ``mesh``.
+
+    A restart file of a refined run stores its refinement log; the
+    splits are replayed on the original ``mesh`` and the log is passed on
+    to the restart files of this run (``config.restart_extra``).
+    """
+    from pyaeroflow.refinement import read_refinement_info, replay_refinement
+
+    info = read_refinement_info(path)
+    if info is None:
+        return mesh
+    ref = replay_refinement(mesh, info)
+    config.restart_extra = {"refinement": info["json"]}
+    config.notices.append(
+        f"mesh refined as stored in the restart file: {mesh.n_cells} -> "
+        f"{ref.n_cells} cells ({len(info['log'])} refinement steps)"
+    )
+    return ref.mesh
+
+
 def mesh_fingerprint(mesh):
     """Hash of the cell centroids: identifies a mesh for restart files."""
     data = np.ascontiguousarray(np.round(mesh.cell_centroid, 9))
@@ -607,7 +637,14 @@ def mesh_fingerprint(mesh):
 
 
 def save_restart(
-    path, mesh, w_nd, step=None, time=None, state=None, flow="incompressible"
+    path,
+    mesh,
+    w_nd,
+    step=None,
+    time=None,
+    state=None,
+    flow="incompressible",
+    extra=None,
 ):
     """Write the non-dimensional state and the mesh fingerprint (D45).
 
@@ -619,9 +656,11 @@ def save_restart(
     "unsteady": the solution one step earlier and the time step), see
     :func:`load_restart_state`. ``flow`` names the flow family of the
     state (its columns differ: p, u, v[, turbulence] or p, u, v, T).
+    ``extra`` adds entries as they are (the refinement log of a refined
+    mesh, see :mod:`pyaeroflow.refinement`).
     """
     path = Path(path)
-    extra = {}
+    extra = dict(extra or {})
     if step is not None:
         extra["step"] = step
     if time is not None:
@@ -657,10 +696,19 @@ class RestartWriter:
     """
 
     def __init__(
-        self, out_dir, name, mesh, output, after=0, loaded=None, flow="incompressible"
+        self,
+        out_dir,
+        name,
+        mesh,
+        output,
+        after=0,
+        loaded=None,
+        flow="incompressible",
+        extra=None,
     ):
         self.out_dir, self.name, self.mesh = out_dir, name, mesh
         self.flow = flow
+        self.extra = extra
         self.every = output["restart_interval"]
         self.backup = output["restart_backup_interval"]
         self.backup_at = [
@@ -702,6 +750,7 @@ class RestartWriter:
                 time,
                 state and state(),
                 self.flow,
+                self.extra,
             )
         due = False
         if self.backup and number // self.backup > self.buckets["backup"]:
@@ -720,6 +769,7 @@ class RestartWriter:
                 time,
                 state and state(),
                 self.flow,
+                self.extra,
             )
 
 
@@ -985,6 +1035,10 @@ def run_case(path, console=True, mesh=None, restart_mode="continue"):
     """
     config = path if isinstance(path, Resolved) else load_case(path)
     cfg = config.data
+    if cfg["refinement"]["cycles"] and not getattr(config, "refinement_cycle", False):
+        from pyaeroflow.refinement import run_refined
+
+        return run_refined(config, console=console, mesh=mesh)
     out_dir = config.resolve_path(cfg["output"]["directory"])
     check_no_stop_file(out_dir)  # before the mesh is read (L7)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1045,7 +1099,14 @@ def run_case(path, console=True, mesh=None, restart_mode="continue"):
             t_phys = None
     restart_file = out_dir / backup_name(name, n_steps)  # the final backup (D56)
     save_restart(
-        restart_file, mesh, result.u, n_steps, t_phys, state, problem.flow.FLOW
+        restart_file,
+        mesh,
+        result.u,
+        n_steps,
+        t_phys,
+        state,
+        problem.flow.FLOW,
+        getattr(config, "restart_extra", None),
     )
     w = result.u * state_scale(problem, scaling)
     return RunResult(
@@ -1057,6 +1118,8 @@ def run_case(path, console=True, mesh=None, restart_mode="continue"):
         out_dir,
         coefficients,
         restart_file,
+        problem,
+        scaling,
     )
 
 
@@ -1218,6 +1281,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
         after=after or 0,
         loaded=(resume or {}).get("file"),
         flow=problem.flow.FLOW,
+        extra=getattr(config, "restart_extra", None),
     )
 
     timing = {"setup": None}
@@ -1694,6 +1758,7 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         after=after or 0,
         loaded=(resume or {}).get("file"),
         flow=problem.flow.FLOW,
+        extra=getattr(config, "restart_extra", None),
     )
     timing = {"setup": None}
     timers.reset()
@@ -2460,6 +2525,12 @@ def run_polar(path, angles, console=True):
     (counter, residual reference and log go on); a file of another angle
     gives its solver state only and a new counter.
 
+    With ``[refinement]`` every angle is a refined run of its own
+    (:func:`pyaeroflow.refinement.run_refined`) in ``alpha_<angle>``: it
+    starts on the original mesh from the state of the previous angle
+    averaged onto it and refines for its own flow; an interrupted angle
+    continues its chain from the newest backup of its highest cycle.
+
     Returns
     -------
     list of RunResult
@@ -2475,7 +2546,7 @@ def run_polar(path, angles, console=True):
     results, previous = [], None
     for i, alpha in enumerate(angles):
         name = f"{base.name}_alpha_{alpha:g}"
-        own = latest_backup(out_dir / f"alpha_{alpha:g}", name)
+        own = _latest_state(out_dir / f"alpha_{alpha:g}", name)
         if i == 0 and explicit is not None:
             start = base.resolve_path(explicit)
         elif own is not None:  # this angle ran before: continue it
@@ -2486,6 +2557,10 @@ def run_polar(path, angles, console=True):
             start = _nearest_restart(out_dir, base.name, alpha)
         mode = "continue" if _is_state_of(start, name) else "state"
         config = _polar_config(raw, path, base, alpha, start)
+        if not (i == 0 and explicit is not None):
+            # Only the case's own restart is refined before a run, not the
+            # state of another angle.
+            config.data["refinement"]["refine_restart"] = False
         config.reload = lambda a=alpha, p=start: _polar_config(
             tomllib.loads(path.read_text()), path, base, a, p
         )
@@ -2520,6 +2595,13 @@ def run_polar(path, angles, console=True):
     return results
 
 
+def _latest_state(directory, name):
+    """Newest backup of ``name`` in ``directory``, of the highest refinement cycle."""
+    from pyaeroflow.refinement import latest_chain_backup
+
+    return latest_chain_backup(directory, name)
+
+
 def _is_state_of(file, name):
     """Tell whether ``file`` is a backup or restart file of case ``name``."""
     return file is not None and Path(file).name.startswith(f"{name}.")
@@ -2544,7 +2626,7 @@ def _nearest_restart(out_dir, name, alpha):
             a = float(d.name[6:])
         except ValueError:
             continue
-        file = latest_backup(d, f"{name}_alpha_{a:g}")
+        file = _latest_state(d, f"{name}_alpha_{a:g}")
         if file is None or a == alpha:
             continue
         rank = (abs(a - alpha), a > alpha)

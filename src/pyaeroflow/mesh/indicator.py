@@ -58,6 +58,27 @@ def _norm(v):
     return np.abs(v)
 
 
+def _rank(v):
+    """Fraction of the cells with a smaller value, in [0, 1).
+
+    Makes indicators of different units comparable: ``maximum(rank(a),
+    rank(b))`` with ``top_fraction`` marks the cells where either is among
+    the largest. Equal values share the lowest rank (all zeros of a masked
+    field rank 0); non-finite values stay NaN and are skipped.
+    """
+    v = np.asarray(v, dtype=float)
+    if v.ndim == 0:
+        return 0.0
+    if v.ndim != 1:
+        raise ValueError("rank() needs a scalar field")
+    out = np.full(v.shape, np.nan)
+    finite = np.isfinite(v)
+    pool = np.sort(v[finite])
+    if pool.size:
+        out[finite] = np.searchsorted(pool, v[finite], side="left") / pool.size
+    return out
+
+
 FUNCTIONS = {
     "sqrt": np.sqrt,
     "abs": np.abs,
@@ -71,6 +92,7 @@ FUNCTIONS = {
     "clip": np.clip,
     "where": np.where,
     "norm": _norm,
+    "rank": _rank,
 }
 CONSTANTS = {"pi": math.pi}
 

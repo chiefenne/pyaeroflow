@@ -350,7 +350,15 @@ class Refinement:
         straight = (x0 + s * (x1 - x0), y0 + s * (y1 - y0))
         node = len(self.nodes)
         if lid in self.curves:
+            # Wall lines are faces of the original mesh: the displacement is
+            # taken from the straight face (end nodes never move), where the
+            # nodes of the parallel grid lines above sit; measured from the
+            # bracketing nodes it would be wrong once a neighbour on the same
+            # face is already on the curve.
             p = _catmull_rom(self.curves[lid], float(t))
+            (a0, b0), (a1, b1) = self.nodes[line.first], self.nodes[line.last]
+            s = float(t)
+            straight = (a0 + s * (a1 - a0), b0 + s * (b1 - b0))
             self.nodes.append(p)
             self._moved.append((node, (p[0] - straight[0], p[1] - straight[1])))
         else:

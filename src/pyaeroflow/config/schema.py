@@ -889,6 +889,177 @@ SCHEMA = {
             ),
         },
     },
+    "refinement": {
+        "cycles": Opt(
+            "int",
+            0,
+            "Local mesh refinement (hanging nodes): number of refinements. "
+            "The steady run is split into cycles 0..cycles in "
+            "<output.directory>/cycle_<k>; after each cycle but the last the "
+            "marked cells are split, the state is copied to the new cells and "
+            "the next cycle continues on the refined mesh; 0 = off",
+            minimum=0,
+        ),
+        "indicator": Opt(
+            "string",
+            None,
+            "Indicator expression over output fields and the geometric names "
+            "x, y, area, h, h_u, h_v, aspect, factor_u, factor_v, e.g. "
+            '"pressure_gradient_magnitude * h"; operators + - * / ** and '
+            "< <= > >= (0 or 1), functions sqrt abs log log10 exp tanh sign "
+            "minimum maximum clip where norm (vector fields), constant pi",
+        ),
+        "threshold": Opt(
+            "float", None, "Mark cells whose indicator exceeds this value"
+        ),
+        "quantile": Opt(
+            "float",
+            None,
+            "Mark cells above this quantile (0..1) of the indicator; give "
+            "exactly one of threshold, quantile, top_fraction",
+        ),
+        "top_fraction": Opt(
+            "float",
+            None,
+            "Mark this fraction (0..1) of the cells with the largest indicator",
+        ),
+        "max_cells": Opt(
+            "int",
+            None,
+            "Cap on the cells added per refinement by the marked splits "
+            "(balancing and boundary-layer columns add more); the largest "
+            "indicator values are kept",
+            minimum=1,
+        ),
+        "max_factor": Opt(
+            "int",
+            8,
+            "No further split along a direction in which the accumulated split "
+            "factor of a cell reached this value",
+            minimum=2,
+        ),
+        "direction": Opt(
+            "string",
+            "auto",
+            "auto: cells with aspect ratio above aspect_target are split along "
+            "their long side only (along the wall in a boundary layer), the "
+            "others 2 x 2; iso: always 2 x 2",
+            choices=("auto", "iso"),
+        ),
+        "aspect_target": Opt(
+            "float",
+            3.0,
+            "Aspect ratio above which direction = auto splits along the long "
+            "side only, into ceil(aspect / aspect_target) parts",
+            minimum=1.0,
+        ),
+        "n_max": Opt(
+            "int", 4, "Largest split factor of one cell along its long side", minimum=2
+        ),
+        "max_hanging": Opt(
+            "int",
+            1,
+            "Balance rule: at most this many hanging nodes per cell side; "
+            "neighbours are split until it holds",
+            minimum=1,
+        ),
+        "column_aspect": Opt(
+            "float",
+            5.0,
+            "Boundary-layer column rule: a split along a cell side is passed on "
+            "to the quad across it while that quad's aspect ratio (along the "
+            "side over across it) exceeds this value; 0 = off",
+            minimum=0.0,
+        ),
+        "walls": Opt(
+            "string_list",
+            None,
+            "Boundaries whose new nodes are placed on a cubic through the "
+            "neighbouring wall nodes instead of the straight face; default: "
+            "all wall, slip-wall and transpiration-wall boundaries",
+        ),
+        "corner_angle": Opt(
+            "float",
+            30.0,
+            "Turning angle between two wall faces above which their common node "
+            "is a corner (trailing edge); the wall curve does not reach across "
+            "it",
+            "deg",
+            minimum=0.0,
+        ),
+        "decay": Opt(
+            "float",
+            20.0,
+            "A wall node moved by d onto the wall curve moves the grid nodes "
+            "above it by d (1 - s / (decay |d|)), s = distance from the wall, "
+            "so thin wall cells do not fold",
+            minimum=0.0,
+        ),
+        "residual_drop": Opt(
+            "float",
+            3.0,
+            "A cycle before the last ends when its residual dropped this many "
+            "orders (the last cycle uses solver.residual_drop)",
+            minimum=0.0,
+        ),
+        "iterations": Opt(
+            "int",
+            None,
+            "A cycle before the last ends after at most this many iterations; "
+            "default: solver.max_iterations",
+            minimum=1,
+        ),
+        "cfl_reset": Opt(
+            "bool",
+            False,
+            "The CFL ramp starts again after a refinement (the Newton-Krylov "
+            "switch and the limiter are kept); otherwise the CFL of the "
+            "previous cycle is continued",
+        ),
+        "refine_restart": Opt(
+            "bool",
+            False,
+            "Mark and refine the state of initial.restart (a converged run of "
+            "another case) before any run: cycle 0 is not run, the chain starts "
+            "with cycle 1 on the refined mesh. pyaeroflow polar: first angle only",
+        ),
+        "cauchy_eps": Opt(
+            "float",
+            1.0e-6,
+            "Force stop of every cycle after a refinement: the cycle also ends "
+            "(converged) when CL and CD changed by less than this (mean "
+            "relative change per iteration) over cauchy_elements iterations, "
+            "each with at least cauchy_min_residual_drop orders. The residual "
+            "drop of such a cycle counts from the transferred state, which is "
+            "already close to converged, so its orders cost iterations that "
+            "no longer move the forces; 0 = off. Not used when "
+            "solver.convergence.fields is set",
+            minimum=0.0,
+        ),
+        "cauchy_elements": Opt(
+            "int",
+            20,
+            "Iterations in the Cauchy window of refinement.cauchy_eps",
+            minimum=2,
+        ),
+        "cauchy_min_residual_drop": Opt(
+            "float",
+            2.0,
+            "Residual drop in orders (drop column of the log) every iteration "
+            "of the refinement.cauchy_eps window needs",
+            minimum=0.0,
+        ),
+        "limiter_freeze": Opt(
+            "float",
+            1.0,
+            "Freeze the limiter in every cycle after a refinement once the "
+            "residual of the cycle fell by this many orders (0 = off); not "
+            "used when numerics.limiter_freeze is set. Without it the limiter "
+            "of a captured shock on a refined mesh can stall the Newton "
+            "iteration",
+            minimum=0.0,
+        ),
+    },
     "output": {
         "directory": Opt(
             "string", "results", "Output directory, relative to the case file"

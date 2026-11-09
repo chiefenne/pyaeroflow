@@ -26,6 +26,36 @@
   `max_factor`), splits thin cells (`aspect > aspect_target`) along their long
   side only (`n_max`) and the others 2 x 2, or all 2 x 2 (`direction = "iso"`);
   `plan` and `apply` return the marking, its summary and the parent map.
+- Local mesh refinement, stage R4: `[refinement]` refines during a steady
+  run (`cycles`, indicator and marking keys of R3, wall options of R2,
+  `residual_drop`, `iterations`, `cfl_reset`). The run is a chain of cycles
+  in `<output.directory>/cycle_<k>` like a polar; between cycles the marked
+  cells are split, the state is injected and the problem is rebuilt.
+  `<name>.refinement.csv` and `.refinement.log` summarise the cycles. Restart
+  files of a refined mesh store the refinement log; `initial.restart` with
+  such a file replays the splits on `mesh.file`, and with `[refinement]` the
+  chain continues from that cycle.
+- Refinement: `pyaeroflow polar` refines every angle for its own flow. Each
+  angle is a refined run in `alpha_<angle>` that starts on the original mesh
+  from the previous angle's state averaged onto it (area-weighted over the
+  children of each cell); an interrupted angle continues its own chain from
+  the newest backup of its highest cycle. `pyaeroflow run` with a refined
+  restart file of another case does the same; a file of the case's own chain
+  continues the chain.
+- Indicator function `rank(a)`: the fraction of cells with a smaller value,
+  so indicators of different units combine, e.g. the pressure change along
+  and the velocity change across a cell for laminar separation bubbles and
+  trailing edges (docs/configuration.md, `[refinement]`).
+- Refinement: `refinement.refine_restart` refines the state of
+  `initial.restart` before any run (a converged solution on the unrefined
+  mesh); cycle 0 is skipped.
+- Refinement: `refinement.limiter_freeze` (default 1 order) freezes the
+  limiter in every cycle after a refinement unless `numerics.limiter_freeze`
+  is set, and a frozen limiter is no longer injected into the next cycle.
+  NACA 0012 Euler M 0.8 cycle 2 stalled at 3.2 orders in 200 iterations
+  (limiter chatter at the refined shock; the transfer was not the cause, a
+  fresh start on the refined mesh stalls too) and now converges 10.5 orders
+  in 80.
 - New VTU fields `pressure_gradient` (vector, Pa/m) and
   `pressure_gradient_magnitude` (|grad p|) from the shared least-squares
   gradient, for all models; a candidate indicator for future mesh refinement.

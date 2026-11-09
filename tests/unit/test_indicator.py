@@ -35,6 +35,19 @@ def test_arithmetic_and_functions():
     np.testing.assert_allclose(evaluate("3", V), [3, 3, 3, 3])
 
 
+def test_rank_makes_fields_comparable():
+    r = evaluate("rank(p)", V)
+    np.testing.assert_allclose(r, [0.0, 0.25, 0.5, 0.75])
+    # ties share the lowest rank; a masked field ranks its zeros 0
+    np.testing.assert_allclose(evaluate("rank(p * (k > 1))", V), [0, 0, 0.5, 0.75])
+    both = evaluate("maximum(rank(p), rank(1000 * k))", V)
+    np.testing.assert_allclose(both, [0.0, 0.25, 0.5, 0.75])
+    nan = evaluate("rank(log(k - 1))", V)  # log of -1 and 0: nan, -inf
+    assert np.isnan(nan[:2]).all() and list(nan[2:]) == [0.0, 0.5]
+    with pytest.raises(IndicatorError, match="norm"):
+        evaluate("rank(vel)", V)
+
+
 def test_names_used_excludes_functions_and_constants():
     assert names_used("norm(vel) * sqrt(k) / pi + p") == ["k", "p", "vel"]
 
