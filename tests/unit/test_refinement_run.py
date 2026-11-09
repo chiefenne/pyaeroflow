@@ -203,7 +203,29 @@ def test_own_chain_and_latest_chain_backup(tmp_path):
     assert latest_chain_backup(tmp_path / "cycle_2", "c") is None
 
 
+def test_refine_restart_skips_the_first_run(cyl_dir):
+    plain = CYL.replace("cycles = 1", "cycles = 0").replace('"out"', '"out_plain"')
+    (cyl_dir / "plain.toml").write_text(plain)
+    done = run_case(cyl_dir / "plain.toml", console=False)
+    text = CYL.replace("cycles = 1", "cycles = 1\nrefine_restart = true").replace(
+        "[numerics]", f'[initial]\nrestart = "{done.restart_file}"\n[numerics]'
+    )
+    (cyl_dir / "again.toml").write_text(text)
+    result = run_case(cyl_dir / "again.toml", console=False)
+    out = cyl_dir / "out"
+    rows = np.genfromtxt(out / "cyl.refinement.csv", delimiter=",", names=True)
+    assert list(rows["cycle"]) == [0, 1] and rows["iterations"][0] == 0
+    assert rows["marked"][0] == np.ceil(0.15 * 256)
+    assert result.mesh.n_cells == rows["cells"][1] == rows["cells_after"][0]
+    assert not (out / "cycle_0").exists() and result.converged
+    assert "not run" in (out / "cyl.refinement.log").read_text()
+
+
 def test_polar_refines_every_angle(cyl_dir):
+    # refine_restart applies to the case's own initial.restart only: without
+    # one every angle runs its cycle 0.
+    text = CYL.replace("cycles = 1", "cycles = 1\nrefine_restart = true")
+    (cyl_dir / "cyl.toml").write_text(text)
     results = run_polar(cyl_dir / "cyl.toml", [0.0, 10.0], console=False)
     out = cyl_dir / "out"
     assert len(results) == 2 and all(r.converged for r in results)
@@ -217,6 +239,7 @@ def test_polar_refines_every_angle(cyl_dir):
         assert list(rows["cycle"]) == [0, 1]
         assert rows["cells"][0] == 256 and r.mesh.n_cells == rows["cells"][1]
         assert r.restart_file.parent == a / "cycle_1"
+        assert (a / "cycle_0").is_dir()
     # The second angle starts on the original mesh from the first angle's
     # refined state, averaged onto it, and refines for its own flow.
     log = (out / "alpha_10" / "cyl_alpha_10.refinement.log").read_text()

@@ -639,7 +639,7 @@ Local mesh refinement during a steady run. Cells marked by an indicator are spli
 | Key | Type | Default | Description | # |
 |-----|------|---------|-------------|---|
 | `cycles` | int | `0` | Number of refinements (cycles 0 … `cycles`); 0 = off | R4 |
-| `indicator` | string | req. if `cycles` > 0 | Expression over output fields ([Field output](#field-output)) and the geometric names `x`, `y`, `area`, `h` (√area), `h_u`, `h_v` (mean side lengths along the two directions of a quad), `aspect` (long over short side), `factor_u`, `factor_v` (accumulated split factors), e.g. `"pressure_gradient_magnitude * h"`, `"pressure_gradient_magnitude * sqrt(2/3*k) / velocity_magnitude"`, `"norm(vorticity) * h**2 * (wall_distance > 1e-4)"`. Numbers, `+ - * / **`, `< <= > >=` (0 or 1), functions `sqrt abs log log10 exp tanh sign minimum maximum clip where norm` (vector fields need `norm`), constant `pi`; nothing else is accepted (no `eval`). Residual fields cannot be used | R3 |
+| `indicator` | string | req. if `cycles` > 0 | Expression over output fields ([Field output](#field-output)) and the geometric names `x`, `y`, `area`, `h` (√area), `h_u`, `h_v` (mean side lengths along the two directions of a quad), `aspect` (long over short side), `factor_u`, `factor_v` (accumulated split factors), e.g. `"pressure_gradient_magnitude * h"`, `"pressure_gradient_magnitude * sqrt(2/3*k) / velocity_magnitude"`, `"norm(vorticity) * h**2 * (wall_distance > 1e-4)"`. Numbers, `+ - * / **`, `< <= > >=` (0 or 1), functions `sqrt abs log log10 exp tanh sign minimum maximum clip where norm rank` (vector fields need `norm`; `rank(a)` is the fraction of cells with a smaller value of `a`, so `maximum(rank(a), rank(b))` combines indicators of different units), constant `pi`; nothing else is accepted (no `eval`). Residual fields cannot be used | R3 |
 | `threshold` | float | – | Mark cells whose indicator exceeds this value. Give exactly one of `threshold`, `quantile`, `top_fraction` | R3 |
 | `quantile` | float | – | Mark cells above this quantile (0…1) of the indicator over the splittable cells | R3 |
 | `top_fraction` | float | – | Mark this fraction (0…1) of the splittable cells with the largest indicator | R3 |
@@ -656,7 +656,19 @@ Local mesh refinement during a steady run. Cells marked by an indicator are spli
 | `residual_drop` | float | `3.0` | A cycle before the last ends after this many orders of residual drop | R4 |
 | `iterations` | int | `solver.max_iterations` | A cycle before the last ends after at most this many iterations | R4 |
 | `cfl_reset` | bool | `false` | The CFL ramp starts again after a refinement (as `solver.cfl.polar_reset` for a polar); otherwise the CFL of the previous cycle continues | R4 |
+| `refine_restart` | bool | `false` | Mark and refine the state of `initial.restart` (a converged run of another case, e.g. the unrefined mesh) right away: cycle 0 is not run and the chain starts with cycle 1 on the refined mesh (its row in the CSV has 0 iterations). `pyaeroflow polar`: the first angle only | R4 |
 | `limiter_freeze` | float | `1.0` | In every cycle after a refinement the limiter is frozen once the cycle's residual fell by this many orders (0 = off), unless `numerics.limiter_freeze` is set. Without it the limiter of a captured shock on the refined mesh can stall the Newton iteration (NACA 0012, M 0.8: 3 orders in 200 iterations; frozen: 10 orders in 80). A limiter frozen in a cycle is not passed on to the next one | R4 |
+
+Choosing an indicator. `pressure_gradient_magnitude * h` marks shocks and the leading-edge suction peak, but not a laminar separation bubble or a trailing edge (NACA 0012 SA, α 10°, 225 × 65 refined twice: C_L moves 42 % and C_D 20 % of the way to the 449 × 129 mesh). For bubbles and trailing edges combine the pressure change along a cell's long side (streamwise in the boundary layer: transition, reattachment, trailing-edge recovery) with the velocity change across its short side (the separated shear layer), both inside the viscous region:
+
+```toml
+indicator = """maximum(
+  rank(pressure_gradient_magnitude * maximum(h_u, h_v) * (total_pressure_loss > 0.01)),
+  rank(abs(vorticity) * minimum(h_u, h_v) * (total_pressure_loss > 0.01)))"""
+top_fraction = 0.03
+```
+
+On the SD7003 at Re 6·10⁴, α 4° (Langtry–Menter, 39k O-grid) it marks the shear layer over the bubble, the reattachment and the near wake; `direction = "auto"` splits the thin boundary-layer cells along the wall. One refinement (38 880 → 46 245 cells, 160 → 400 wall faces on the upper side) changed C_L by +0.1 % and C_D by +1 % and left separation (x/c 0.19) and reattachment (0.72) in place: that bubble is already resolved along the wall. For attached turbulent flow it is no better than `pressure_gradient_magnitude * h` (NACA 0012 SA, α 10°, 225 × 65 refined twice: C_L 1.0565, C_D 0.01729).
 
 ### `[output]`
 

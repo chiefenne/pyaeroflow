@@ -42,6 +42,13 @@
   the newest backup of its highest cycle. `pyaeroflow run` with a refined
   restart file of another case does the same; a file of the case's own chain
   continues the chain.
+- Indicator function `rank(a)`: the fraction of cells with a smaller value,
+  so indicators of different units combine, e.g. the pressure change along
+  and the velocity change across a cell for laminar separation bubbles and
+  trailing edges (docs/configuration.md, `[refinement]`).
+- Refinement: `refinement.refine_restart` refines the state of
+  `initial.restart` before any run (a converged solution on the unrefined
+  mesh); cycle 0 is skipped.
 - Refinement: `refinement.limiter_freeze` (default 1 order) freezes the
   limiter in every cycle after a refinement unless `numerics.limiter_freeze`
   is set, and a frozen limiter is no longer injected into the next cycle.

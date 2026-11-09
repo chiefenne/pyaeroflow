@@ -2557,6 +2557,10 @@ def run_polar(path, angles, console=True):
             start = _nearest_restart(out_dir, base.name, alpha)
         mode = "continue" if _is_state_of(start, name) else "state"
         config = _polar_config(raw, path, base, alpha, start)
+        if not (i == 0 and explicit is not None):
+            # Only the case's own restart is refined before a run, not the
+            # state of another angle.
+            config.data["refinement"]["refine_restart"] = False
         config.reload = lambda a=alpha, p=start: _polar_config(
             tomllib.loads(path.read_text()), path, base, a, p
         )

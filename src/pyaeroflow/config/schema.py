@@ -1016,6 +1016,13 @@ SCHEMA = {
             "switch and the limiter are kept); otherwise the CFL of the "
             "previous cycle is continued",
         ),
+        "refine_restart": Opt(
+            "bool",
+            False,
+            "Mark and refine the state of initial.restart (a converged run of "
+            "another case) before any run: cycle 0 is not run, the chain starts "
+            "with cycle 1 on the refined mesh. pyaeroflow polar: first angle only",
+        ),
         "limiter_freeze": Opt(
             "float",
             1.0,

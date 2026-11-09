@@ -40,6 +40,7 @@ iterations, residual drop, coefficients, marked cells) and
 import copy
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -187,6 +188,22 @@ def indicator_fields(result, config, names):
     return compute_fields(names, ctx)
 
 
+def _refine_state(config, mesh, ref, file, names, spec):
+    """Mark and split ``ref`` by the state of restart ``file`` on ``mesh``.
+
+    Returns the parent map (None if nothing was marked), the marking and
+    the number of cells before the split.
+    """
+    from pyaeroflow.run import setup
+
+    problem, scaling, _, _ = setup(config, mesh)
+    state = SimpleNamespace(problem=problem, scaling=scaling, restart_file=file)
+    fields = indicator_fields(state, config, names)
+    n0 = ref.n_cells
+    source, marking = apply(ref, fields, spec)
+    return source, marking, n0
+
+
 def _start_file(file, mesh, mapping, path, extra, drop_frozen_limiter=False):
     """Write the state of restart ``file`` as a start file on ``mesh``.
 
@@ -298,17 +315,37 @@ def run_refined(config, console=True, mesh=None):
         if console:
             print(f"[refinement] {text}", flush=True)
 
+    indicator = " ".join(rc["indicator"].split())  # one line in the log
     note(
-        f"case '{name}': {rc['cycles']} refinements, indicator "
-        f"'{rc['indicator']}', start at cycle {start} with {ref.n_cells} cells"
+        f"case '{name}': {rc['cycles']} refinements, indicator '{indicator}', "
+        f"start at cycle {start} with {ref.n_cells} cells"
     )
     if restricted is not None:
         note(
             f"start state from {Path(restricted).name} (a refined mesh of "
             f"another case), averaged onto the original mesh: {previous.name}"
         )
-    result = None
     k = start
+    if rc["refine_restart"] and previous is not None and not own_chain(previous, name):
+        # A converged state of another case: refine it before any run.
+        first = _cycle_config(config, 0, False, previous, "state", None, False)
+        source, marking, n0 = _refine_state(first, mesh, ref, previous, names, spec)
+        note(f"cycle 0: {marking.summary()} (state of the restart file, not run)")
+        rows.append([0, n0, 0, 0, np.nan, np.nan, np.nan, np.nan])
+        rows[-1] += [int(marking.cells.size), ref.n_cells]
+        _write_rows(csv_path, rows)
+        if source is not None:
+            k = 1
+            previous = _start_file(
+                previous,
+                ref.mesh,
+                lambda v: v[source],
+                out_dir / f"{name}.cycle_1_start.npz",
+                {"refinement": _info_json(ref, options, 1)},
+                drop_frozen_limiter=True,
+            )
+            note(f"cycle 1: {ref.n_cells} cells, start file {previous.name}")
+    result = None
     while True:
         final = k >= rc["cycles"]
         cycle_name = f"{name}_cycle_{k}"
