@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Float32 Jacobian products (opt-in): `solver.newton_krylov.product_precision
+  = "float32"` linearizes the residual in single precision for the GMRES
+  products of the Newton phase (residual, GMRES and update stay float64).
+  320k SD7003 LM: 0.50 s instead of 0.99 s per product, relative error 1e-5.
+  Every product is checked for non-finite entries; on the first one the
+  Newton step continues with a float64 linearization, and after 5 such steps
+  in a row the run stays in float64. The summary reports products and
+  fallbacks. SST and LM: precision-dependent denominator floors and clamped
+  tanh/exp arguments, so that single precision neither underflows nor
+  overflows; float64 results are bitwise unchanged.
 - Local mesh refinement, stage R1: `pyaeroflow.mesh.refine` splits
   quadrilaterals `nu x nv` along their own directions (any integers, e.g.
   1 x 4 along a wall) with hanging nodes; neighbours become polygons. Exact

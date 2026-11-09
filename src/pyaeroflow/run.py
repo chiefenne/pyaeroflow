@@ -1155,6 +1155,7 @@ def _pseudo_time_settings(cfg):
         nk_forcing_max=solver["newton_krylov"]["forcing_max"],
         nk_forcing_safeguard=solver["newton_krylov"]["forcing_safeguard"],
         nk_approximate_drop=solver["newton_krylov"]["approximate_products_until"],
+        nk_product_precision=solver["newton_krylov"]["product_precision"],
         pc_lagging=solver["newton_krylov"]["preconditioner_lagging"],
         pc_lag_max=solver["newton_krylov"]["lag_max"],
         pc_lag_growth=solver["newton_krylov"]["lag_growth"],
@@ -1526,7 +1527,11 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
             path = out_dir / f"{name}.wall_{bname}.csv"
             monitor.write_wall(result.u, bname, path)
             rows.append((f"wall '{bname}'", str(path)))
-    notes = _line_search_rows(h) + _cauchy_guard_rows(cauchy, result.converged)
+    notes = (
+        _line_search_rows(h)
+        + _cauchy_guard_rows(cauchy, result.converged)
+        + _product_precision_rows(config.data, problem)
+    )
     if notes:  # right after the iteration counts
         at = [key for key, _ in rows].index("rejected updates") + 1
         rows[at:at] = notes
@@ -1601,6 +1606,8 @@ def _control_loop_rows(solver, rans):
                 "R1 products (frozen limiter) until "
                 f"{nk['approximate_products_until']:g} orders"
             )
+        if nk["product_precision"] == "float32":
+            parts.append("float32 Jacobian products (float64 fallback)")
         if nk["gmres"] == "right":
             parts.append("right-preconditioned GMRES")
         if nk["forcing_safeguard"] or nk["forcing_max"] != 0.5:
@@ -1657,6 +1664,21 @@ def _line_search_rows(history):
             f"step cut in {cut.size} of {factors.size} iterations ({detail})",
         )
     ]
+
+
+def _product_precision_rows(cfg, problem):
+    """Summary row of the float32 Jacobian products and their fallbacks."""
+    if cfg["solver"]["newton_krylov"]["product_precision"] != "float32":
+        return []
+    st = problem.product_stats
+    text = (
+        f"{st['products']} products in {st['linearizations']} Newton steps, "
+        f"{st['fallback_products']} recomputed in float64 "
+        f"({st['fallback_steps']} steps)"
+    )
+    if st["disabled"]:
+        text += "; float64 from then on (fallback in 5 steps in a row)"
+    return [("float32 products", text)]
 
 
 def _cauchy_guard_rows(cauchy, converged):

@@ -231,6 +231,12 @@ class PseudoTimeSettings:
         products afterwards (latched): the Newton-Krylov products then come
         from ``linearize_approximate`` (frozen limiter). None = exact
         products throughout (1.2).
+    nk_product_precision : {"float64", "float32"}
+        Precision of the Newton-Krylov Jacobian products (``linearize``).
+        ``float32`` evaluates the tangent in single precision, about half the
+        time per product, with a float64 fallback for non-finite products
+        (:meth:`~pyaeroflow.driver.FlowProblem.linearize_float32`); the
+        residual, GMRES and the update stay float64.
     pc_lagging : {"fixed", "adaptive"}
         Preconditioner lagging in the Newton-Krylov phase. ``fixed`` (1.2):
         ``refactor_interval``, ``refactor_cfl_ratio`` and the 15-iteration
@@ -293,6 +299,7 @@ class PseudoTimeSettings:
     nk_forcing_max: float = 0.5
     nk_forcing_safeguard: bool = False
     nk_approximate_drop: float = None
+    nk_product_precision: str = "float64"
     pc_lagging: str = "adaptive"
     pc_lag_max: int = 10
     pc_lag_growth: float = 1.5

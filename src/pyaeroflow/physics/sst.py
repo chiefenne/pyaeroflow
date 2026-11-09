@@ -30,7 +30,23 @@ GAMMA_2 = BETA_2 / BETA_STAR - SIGMA_W2 * KAPPA**2 / BETA_STAR**0.5
 PROD_LIMIT = 10.0  # production limiter constant (10 for SST-2003)
 CD_FLOOR = 1.0e-10  # floor of CD_kw (Menter, Kuntz & Langtry 2003)
 OMEGA_WALL = 60.0  # omega_wall = 60 nu / (beta_1 d_1^2) (Menter 1994)
-TINY = 1.0e-300
+TINY = 1.0e-300  # denominator floor (float64)
+# Floor in single precision (float32 Jacobian products,
+# newton_krylov.product_precision): 1e-300 is 0 in float32, and the floor
+# appears squared in the tangent, so it must stay a normal float32 number.
+TINY_SINGLE = 1.0e-18
+
+
+def tiny(x):
+    """Denominator floor for the precision of ``x`` (float64 unchanged)."""
+    return TINY if jnp.result_type(x) == jnp.float64 else TINY_SINGLE
+
+
+# tanh(x) = 1 to double precision for x > 20: the tanh arguments are clamped
+# before the power so that the power cannot overflow in single precision (an
+# infinite argument gives a 0 * inf = NaN tangent). Exact in double precision.
+F1_ARG_MAX = 10.0
+F2_ARG_MAX = 100.0
 
 
 def _safe_sqrt(x):
@@ -57,13 +73,14 @@ def blending(k, omega, nu, distance, k_grad_omega):
     """
     d = distance
     sqrt_k = _safe_sqrt(k)
-    arg2a = sqrt_k / (BETA_STAR * omega * d + TINY)
-    arg2b = 500.0 * nu / (d * d * omega + TINY)
+    eps = tiny(omega)
+    arg2a = sqrt_k / (BETA_STAR * omega * d + eps)
+    arg2b = 500.0 * nu / (d * d * omega + eps)
     arg2 = jnp.maximum(arg2a, arg2b)
     cd = cross_diffusion(k_grad_omega, omega)
-    arg1 = jnp.minimum(arg2, 4.0 * SIGMA_W2 * k / (cd * d * d + TINY))
-    f1 = jnp.tanh(arg1**4)
-    f2 = jnp.tanh(jnp.maximum(2.0 * arg2a, arg2b) ** 2)
+    arg1 = jnp.minimum(arg2, 4.0 * SIGMA_W2 * k / (cd * d * d + eps))
+    f1 = jnp.tanh(jnp.minimum(arg1, F1_ARG_MAX) ** 4)
+    f2 = jnp.tanh(jnp.minimum(jnp.maximum(2.0 * arg2a, arg2b), F2_ARG_MAX) ** 2)
     return f1, f2
 
 
