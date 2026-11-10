@@ -4,7 +4,7 @@
 #
 # Usage:
 #   tools/run_tests.sh                 # default suite (unit + verification, not slow)
-#   tools/run_tests.sh --slow          # slow verification tests only
+#   tools/run_tests.sh --slow          # slow tests only (tests/verification)
 #   tools/run_tests.sh --jobs 2        # run 2 files in parallel (default 1)
 #   tools/run_tests.sh --out DIR       # output folder (default test_runs/<timestamp>)
 #   tools/run_tests.sh FILE [FILE...]  # only these test files
@@ -31,7 +31,12 @@ done
 
 cd "$(dirname "$0")/.." || exit 1
 if [ ${#FILES[@]} -eq 0 ]; then
-    FILES=(tests/unit/test_*.py tests/verification/test_*.py)
+    if [ "$MODE" = slow ]; then
+        # only the verification folder has slow tests
+        FILES=(tests/verification/test_*.py)
+    else
+        FILES=(tests/unit/test_*.py tests/verification/test_*.py)
+    fi
 fi
 [ -z "$OUT" ] && OUT="test_runs/$(date +%Y%m%d_%H%M%S)_$MODE"
 mkdir -p "$OUT"
