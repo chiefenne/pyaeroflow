@@ -1,0 +1,67 @@
+# Jet in crossflow over a flat plate (gallery example): a laminar jet leaves
+# a slot in the wall normal to it and is bent over by the crossflow. Behind
+# the jet a long recirculation zone forms; in front of it a small bubble
+# (x/d = -3.1 .. -1.2) where the boundary layer meets the jet. A
+# demonstration case, not a validation case: in 2D the jet blocks the flow
+# like a fence, and the length of the recirculation depends on the domain
+# (reattachment x/d = 14 with the outflow at 40 d, 37 with 80 d).
+# Length unit: the slot width d = 1 m, U = 1 m/s, Re_d = U d / nu = 100;
+# jet velocity V_j = 2 U (velocity ratio 2), uniform across the slot. The
+# plate starts at the inflow, 10 d upstream of the slot.
+# Mesh: python examples/meshes/make_jet_crossflow.py examples/cases/jet_crossflow.su2
+# (29.9k quads, 32 faces across the slot, first cell 0.01 d, top at 20 d).
+# Steady, converged (8 orders) in about 240 iterations, about 2 min without
+# PARDISO. jet_crossflow_inclined.toml: the same jet at 60 deg to the wall.
+
+[case]
+name = "jet_crossflow"
+
+[mesh]
+file = "jet_crossflow.su2"        # boundary faces: inlet, outlet, top, plate, slot
+
+[physics]
+model = "laminar"
+
+[fluid]
+density = 1.0                     # kg/m^3
+reynolds_number = 100.0           # with U_ref = 1 m/s and L_ref = d = 1 m
+
+[reference]
+velocity = 1.0                    # m/s, crossflow
+length = 1.0                      # m, slot width d
+moment_center = [0.0, 0.0]
+
+[initial]
+from_boundary = "inlet"
+
+[boundary.inlet]
+type = "velocity-inlet"
+velocity = [1.0, 0.0]             # m/s, uniform crossflow
+
+[boundary.slot]
+type = "velocity-inlet"
+velocity = [0.0, 2.0]             # m/s, jet normal to the wall, V_j/U = 2
+
+[boundary.plate]
+type = "wall"
+
+[boundary.top]
+type = "farfield"
+velocity = 1.0                    # m/s
+pressure = 0.0                    # Pa
+
+[boundary.outlet]
+type = "pressure-outlet"
+pressure = 0.0                    # Pa
+
+[numerics]
+limiter = "none"                  # smooth laminar flow, unlimited second order
+
+[solver]
+residual_drop = 8.0
+max_iterations = 500
+
+[output]
+directory = "output/jet_crossflow"
+force_boundaries = ["plate"]
+fields = ["pressure", "velocity", "velocity_magnitude", "vorticity", "cp"]

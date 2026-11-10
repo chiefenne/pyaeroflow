@@ -30,6 +30,13 @@ boundary names: use them in the `[boundary.<name>]` sections of a case file.
 and cuts the suction slot exit out of the wall; the 205 x 55 and 817 x 217
 grids give the same slot (1 and 4 faces, the same L = 0.00456 c).
 
+`make_jet_crossflow.py` writes the flat-plate mesh of the jet-in-crossflow
+example (`examples/cases/jet_crossflow*.toml`): a structured quad mesh in slot
+widths d, inflow 10 d upstream, outflow 80 d downstream, top at 20 d, 32 faces
+across the slot (marker `slot`, a `velocity-inlet` for the jet), 29.9k cells.
+It is not committed: `python examples/meshes/make_jet_crossflow.py
+examples/cases/jet_crossflow.su2`.
+
 `split_marker.py` moves the faces of a marker in an x range (upper, lower or
 both sides) to a new marker, e.g. a slot for a `transpiration-wall`:
 `python split_marker.py IN.su2 OUT.su2 airfoil slot XMIN XMAX upper`. The

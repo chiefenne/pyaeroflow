@@ -1,0 +1,61 @@
+# Inclined jet in crossflow over a flat plate (gallery example): as
+# jet_crossflow.toml (mesh, Re_d = 100, V_j/U = 2), but the jet leaves the
+# slot at 60 deg to the wall, tilted downstream: V_j = 2 (cos 60, sin 60) U.
+# It penetrates less (the jet axis stays below y/d = 3 over the first 15 d,
+# about 6 for the normal jet) and has no bubble in front of the slot; the
+# recirculation behind it reattaches at x/d = 42 (outflow at 80 d).
+# Mesh: python examples/meshes/make_jet_crossflow.py examples/cases/jet_crossflow.su2
+# Steady, converged (8 orders) in about 190 iterations, under 2 min.
+
+[case]
+name = "jet_crossflow_inclined"
+
+[mesh]
+file = "jet_crossflow.su2"        # boundary faces: inlet, outlet, top, plate, slot
+
+[physics]
+model = "laminar"
+
+[fluid]
+density = 1.0                     # kg/m^3
+reynolds_number = 100.0           # with U_ref = 1 m/s and L_ref = d = 1 m
+
+[reference]
+velocity = 1.0                    # m/s, crossflow
+length = 1.0                      # m, slot width d
+moment_center = [0.0, 0.0]
+
+[initial]
+from_boundary = "inlet"
+
+[boundary.inlet]
+type = "velocity-inlet"
+velocity = [1.0, 0.0]             # m/s, uniform crossflow
+
+[boundary.slot]
+type = "velocity-inlet"
+velocity = [1.0, 1.7320508]       # m/s, 60 deg to the wall, |V_j|/U = 2
+
+[boundary.plate]
+type = "wall"
+
+[boundary.top]
+type = "farfield"
+velocity = 1.0                    # m/s
+pressure = 0.0                    # Pa
+
+[boundary.outlet]
+type = "pressure-outlet"
+pressure = 0.0                    # Pa
+
+[numerics]
+limiter = "none"                  # smooth laminar flow, unlimited second order
+
+[solver]
+residual_drop = 8.0
+max_iterations = 500
+
+[output]
+directory = "output/jet_crossflow_inclined"
+force_boundaries = ["plate"]
+fields = ["pressure", "velocity", "velocity_magnitude", "vorticity", "cp"]
