@@ -997,10 +997,11 @@ SCHEMA = {
         ),
         "decay": Opt(
             "float",
-            20.0,
+            10000.0,
             "A wall node moved by d onto the wall curve moves the grid nodes "
             "above it by d (1 - s / (decay |d|)), s = distance from the wall, "
-            "so thin wall cells do not fold",
+            "so thin wall cells do not fold; large (the default) keeps the "
+            "first-cell height smooth along the wall",
             minimum=0.0,
         ),
         "residual_drop": Opt(

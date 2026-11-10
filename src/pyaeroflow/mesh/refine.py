@@ -101,7 +101,7 @@ class Refinement:
     log: list = field(default_factory=list)
     curves: dict = field(default_factory=dict)  # wall line -> 4 control points
     chains: dict = field(default_factory=dict)  # node -> grid lines ending there
-    decay: float = 20.0
+    decay: float = 1.0e4
     placement: str = "smooth"
     corner_angle: float = 30.0
     _original: Mesh = None
@@ -114,7 +114,7 @@ class Refinement:
 
     @classmethod
     def from_mesh(
-        cls, mesh, walls=(), corner_angle=30.0, decay=20.0, placement="smooth"
+        cls, mesh, walls=(), corner_angle=30.0, decay=1.0e4, placement="smooth"
     ):
         """Refinement state of an unrefined mesh (no split yet).
 
@@ -134,7 +134,10 @@ class Refinement:
             A wall node moved by ``d`` onto the curve moves the nodes of the
             grid lines that start at it by ``d * (1 - s / (decay * |d|))``,
             ``s`` the distance from the wall, so thin near-wall cells move with
-            the wall instead of folding.
+            the wall instead of folding. A small decay length tapers the shift
+            off at different heights above neighbouring wall nodes and makes
+            the first-cell height bumpy (5 % rms at 20, NACA 0012 225); the
+            default is large.
         placement : {"smooth", "linear"}
             Where a new node goes inside its original cell. ``smooth``: by
             shape-preserving (PCHIP) interpolation in the index space of the
