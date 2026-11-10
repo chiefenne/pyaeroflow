@@ -1,7 +1,22 @@
 # Changelog
 
-## Unreleased
+## 1.6.0 – local mesh refinement (R1–R4), smooth placement and float32 products (2026-11-10)
 
+- Refinement placement: `refinement.placement = "smooth"` (default) places
+  the new nodes of a split on a cubic through each grid line, with the
+  stretching of the cell kept; `"linear"` restores the straight split (old
+  restart logs replay as linear). A uniform split of the TMR 225 grid into
+  the 449 grid reproduces it. Lines end at kinks of the wall, so the trailing
+  edge cells do not fold.
+- Refinement wall shift: `refinement.decay` now defaults to 10000 (was 20).
+  With 20, the first-cell height along the refined wall varied by 5 % rms
+  (8 % max) because each wall node's shift tapers at a different height. With
+  10000 the first-cell height is smooth (the 8 % refined NACA 0012 case), and
+  restarts keep the decay they were refined with.
+- Refinement still leaves part of the wall-Cp waviness on refined meshes
+  (8 % refined 225 case, rms against the 897 grid over x 0.02–0.12: 1.1e-2,
+  uniform 2 × 2 split 4.1e-3, 449 grid 2.8e-3). Open item; CD of the refined
+  225 case is 0.01339 against 0.01268 for the 449 grid.
 - Float32 Jacobian products (opt-in): `solver.newton_krylov.product_precision
   = "float32"` linearizes the residual in single precision for the GMRES
   products of the Newton phase (residual, GMRES and update stay float64).
@@ -60,9 +75,14 @@
 - Refinement: `refinement.refine_restart` refines the state of
   `initial.restart` before any run (a converged solution on the unrefined
   mesh); cycle 0 is skipped.
-- Refinement: `refinement.limiter_freeze` (default 1 order) freezes the
-  limiter in every cycle after a refinement unless `numerics.limiter_freeze`
-  is set, and a frozen limiter is no longer injected into the next cycle.
+- Refinement: `refinement.limiter_freeze` (default: 1 order for compressible
+  flow, off for incompressible flow) freezes the limiter in every cycle after
+  a refinement unless `numerics.limiter_freeze` is set, and a frozen limiter
+  is no longer injected into the next cycle. On the refined NACA 0012 225
+  mesh the frozen Venkatakrishnan limiter was fragile; the Venkatakrishnan–
+  Wang limiter (`venkatakrishnan-wang`, ε' 0.2) never frozen converges 7
+  orders on the 225 and the 449 mesh, and is the choice for the refinement
+  cases of incompressible flow.
   NACA 0012 Euler M 0.8 cycle 2 stalled at 3.2 orders in 200 iterations
   (limiter chatter at the refined shock; the transfer was not the cause, a
   fresh start on the refined mesh stalls too) and now converges 10.5 orders
