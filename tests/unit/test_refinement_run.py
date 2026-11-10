@@ -55,6 +55,9 @@ directory = "out"
 """
 
 
+BAND = "[refinement.band]\ndistances = {}\n"
+
+
 @pytest.fixture
 def cyl_dir(tmp_path):
     write_su2(tmp_path / "annulus.su2", annulus(32, 8, outer_radius=10.0, growth=1.3))
@@ -76,6 +79,13 @@ CHECKS = [
     (("pressure_gradient_magnitude * h", "h[0]"), "not allowed"),
     (("cycles = 1\n", "cycles = 1\nwalls = ['farfield']\n"), "is a farfield"),
     (("cycles = 1\n", "cycles = 1\nwalls = ['wing']\n"), "no boundary 'wing'"),
+    (("[output]", BAND.format("[0.5, 1.0]") + "[output]"), "strictly decreasing"),
+    (("[output]", BAND.format("[1.0, -0.5]") + "[output]"), "must be >= 0"),
+    (
+        ("[output]", BAND.format("[1.0]") + "boundaries = ['wing']\n[output]"),
+        "band.boundaries: no boundary 'wing'",
+    ),
+    (("cycles = 1\n", "cycles = 1\nwall_curve = 'kinked'\n"), "not one of"),
 ]
 
 
@@ -286,3 +296,82 @@ def test_polar_refines_every_angle(cyl_dir):
     assert again[0].mesh.n_cells == results[1].mesh.n_cells
     log = (out / "alpha_10" / "cyl_alpha_10.refinement.log").read_text()
     assert "start at cycle 1" in log
+
+
+def band_case(cycles=0, distances="[1.5, 0.8]"):
+    text = CYL.replace("cycles = 1", f"cycles = {cycles}")
+    return text.replace("[output]", BAND.format(distances) + "[output]")
+
+
+def test_band_defaults_and_band_without_cycles():
+    config = resolve(_raw(band_case()))
+    rc = config.data["refinement"]
+    assert rc["band"]["boundaries"] == ["cylinder"]
+    assert rc["band"]["distances"] == [1.5, 0.8]
+    assert rc["band"]["n_max"] == 2
+    assert rc["wall_curve"] == "spline"
+    assert rc["walls"] == ["cylinder"]  # resolved although cycles = 0
+
+
+def test_band_splits_by_distance_per_level(cyl_dir):
+    from pyaeroflow.refinement import apply_band, band_distance
+
+    config = resolve(_raw(band_case()))
+    rc = config.data["refinement"]
+    mesh = read_mesh(cyl_dir / "annulus.su2")
+    d0 = band_distance(mesh, ["cylinder"])
+    ref = Refinement.from_mesh(mesh, walls=["cylinder"])
+    notes = []
+    source = apply_band(ref, rc, notes.append)
+    assert len(notes) == 2 and "band level 2" in notes[1]
+    assert source.shape == (ref.n_cells,)
+    factors = ref.split_factors.max(axis=1)
+    inner, outer = d0[ref.origin] < 0.8, d0[ref.origin] >= 1.5
+    # Two levels near the wall, none far out; a full ring: no hanging node
+    # on the wall.
+    assert factors[inner].min() >= 4
+    assert factors[outer & (d0[ref.origin] > 4.0)].max() == 1
+    wall = ref.mesh.boundary_faces["cylinder"]
+    # (the wall cells of this ring are long radially: level 2 splits them
+    # along the radius, direction = "auto")
+    assert wall.size == 2 * mesh.boundary_faces["cylinder"].size
+    assert ref.mesh.cell_n_nodes[ref.mesh.owner[wall]].max() == 4
+
+
+def test_band_run_and_cli(cyl_dir, capsys):
+    from pyaeroflow.cli import main
+    from pyaeroflow.io.vtu import write_vtu  # noqa: F401  (the CLI writes VTU)
+
+    (cyl_dir / "band.toml").write_text(band_case())
+    assert main(["refine", str(cyl_dir / "band.toml")]) == 0
+    out = capsys.readouterr().out
+    assert "band level 2" in out and "cylinder: 32 -> 64 faces" in out
+    vtu = cyl_dir / "out" / "cyl.band.vtu"
+    text = vtu.read_text()
+    for name in ("band_distance", "factor_u", "aspect", "original_cell"):
+        assert f'Name="{name}"' in text
+
+    # pyaeroflow run makes the same mesh before cycle 0, cycles = 0 included.
+    result = run_case(cyl_dir / "band.toml", console=False)
+    assert result.converged
+    assert result.restart_file.parent == cyl_dir / "out" / "cycle_0"
+    n_band = int(text.split('NumberOfCells="')[1].split('"')[0])
+    assert result.mesh.n_cells == n_band
+    info = read_refinement_info(result.restart_file)
+    assert info["cycle"] == 0 and len(info["log"]) == 2
+    assert info["options"]["wall_curve"] == "spline"
+    assert "band level 1" in (cyl_dir / "out" / "cyl.refinement.log").read_text()
+
+
+def test_band_injects_a_start_state_from_the_original_mesh(cyl_dir):
+    plain = run_case(cyl_dir / "cyl.toml", console=False)  # refined, other case
+    text = band_case().replace(
+        "[numerics]", f'[initial]\nrestart = "{plain.restart_file}"\n[numerics]'
+    )
+    text = text.replace('"out"', '"out_band"').replace('"cyl"', '"cylband"')
+    (cyl_dir / "band.toml").write_text(text)
+    result = run_case(cyl_dir / "band.toml", console=False)
+    assert result.converged
+    log = (cyl_dir / "out_band" / "cylband.refinement.log").read_text()
+    assert "averaged onto the original mesh" in log
+    assert "injected onto the band mesh" in log

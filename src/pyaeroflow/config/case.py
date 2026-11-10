@@ -356,6 +356,11 @@ def _check_value(dotted, opt, value, problems):
         ok = isinstance(value, list) and all(
             isinstance(v, int) and not isinstance(v, bool) for v in value
         )
+    elif opt.type == "float_list":
+        ok = isinstance(value, list) and all(
+            isinstance(v, int | float) and not isinstance(v, bool) for v in value
+        )
+        value = [float(v) for v in value] if ok else value
     elif opt.type == "table":
         ok = isinstance(value, dict)
     elif opt.type == "table_list":
@@ -366,6 +371,7 @@ def _check_value(dotted, opt, value, problems):
             "float2_list": "array of [x, y] pairs",
             "string_list": "array of strings",
             "int_list": "array of integers",
+            "float_list": "array of numbers",
             "table": "table",
             "table_list": "array of tables",
         }
@@ -377,7 +383,7 @@ def _check_value(dotted, opt, value, problems):
         problems.append(f"{dotted}: {value!r} is not one of {list(opt.choices)}")
     if opt.minimum is not None and (
         min(value, default=opt.minimum) < opt.minimum
-        if opt.type in ("float2", "int_list")
+        if opt.type in ("float2", "int_list", "float_list")
         else value < opt.minimum
     ):
         problems.append(f"{dotted}: must be >= {opt.minimum}, got {value!r}")
@@ -738,13 +744,18 @@ def _consistency(data, explicit, problems, notices, path):
 def _refinement_rules(data, problems):
     """Local mesh refinement (``[refinement]``): indicator and case limits."""
     rc = data["refinement"]
-    if not rc["cycles"]:
+    band = rc["band"]
+    if not rc["cycles"] and not band["distances"]:
         return
     if data["time"]["mode"] != "steady":
         problems.append("refinement: only steady runs can be refined")
     types = {name: b["type"] for name, b in data["boundary"].items()}
     if "periodic" in types.values():
         problems.append("refinement: periodic boundaries cannot be refined yet")
+    _wall_rules(rc, types, problems)
+    _band_rules(band, types, problems)
+    if not rc["cycles"]:
+        return
     if rc["indicator"] is None:
         problems.append("refinement.indicator is required when refinement.cycles > 0")
         return
@@ -771,16 +782,41 @@ def _refinement_rules(data, problems):
             problems.append(
                 f"refinement.indicator: field '{name}' needs {BY_NAME[name].needs}"
             )
+
+
+WALL_TYPES = ("wall", "slip-wall", "transpiration-wall")
+
+
+def _wall_rules(rc, types, problems):
+    """``refinement.walls``: existing wall boundaries, default all walls."""
     walls = rc["walls"]
-    wall_types = ("wall", "slip-wall", "transpiration-wall")
     if walls is not None:
         for w in walls:
             if w not in types:
                 problems.append(f"refinement.walls: no boundary '{w}'")
-            elif types[w] not in wall_types:
+            elif types[w] not in WALL_TYPES:
                 problems.append(f"refinement.walls: '{w}' is a {types[w]} boundary")
     else:
-        rc["walls"] = [n for n, t in types.items() if t in wall_types]
+        rc["walls"] = [n for n, t in types.items() if t in WALL_TYPES]
+
+
+def _band_rules(band, types, problems):
+    """``[refinement.band]``: decreasing distances, existing boundaries."""
+    d = band["distances"]
+    if not d:
+        return
+    if any(v <= 0.0 for v in d) or any(b >= a for a, b in zip(d, d[1:], strict=False)):
+        problems.append(
+            "refinement.band.distances: positive and strictly decreasing values, "
+            f"got {d}"
+        )
+    if band["boundaries"] is None:
+        band["boundaries"] = [n for n, t in types.items() if t in WALL_TYPES]
+    for b in band["boundaries"]:
+        if b not in types:
+            problems.append(f"refinement.band.boundaries: no boundary '{b}'")
+    if not band["boundaries"]:
+        problems.append("refinement.band: no boundary to measure the distance from")
 
 
 def refine_spec_args(rc):

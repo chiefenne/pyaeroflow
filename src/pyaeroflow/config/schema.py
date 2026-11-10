@@ -27,7 +27,7 @@ class Opt(NamedTuple):
     """One configuration option."""
 
     # "float", "int", "bool", "string", "float2", "float2_list", "string_list",
-    # "int_list", "table", "table_list"
+    # "int_list", "float_list", "table", "table_list"
     type: str
     default: object
     description: str
@@ -1000,6 +1000,43 @@ SCHEMA = {
             "deg",
             minimum=0.0,
         ),
+        "wall_curve": Opt(
+            "string",
+            "spline",
+            "Where new nodes on the walls go: spline = on the cubic through the "
+            "neighbouring wall nodes (a smooth contour); straight = on the "
+            "straight face between the original wall nodes, so the refined "
+            "mesh keeps the faceted contour of the input mesh and resolves its "
+            "kinks (for studies of the contour itself)",
+            choices=("spline", "straight"),
+        ),
+        "band": {
+            "distances": Opt(
+                "float_list",
+                [],
+                "Geometric refinement before cycle 0, no solution needed: level "
+                "i splits every cell whose centre is closer than distances[i] "
+                "to the band boundaries (decreasing values, e.g. [0.05, 0.02, "
+                "0.008]); the band wraps the whole wall, trailing edge and "
+                "near wake included, so no hanging node sits on the wall; "
+                "empty = off",
+                "m",
+                minimum=0.0,
+            ),
+            "boundaries": Opt(
+                "string_list",
+                None,
+                "Boundaries the band distance is measured from; default: all "
+                "wall, slip-wall and transpiration-wall boundaries",
+            ),
+            "n_max": Opt(
+                "int",
+                2,
+                "Split factor of a thin cell along its long side per level "
+                "(other cells 2 x 2)",
+                minimum=2,
+            ),
+        },
         "placement": Opt(
             "string",
             "smooth",

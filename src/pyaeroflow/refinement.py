@@ -85,6 +85,73 @@ def replay_refinement(mesh, info):
     return Refinement.replay(mesh, info["log"], **options)
 
 
+def refinement_options(rc):
+    """Options of :meth:`Refinement.from_mesh` from ``[refinement]``."""
+    return {
+        "walls": list(rc["walls"] or []),
+        "corner_angle": rc["corner_angle"],
+        "decay": rc["decay"],
+        "placement": rc["placement"],
+        "wall_curve": rc["wall_curve"],
+    }
+
+
+def band_spec(rc):
+    """Return the :class:`RefineSpec` of one level of ``[refinement.band]``."""
+    band = rc["band"]
+    n = band["n_max"]
+    return RefineSpec(
+        indicator="band",
+        threshold=0.5,
+        max_factor=max(rc["max_factor"], n ** len(band["distances"])),
+        direction=rc["direction"],
+        aspect_target=rc["aspect_target"],
+        n_max=n,
+        max_hanging=rc["max_hanging"],
+        column_aspect=rc["column_aspect"] or None,
+    )
+
+
+def band_distance(mesh, boundaries):
+    """Distance of the cell centres of ``mesh`` to the faces of ``boundaries``."""
+    from pyaeroflow.numerics.wall_distance import mesh_wall_distance
+
+    faces = [mesh.boundary_faces[b] for b in boundaries if b in mesh.boundary_faces]
+    faces = np.concatenate(faces) if faces else np.zeros(0, dtype=int)
+    return mesh_wall_distance(mesh, faces)[0]
+
+
+def apply_band(ref, rc, note=None):
+    """Split ``ref`` by the levels of ``[refinement.band]`` (geometry only).
+
+    Level ``i`` splits every leaf cell whose centre lies closer than
+    ``band.distances[i]`` to the band boundaries (thin cells along their long
+    side by ``band.n_max``, the others 2 x 2, with the balance and
+    boundary-layer column rules of ``[refinement]``).
+
+    Returns
+    -------
+    ndarray of int or None
+        The cell before the band of every leaf cell after it (None if no
+        level split anything).
+    """
+    band = rc["band"]
+    spec = band_spec(rc)
+    total = None
+    for i, d in enumerate(band["distances"]):
+        dist = band_distance(ref.mesh, band["boundaries"])
+        n0 = ref.n_cells
+        source, marking = apply(ref, {"band": (dist < d).astype(float)}, spec)
+        if note is not None:
+            note(
+                f"band level {i + 1} (distance < {d:g}): marked "
+                f"{marking.cells.size} of {n0} cells, {ref.n_cells} cells after"
+            )
+        if source is not None:
+            total = source if total is None else total[source]
+    return total
+
+
 def _info_json(ref, options, cycle):
     return json.dumps({"log": ref.log, "options": options, "cycle": cycle})
 
@@ -305,14 +372,10 @@ def run_refined(config, console=True, mesh=None):
     name = config.name
     if mesh is None:
         mesh = read_mesh(config.resolve_path(cfg["mesh"]["file"]), cfg["mesh"]["scale"])
-    options = {
-        "walls": list(rc["walls"]),
-        "corner_angle": rc["corner_angle"],
-        "decay": rc["decay"],
-        "placement": rc["placement"],
-    }
-    spec = RefineSpec(**refine_spec_args(rc))
-    names = [n for n in names_used(rc["indicator"]) if n in BY_NAME]
+    options = refinement_options(rc)
+    cycles = rc["cycles"]
+    spec = RefineSpec(**refine_spec_args(rc)) if cycles else None
+    names = [n for n in names_used(rc["indicator"]) if n in BY_NAME] if cycles else []
 
     previous, start, ref, restricted = None, 0, None, None
     if cfg["initial"]["restart"] is not None:
@@ -325,7 +388,8 @@ def run_refined(config, console=True, mesh=None):
         elif info is not None:  # another case: its state on the original mesh
             restricted = previous
             previous = _restricted_start(previous, info, mesh, out_dir, name)
-    if ref is None:
+    fresh = ref is None
+    if fresh:
         ref = Refinement.from_mesh(mesh, **options)
 
     log_path = out_dir / f"{name}.refinement.log"
@@ -338,11 +402,25 @@ def run_refined(config, console=True, mesh=None):
         if console:
             print(f"[refinement] {text}", flush=True)
 
-    indicator = " ".join(rc["indicator"].split())  # one line in the log
-    note(
-        f"case '{name}': {rc['cycles']} refinements, indicator '{indicator}', "
-        f"start at cycle {start} with {ref.n_cells} cells"
-    )
+    if cycles:
+        indicator = " ".join(rc["indicator"].split())  # one line in the log
+        what = f"{cycles} refinements, indicator '{indicator}'"
+    else:
+        what = "no refinement cycles"
+    note(f"case '{name}': {what}, start at cycle {start} with {ref.n_cells} cells")
+    if fresh and rc["band"]["distances"]:
+        # The band is geometry: it is applied to the original mesh before
+        # cycle 0 (a restart of the own chain has it in its log already).
+        band_source = apply_band(ref, rc, note)
+        if band_source is not None and previous is not None:
+            previous = _start_file(
+                previous,
+                ref.mesh,
+                lambda v: v[band_source],
+                out_dir / f"{name}.band_start.npz",
+                {"refinement": _info_json(ref, options, 0)},
+            )
+            note(f"start state injected onto the band mesh: {previous.name}")
     if restricted is not None:
         note(
             f"start state from {Path(restricted).name} (a refined mesh of "
@@ -363,7 +441,7 @@ def run_refined(config, console=True, mesh=None):
     if rc["refine_restart"] and previous is not None and not own_chain(previous, name):
         # A converged state of another case: refine it before any run.
         first = _cycle_config(config, 0, False, previous, "state", None, False)
-        source, marking, n0 = _refine_state(first, mesh, ref, previous, names, spec)
+        source, marking, n0 = _refine_state(first, ref.mesh, ref, previous, names, spec)
         note(f"cycle 0: {marking.summary()} (state of the restart file, not run)")
         rows.append([0, n0, 0, 0, np.nan, np.nan, np.nan, np.nan])
         rows[-1] += [int(marking.cells.size), ref.n_cells]
@@ -453,3 +531,70 @@ def _write_rows(path, rows):
         comments="",
         fmt=["%d", "%d", "%d", "%d", "%.3f", "%.8e", "%.8e", "%.8e", "%d", "%d"],
     )
+
+
+def refine_case_mesh(config, output=None, console=True):
+    """Apply ``[refinement.band]`` to the case mesh and write it as VTU.
+
+    The command ``pyaeroflow refine``: no solution is computed, only the
+    geometric band of the case (the same splits ``pyaeroflow run`` makes
+    before cycle 0), so the refined mesh can be checked in ParaView first.
+    The file holds per cell the band distance, the split factors, the
+    aspect ratio, the area and the original cell.
+
+    Returns
+    -------
+    (Path, Refinement)
+    """
+    from pyaeroflow.io.vtu import write_vtu
+    from pyaeroflow.mesh.indicator import geometry_variables
+
+    cfg = config.data
+    rc = cfg["refinement"]
+    if not rc["band"]["distances"]:
+        raise ValueError(
+            "pyaeroflow refine: the case has no [refinement.band] distances "
+            "(the indicator cycles need a solution and run with pyaeroflow run)"
+        )
+    mesh = read_mesh(config.resolve_path(cfg["mesh"]["file"]), cfg["mesh"]["scale"])
+    ref = Refinement.from_mesh(mesh, **refinement_options(rc))
+
+    def note(text):
+        if console:
+            print(text, flush=True)
+
+    band = rc["band"]
+    note(
+        f"{config.name}: {mesh.n_cells} cells, band from "
+        f"{', '.join(band['boundaries'])}, wall_curve = {rc['wall_curve']}"
+    )
+    apply_band(ref, rc, note)
+    refined = ref.mesh
+    geo = geometry_variables(ref)
+    for b in band["boundaries"]:
+        if b in mesh.boundary_faces:
+            note(
+                f"  {b}: {mesh.boundary_faces[b].size} -> "
+                f"{refined.boundary_faces[b].size} faces"
+            )
+    note(
+        f"  {refined.n_cells} cells, largest polygon "
+        f"{refined.cell_n_nodes.max()} nodes, smallest area "
+        f"{refined.cell_area.min():.3e}, largest aspect {geo['aspect'].max():.4g}"
+    )
+    if output is None:
+        out_dir = config.resolve_path(cfg["output"]["directory"])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        output = out_dir / f"{config.name}.band.vtu"
+    cell_data = {
+        "band_distance": band_distance(refined, band["boundaries"]),
+        "factor_u": geo["factor_u"],
+        "factor_v": geo["factor_v"],
+        "aspect": geo["aspect"],
+        "area": geo["area"],
+        "original_cell": ref.origin.astype(float),
+        "nodes_per_cell": refined.cell_n_nodes.astype(float),
+    }
+    path = write_vtu(output, refined, cell_data)
+    note(f"wrote {path}")
+    return path, ref

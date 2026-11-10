@@ -101,6 +101,7 @@ Then:
 ```
 pyaeroflow check case.toml        # validate, print the resolved configuration
 pyaeroflow run case.toml          # solve; writes <name>.log, .history.csv, .vtu
+pyaeroflow refine case.toml       # only make the [refinement.band] mesh, as VTU
 ```
 
 Example case files are in `examples/cases/` (generate the meshes of the

@@ -1,4 +1,4 @@
-"""Command line: run, check, polar, fields, init-case, check-mesh, clean, plot, ..."""
+"""Command line: run, check, polar, refine, fields, init-case, check-mesh, ..."""
 
 import argparse
 import sys
@@ -59,6 +59,15 @@ def main(argv=None):
     cmesh.add_argument("--wall", help="airfoil boundary (default 'airfoil')")
     cmesh.add_argument("--chord", type=float, help="m; default from the mesh")
     cmesh.add_argument("--scale", type=float, default=1.0, help="mesh.scale")
+    rfn = sub.add_parser(
+        "refine",
+        help="apply [refinement.band] to the case mesh and write it as VTU "
+        "(no run), to check it in ParaView",
+    )
+    rfn.add_argument("case", help="TOML case file with [refinement.band]")
+    rfn.add_argument(
+        "-o", "--output", help="VTU file (default <output.directory>/<name>.band.vtu)"
+    )
     flds = sub.add_parser(
         "fields", help="list the output fields a case provides (* = selected)"
     )
@@ -113,6 +122,11 @@ def main(argv=None):
             from pyaeroflow.io.fields import case_listing
 
             print(case_listing(load_case(args.case).data))
+            return 0
+        if args.command == "refine":
+            from pyaeroflow.refinement import refine_case_mesh
+
+            refine_case_mesh(load_case(args.case), args.output)
             return 0
         if args.command == "init-case":
             return _init_case(args)
