@@ -30,7 +30,10 @@ cut = 0.995
 
 # Upper: TE -> LE; truncate where x drops below cut, then add the LE point.
 def side_nodes(side, n, te_first):
-    s = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(side, axis=0), axis=1))))
+    """Resample one airfoil side to n nodes."""
+    s = np.concatenate(
+        ([0.0], np.cumsum(np.linalg.norm(np.diff(side, axis=0), axis=1)))
+    )
     x = side[:, 0]
     if te_first:
         s_cut = np.interp(cut, x[::-1], s[::-1])
@@ -47,7 +50,9 @@ base_y = np.linspace(lo[-1, 1], up[0, 1], 5)[1:-1]
 base = np.column_stack((np.full(3, cut), base_y))
 loop = np.vstack((up[:-1], lo[:-1], lo[-1:], base))
 loop = loop / cut
-area = 0.5 * np.sum(loop[:, 0] * np.roll(loop[:, 1], -1) - np.roll(loop[:, 0], -1) * loop[:, 1])
+area = 0.5 * np.sum(
+    loop[:, 0] * np.roll(loop[:, 1], -1) - np.roll(loop[:, 0], -1) * loop[:, 1]
+)
 assert area > 0, "loop must be counter-clockwise"
 n_radial = int(sys.argv[4]) if len(sys.argv) > 4 else 120
 # y+ ~ 0.5 at Re 6e4 with C_f up to 0.01.

@@ -9,6 +9,7 @@ The solver's CM is nose-down positive, so -CM is compared with c_m.
 Prints CL, CD, c_m of the run against each reference at the run's angles
 (references interpolated linearly in alpha) and writes <prefix>_polar.png.
 """
+
 import argparse
 import json
 import os
@@ -16,16 +17,20 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 
-REF = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "reference", "e387")
+REF = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "reference", "e387"
+)
 
 
 def load(name):
+    """Read a reference CSV (comment lines start with #)."""
     with open(os.path.join(REF, name)) as f:
         lines = [ln for ln in f if not ln.startswith("#")]
     return np.genfromtxt(lines, delimiter=",", names=True)
 
 
 def main():
+    """Plot the polar against the reference data."""
     ap = argparse.ArgumentParser()
     ap.add_argument("polar")
     ap.add_argument("-o", "--out", default=None)
@@ -51,7 +56,10 @@ def main():
     def at(ref, key):
         return np.interp(alpha, ref["alpha"], ref[key])
 
-    print(f"{'alpha':>6} {'CL':>7} {'CD':>8} {'cm':>8}  " + "  ".join(f"{n:>26}" for n in refs))
+    print(
+        f"{'alpha':>6} {'CL':>7} {'CD':>8} {'cm':>8}  "
+        + "  ".join(f"{n:>26}" for n in refs)
+    )
     for i, al in enumerate(alpha):
         cells = []
         for ref in refs.values():
@@ -67,8 +75,12 @@ def main():
         print("not flagged converged:", ", ".join(f"{b:g}" for b in bad))
 
     fig, ax = plt.subplots(1, 3, figsize=(15, 4.8))
-    sty = {"Penn State 2007": ("C2", "s"), "NASA TM 4062": ("C3", "^"),
-           "XFOIL N=8.15": ("C1", "-"), "XFOIL N=10.07": ("C1", "--")}
+    sty = {
+        "Penn State 2007": ("C2", "s"),
+        "NASA TM 4062": ("C3", "^"),
+        "XFOIL N=8.15": ("C1", "-"),
+        "XFOIL N=10.07": ("C1", "--"),
+    }
     for n, ref in refs.items():
         c, m = sty[n]
         kw = dict(color=c, label=n)
@@ -76,13 +88,20 @@ def main():
         ax[0].plot(ref["alpha"], ref["cl"], **kw)
         ax[1].plot(ref["cd"], ref["cl"], **kw)
         ax[2].plot(ref["alpha"], ref["cm"], **kw)
-    for axi, (x, y) in zip(ax, ((alpha, cl), (cd, cl), (alpha, cm))):
+    for axi, (x, y) in zip(ax, ((alpha, cl), (cd, cl), (alpha, cm)), strict=True):
         axi.plot(x, y, "C0o-", label=a.label, lw=1.5, ms=5)
         axi.grid(alpha=0.3)
-    ax[0].set_xlabel("alpha [deg]"); ax[0].set_ylabel("CL"); ax[0].legend(fontsize=8)
-    ax[1].set_xlabel("CD"); ax[1].set_ylabel("CL"); ax[1].set_xlim(0.006, 0.03)
-    ax[2].set_xlabel("alpha [deg]"); ax[2].set_ylabel("cm (nose up +)")
-    ax[0].set_xlim(-3, 10); ax[2].set_xlim(-3, 10); ax[0].set_ylim(-0.1, 1.4)
+    ax[0].set_xlabel("alpha [deg]")
+    ax[0].set_ylabel("CL")
+    ax[0].legend(fontsize=8)
+    ax[1].set_xlabel("CD")
+    ax[1].set_ylabel("CL")
+    ax[1].set_xlim(0.006, 0.03)
+    ax[2].set_xlabel("alpha [deg]")
+    ax[2].set_ylabel("cm (nose up +)")
+    ax[0].set_xlim(-3, 10)
+    ax[2].set_xlim(-3, 10)
+    ax[0].set_ylim(-0.1, 1.4)
     fig.suptitle("E387, Re 2e5: " + os.path.basename(a.polar))
     out = (a.out or os.path.splitext(a.polar)[0]) + "_polar.png"
     fig.savefig(out, dpi=130, bbox_inches="tight")

@@ -1005,8 +1005,9 @@ def _resume_state(config, scaling, restart_mode):
             config.notices.append(
                 "time step differs from the restart file: first step BDF1"
             )
+        t_phys = state["step"] * dt * scaling.length / scaling.velocity
         config.notices.append(
-            f"continuing after time step {state['step']} (t = {state['step'] * dt * scaling.length / scaling.velocity:.6g} s)"
+            f"continuing after time step {state['step']} (t = {t_phys:.6g} s)"
         )
     else:
         config.notices.append(f"continuing after iteration {state['iteration']}")

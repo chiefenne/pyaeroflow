@@ -50,10 +50,12 @@ def _face_blocks_sel(
     )
     out, dropped = [], 0.0
     for d, idx in zip((d_o, d_n, d_b), sel, strict=True):
-        d = (d * block_mask[None]).reshape(d.shape[0], -1)
+        # explicit width: reshape(0, -1) fails for a kind without faces
+        d = (d * block_mask[None]).reshape(d.shape[0], d.shape[1] * d.shape[2])
         out.append(d[:, idx])
         kept = jnp.zeros(d.shape[1], bool).at[idx].set(True)
-        dropped = jnp.maximum(dropped, jnp.max(jnp.where(kept[None], 0.0, jnp.abs(d))))
+        lost = jnp.where(kept[None], 0.0, jnp.abs(d))
+        dropped = jnp.maximum(dropped, jnp.max(lost, initial=0.0))
     return (*out, dropped)
 
 

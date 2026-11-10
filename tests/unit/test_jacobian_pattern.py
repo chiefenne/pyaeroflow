@@ -3,6 +3,7 @@
 import jax.numpy as jnp
 import numpy as np
 
+from pyaeroflow.cases import taylor_green
 from pyaeroflow.driver import IncompressibleProblem
 from pyaeroflow.mesh import rectangle
 from pyaeroflow.physics import incompressible as inc
@@ -107,3 +108,9 @@ def test_block_diagonal_source_blocks_are_added_on_the_diagonal():
     ) + block_diagonal(blocks)
     np.testing.assert_allclose(with_src.toarray(), expected.toarray(), atol=1e-14)
     assert base.shape == with_src.shape
+
+
+def test_assembly_without_boundary_faces():
+    """A fully periodic mesh has no boundary faces: the assembly must not fail."""
+    r = taylor_green.solve(n=8, viscosity=0.05, time_step=0.05, end_time=0.05)
+    assert r.converged
