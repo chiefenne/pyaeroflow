@@ -385,6 +385,42 @@ def test_smooth_uniform_split_reproduces_tmr_449_grid():
         assert np.max(d / h) < 1.5  # linear: up to 84 cells off
 
 
+def test_default_decay_keeps_the_first_cell_height_smooth():
+    """Splitting the wall cells of the TMR 225 x 65 grid 8-fold along the wall.
+
+    A small decay tapers the wall shift off at a different height above each
+    new wall node, which makes the first-cell height bumpy (5 % rms); the
+    default does not.
+    """
+    from pathlib import Path
+
+    from pyaeroflow.mesh import read_mesh
+
+    base = read_mesh(
+        Path(__file__).resolve().parents[2]
+        / "examples"
+        / "meshes"
+        / "naca0012_tmr_225x65.su2"
+    )
+    wall = base.boundary_faces["airfoil"]
+    c = base.face_centre[wall]
+    cells = base.owner[wall][(c[:, 1] >= 0) & (c[:, 0] > 0.03) & (c[:, 0] < 0.5)]
+    bumps = {}
+    for decay in (20.0, 1.0e4):
+        ref = Refinement.from_mesh(base, walls=["airfoil"], decay=decay)
+        ref.split(cells, 8, 1, max_hanging=None, column_aspect=0.0)
+        mesh = ref.mesh
+        faces = mesh.boundary_faces["airfoil"]
+        fc = mesh.face_centre[faces]
+        keep = (fc[:, 1] >= 0) & (fc[:, 0] > 0.05) & (fc[:, 0] < 0.4)
+        faces, fc = faces[keep], fc[keep]
+        h = mesh.cell_area[mesh.owner[faces]] / mesh.face_length[faces]
+        h = h[np.argsort(fc[:, 0])]
+        dev = h[1:-1] / (0.5 * (h[:-2] + h[2:])) - 1.0
+        bumps[decay] = float(np.sqrt(np.mean(dev**2)))
+    assert bumps[1.0e4] < 0.1 * bumps[20.0]
+
+
 def test_replay_of_old_log_is_linear():
     from pyaeroflow.refinement import replay_refinement
 
