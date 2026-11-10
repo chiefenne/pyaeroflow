@@ -43,15 +43,22 @@ run_one() {
     name=$(echo "$f" | tr '/' '_' | sed 's/\.py$//')
     log="$OUT/$name.log"
     # -v prints each test with a running percentage, e.g. "[ 3%]"
-    python -m pytest -v -p no:cacheprovider -rfE "${mark[@]}" "$f" > "$log" 2>&1
-    rc=$?
+    if [ "$JOBS_N" = 1 ]; then
+        # one file at a time: show the per-test lines live and keep the log
+        python -m pytest -v -p no:cacheprovider -rfE "${mark[@]}" "$f" 2>&1 | tee "$log"
+        rc=${PIPESTATUS[0]}
+    else
+        # parallel: per-test lines would interleave, so only the log keeps them
+        python -m pytest -v -p no:cacheprovider -rfE "${mark[@]}" "$f" > "$log" 2>&1
+        rc=$?
+    fi
     echo "$rc $f" >> "$OUT/status.txt"
     # one line per finished file: position, file, last summary line
     n=$(wc -l < "$OUT/status.txt")
     echo "[$n/$TOTAL] $(date +%H:%M:%S) $f: $(grep -E '[0-9]+ (passed|failed|error|skipped)' "$log" | tail -n 1 | tr -d '=' | sed 's/^ *//')"
 }
 export -f run_one
-export OUT MARK_MODE="$MODE" TOTAL="${#FILES[@]}"
+export OUT MARK_MODE="$MODE" TOTAL="${#FILES[@]}" JOBS_N="$JOBS"
 : > "$OUT/status.txt"
 
 echo "Running ${#FILES[@]} files ($MODE, $JOBS at a time) -> $OUT"
