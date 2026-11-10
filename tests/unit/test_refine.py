@@ -47,7 +47,7 @@ def test_single_split_makes_hanging_nodes():
 @pytest.mark.parametrize("nu,nv", [(1, 4), (3, 1), (3, 2), (5, 5)])
 def test_anisotropic_split(nu, nv):
     m0 = base(perturb=0.3)
-    ref = Refinement.from_mesh(m0)
+    ref = Refinement.from_mesh(m0, placement="linear")  # children tile the parent
     source = ref.split([0, 9, 23], nu, nv, max_hanging=None)
     check(ref.mesh, 2.0)
     assert ref.n_cells == m0.n_cells + 3 * (nu * nv - 1)
@@ -201,7 +201,9 @@ def wall_radius_error(mesh, nodes):
 def test_new_wall_nodes_lie_on_curve():
     m0 = ring(growth=1.1, n_radial=10)
     wall = m0.boundary_faces["cylinder"]
-    straight, _ = refine_cells(m0, m0.owner[wall], 2, 2, max_hanging=None)
+    straight, _ = refine_cells(
+        m0, m0.owner[wall], 2, 2, max_hanging=None, placement="linear"
+    )
     ref = Refinement.from_mesh(m0, walls=["cylinder"])
     ref.split(m0.owner[wall], 2, 2, max_hanging=None)
     new = np.arange(m0.n_nodes, ref.mesh.n_nodes)
@@ -235,9 +237,15 @@ def test_displacement_carried_up_prevents_folding():
     # Sagitta (~1.7e-3) is far larger than the first cell height.
     assert first < 1e-4
     with pytest.raises(MeshError, match="folded"):
-        ref = Refinement.from_mesh(m0, walls=["cylinder"], decay=1e-3)
+        ref = Refinement.from_mesh(
+            m0, walls=["cylinder"], decay=1e-3, placement="linear"
+        )
         ref.split(cells, 2, 1, column_aspect=5.0)
         ref.mesh  # noqa: B018
+    # Smooth placement puts the new nodes above the wall on the circles too.
+    ref = Refinement.from_mesh(m0, walls=["cylinder"], decay=1e-3)
+    ref.split(cells, 2, 1, column_aspect=5.0)
+    check(ref.mesh, ref.mesh.cell_area.sum())
     ref = Refinement.from_mesh(m0, walls=["cylinder"])
     ref.split(cells, *ref.along_long_side(cells, 2), column_aspect=5.0)
     check(ref.mesh, ref.mesh.cell_area.sum())
@@ -296,3 +304,94 @@ def test_several_new_nodes_on_one_wall_face_do_not_fold():
     p4 = {tuple(np.round(p, 12)) for p in ref.mesh.nodes[wall]}
     p2 = {tuple(np.round(p, 12)) for p in two.mesh.nodes[wall2]}
     assert p2 <= p4
+
+
+def stretched(n, ratio):
+    """n + 1 points on [0, 1] in geometric progression."""
+    w = ratio ** np.arange(n)
+    return np.concatenate([[0.0], np.cumsum(w) / w.sum()])
+
+
+def test_smooth_placement_keeps_the_stretching():
+    """A 2 x 2 split of a geometric grid lies on the sqrt-ratio grid.
+
+    Linear midpoints put a spacing jump of the full ratio at every old
+    node; PCHIP keeps the spacing smooth across it.
+    """
+    xs, ys = stretched(6, 1.0), stretched(8, 1.4)
+    m0 = structured(xs, ys)
+    jumps = {}
+    for placement in ("linear", "smooth"):
+        ref = Refinement.from_mesh(m0, placement=placement)
+        ref.split(np.arange(m0.n_cells), 2, 2)
+        m1 = ref.mesh
+        check(m1, 1.0)
+        y = np.unique(np.round(m1.nodes[:, 1], 12))
+        assert len(y) == 17
+        h = np.diff(y)
+        jumps[placement] = np.max(h[1:] / h[:-1])
+    assert jumps["linear"] == pytest.approx(1.4, rel=1e-9)
+    assert jumps["smooth"] < 1.25
+
+
+def test_smooth_placement_follows_curved_grid_lines():
+    """New nodes of an annulus' circular grid lines lie on circles."""
+    m0 = annulus(16, 3)
+    theta0 = np.unique(np.round(np.arctan2(*m0.nodes.T[::-1]), 9))
+    err = {}
+    for placement in ("linear", "smooth"):
+        ref = Refinement.from_mesh(m0, placement=placement)
+        ref.split(np.arange(m0.n_cells), 2, 2)
+        p = ref.mesh.nodes
+        r, theta = np.hypot(*p.T), np.round(np.arctan2(*p.T[::-1]), 9)
+        rings = np.unique(np.round(r[np.isin(theta, theta0)], 9))
+        err[placement] = np.max(np.min(np.abs(r[:, None] - rings[None, :]), axis=1))
+    assert err["linear"] > 1e-3
+    assert err["smooth"] < 0.05 * err["linear"]
+
+
+def test_smooth_uniform_split_reproduces_tmr_449_grid():
+    """2 x 2 split of the TMR 225 x 65 C-grid ~ its PCHIP refinement 449 x 129.
+
+    The trailing edge (8 deg kink of every row, 4e-6 thin wake cells) must
+    not fold.
+    """
+    import sys
+    from pathlib import Path
+
+    from scipy.spatial import cKDTree
+
+    from pyaeroflow.mesh import read_mesh
+
+    meshes = Path(__file__).resolve().parents[2] / "examples" / "meshes"
+    sys.path.insert(0, str(meshes))
+    try:
+        import make_tmr_naca0012 as mk
+    finally:
+        sys.path.pop(0)
+    x, y = mk.read_p2d(meshes / "naca0012_tmr_225x65.p2dfmt")
+    xf, yf, _ = mk.refine(x, y)
+    base = read_mesh(meshes / "naca0012_tmr_225x65.su2")
+    nw = mk.wake_split(xf, yf)
+    i = np.arange(nw + 1, xf.shape[0] - nw)  # airfoil part of the C
+    ref = Refinement.from_mesh(base, walls=["airfoil"])
+    ref.split(np.arange(base.n_cells), 2, 2)
+    assert np.all(ref.mesh.cell_area > 0)
+    tree = cKDTree(ref.mesh.nodes)
+    for j in (0, 5, 25):
+        d, _ = tree.query(np.c_[xf[i, j], yf[i, j]])
+        h = np.hypot(xf[i, j + 1] - xf[i, j], yf[i, j + 1] - yf[i, j])
+        assert np.median(d / h) < 0.02  # linear midpoints: 0.08 to 0.43
+        assert np.max(d / h) < 1.5  # linear: up to 84 cells off
+
+
+def test_replay_of_old_log_is_linear():
+    from pyaeroflow.refinement import replay_refinement
+
+    m0 = rectangle(4, 3, perturb=0.2, seed=1)
+    ref = Refinement.from_mesh(m0, placement="linear")
+    ref.split([0, 5], 2, 2)
+    options = {"walls": [], "corner_angle": 30.0, "decay": 20.0}
+    info = {"log": ref.log, "options": options}
+    again = replay_refinement(m0, info)
+    assert np.array_equal(again.mesh.nodes, ref.mesh.nodes)

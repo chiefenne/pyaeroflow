@@ -67,7 +67,7 @@ def read_refinement_info(path):
     -------
     dict or None
         ``log`` (list of split records), ``options`` (walls, corner_angle,
-        decay), ``cycle`` and ``json`` (the stored text).
+        decay, placement), ``cycle`` and ``json`` (the stored text).
     """
     with np.load(path) as data:
         if "refinement" not in data.files:
@@ -80,7 +80,8 @@ def read_refinement_info(path):
 
 def replay_refinement(mesh, info):
     """Rebuild the refined mesh of ``info`` from the original ``mesh``."""
-    return Refinement.replay(mesh, info["log"], **info["options"])
+    options = {"placement": "linear", **info["options"]}  # logs before placement
+    return Refinement.replay(mesh, info["log"], **options)
 
 
 def _info_json(ref, options, cycle):
@@ -300,6 +301,7 @@ def run_refined(config, console=True, mesh=None):
         "walls": list(rc["walls"]),
         "corner_angle": rc["corner_angle"],
         "decay": rc["decay"],
+        "placement": rc["placement"],
     }
     spec = RefineSpec(**refine_spec_args(rc))
     names = [n for n in names_used(rc["indicator"]) if n in BY_NAME]

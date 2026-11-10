@@ -987,6 +987,14 @@ SCHEMA = {
             "deg",
             minimum=0.0,
         ),
+        "placement": Opt(
+            "string",
+            "smooth",
+            "Position of new nodes: smooth = on PCHIP curves along the old "
+            "grid lines (Coons patch inside a cell), so grid lines keep their "
+            "curvature and stretching; linear = midpoints of straight faces",
+            choices=("smooth", "linear"),
+        ),
         "decay": Opt(
             "float",
             20.0,
