@@ -19,7 +19,8 @@ A refined run is a chain of ordinary runs, one per cycle, like the angles of
   polar);
 * a frozen limiter is not passed on: every cycle after a refinement freezes
   its own, by ``numerics.limiter_freeze`` or else after
-  ``refinement.limiter_freeze`` orders of the cycle (a captured shock on the
+  ``refinement.limiter_freeze`` orders of the cycle (default: compressible
+  flow only; a captured shock on the
   refined mesh makes the limiter chatter: NACA 0012 at M 0.8 stalled at 3
   orders of cycle 2 and converges 10 orders with it frozen);
 * the problem is built anew on the refined mesh (geometry, gradient stencils,
@@ -160,16 +161,23 @@ def _cycle_config(base, k, final, previous, mode, extra, refined=True):
         conv["min_residual_drop"] = rc["cauchy_min_residual_drop"]
         conv["start_iteration"] = 0
     freeze = data["numerics"]["limiter_freeze"]
+    orders = rc["limiter_freeze"]
+    if orders is None:
+        # Incompressible (NACA 0012 225, SA, alpha 10): frozen after an order
+        # of cycle 1, C_D 0.01450 in 117 iterations against 0.01349 in 66
+        # with the Wang limiter left active; the TMR case with the limiter
+        # frozen in cycle 1 diverged after its forces had settled.
+        orders = 1.0 if data["physics"]["flow"] == "compressible" else 0.0
     if (
         k > 0
-        and rc["limiter_freeze"]
+        and orders
         and freeze["after_iterations"] is None
         and freeze["after_residual_drop"] is None
     ):
         # A shock captured on the refined mesh: the limiter chatters and the
         # line search cuts every step (NACA 0012 M 0.8 stalled at 3 orders);
         # frozen after an order the cycle converges.
-        freeze["after_residual_drop"] = rc["limiter_freeze"]
+        freeze["after_residual_drop"] = orders
     if mode == "state" and refined:
         # After a refinement the polar option decides whether the CFL ramp
         # starts again; a start from another case keeps solver.cfl.polar_reset.
