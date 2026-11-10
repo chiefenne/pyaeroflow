@@ -647,7 +647,8 @@ SCHEMA = {
             "ser_gmres_hold": Opt(
                 "int",
                 25,
-                "Newton steps with this many GMRES iterations or more hold the CFL (ser)",
+                "Newton steps with this many GMRES iterations or more hold the CFL "
+                "(ser)",
                 minimum=1,
             ),
             "ser_gmres_reduce": Opt(

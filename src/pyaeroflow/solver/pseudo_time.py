@@ -609,6 +609,11 @@ def solve_steady(
                 )
             else:
                 t_matrix = time_term(u, cfl)
+        # The approximate-Jacobian phase of a Newton-Krylov run keeps the
+        # merit control: there the pseudo-time residual accepts steps that
+        # raise the steady residual at low CFL (small AFT/BCM plates). Set before
+        # the try block: the rejection branch reads it after an early failure.
+        unsteady_now = unsteady and (use_nk or not (s.newton_krylov and has_jvp))
         accepted, lin_its, step, linear_failed = False, 0, 1.0, False
         try:
             if adaptive_pc and use_nk:
@@ -724,10 +729,6 @@ def solve_steady(
             if dbg is not None:
                 dbg["trials"].append((1.0, abs_new, rms_per_variable(r_new)))
                 dbg["full_step"] = r_new
-            # The approximate-Jacobian phase of a Newton-Krylov run keeps the
-            # merit control: there the pseudo-time residual accepts steps that
-            # raise the steady residual at low CFL (small AFT/BCM plates).
-            unsteady_now = unsteady and (use_nk or not (s.newton_krylov and has_jvp))
             if unsteady_now:
                 r_new, abs_new, step, accepted = _unsteady_line_search(
                     lambda a, u=u, du=du, it=it: res(u + a * du, it + 1),
