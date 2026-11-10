@@ -114,6 +114,8 @@ pyaeroflow run naca0012_euler_m08.toml
 
 ![NACA 0012 with slot: base, suction, blowing](figures/gallery/naca0012_slot.png)
 
+From top to bottom: base, suction (v_n = −0.2 U), blowing (v_n = +0.05 U). Colour: velocity magnitude |u|/U, clamped to 0 … 2.
+
 A slot on the upper surface near the leading edge moves the trailing-edge
 separation: suction (v_n = −0.2 U) thins the boundary layer and moves it
 from x/c = 0.90 to 0.98, blowing (v_n = +0.05 U) moves it forward to 0.56.
