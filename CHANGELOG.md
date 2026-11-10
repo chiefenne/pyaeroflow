@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased – Newton-Krylov safeguards for right GMRES
+
+- Adaptive preconditioner lagging now also refactorizes when the CFL has
+  grown more than `refactor_cfl_ratio` (4) times since the factorization, as
+  the fixed mode does. NACA 0012 alpha 15 (256 x 128): at CFL 967 -> 4273 the
+  lagged factorization left GMRES at 0.31 of the residual after 200 products;
+  with a fresh one it converges in 34.
+- `solver.newton_krylov.unconverged = "reject"` (new, default): a Newton
+  step whose GMRES stops at `max_iterations` above the forcing tolerance is
+  rejected like a failed linear solve (CFL x `cut_factor`, new
+  factorization, log note `GMRES unconverged`). `"accept"` restores 1.6.0.
+- Known limit: right GMRES stops at the forcing tolerance itself, SciPy's
+  oversolves (0.05-0.3 at eta 0.5). The NACA 0012 alpha 15 slow test needs
+  that accuracy and now runs with `nk_gmres = "scipy"`.
+
 ## 1.6.0 – local mesh refinement (R1–R4), smooth placement and float32 products (2026-11-10)
 
 - Refinement placement: `refinement.placement = "smooth"` (default) places

@@ -217,6 +217,12 @@ class PseudoTimeSettings:
         tolerance; 1.2 behaviour) or the right-preconditioned
         :func:`~pyaeroflow.solver.linear.gmres_right`, which minimizes the
         true linear residual the forcing term refers to (Phase B).
+    nk_unconverged : {"reject", "accept"}
+        What a Newton-Krylov step does whose GMRES stops at ``nk_max_krylov``
+        products above the forcing tolerance. ``"reject"`` (default since
+        1.6.1): the step is rejected as a failed linear solve (CFL times
+        ``cut_factor``, fresh factorization), log note ``GMRES unconverged``.
+        ``"accept"`` (1.6.0 and before): the update is tried as it is.
     nk_forcing_max : float
         Upper bound of the Eisenstat-Walker forcing term (``nk_forcing``).
     nk_forcing_safeguard : bool
@@ -249,6 +255,10 @@ class PseudoTimeSettings:
         which this rule watches. A step with a lagged preconditioner that hits
         ``nk_cfl_adapt_iterations`` refactorizes instead of cutting the CFL
         cap.
+        The factorization is also rebuilt when the CFL has grown more than
+        ``refactor_cfl_ratio`` times since it was made (as with ``fixed``):
+        NACA 0012 alpha 15, CFL 967 -> 4273 on a lagged factorization, GMRES
+        hit the product cap.
     pc_lag_max : int
         Largest number of Newton steps per factorization (``adaptive``).
     pc_lag_growth : float
@@ -296,6 +306,7 @@ class PseudoTimeSettings:
     source_cfl_release: int = 5
     source_cfl_ramp: float = 1.0
     nk_gmres: str = "right"
+    nk_unconverged: str = "reject"
     nk_forcing_max: float = 0.5
     nk_forcing_safeguard: bool = False
     nk_approximate_drop: float = None
@@ -622,7 +633,9 @@ def solve_steady(
                     or (
                         lin_nk
                         and steps_since_factor < s.pc_lag_max
-                        and cfl >= 0.5 * cfl_at_factor
+                        and 0.5 * cfl_at_factor
+                        <= cfl
+                        <= cfl_at_factor * s.refactor_cfl_ratio
                         and not stale
                     )
                 )
@@ -664,7 +677,7 @@ def solve_steady(
                         operator, precondition, u
                     )
                 with timers.section("nk solve (GMRES)"):
-                    du, lin_its = solve_matrix_free(
+                    du, lin_its, lin_converged = solve_matrix_free(
                         operator,
                         -r.ravel(),
                         precondition,
@@ -672,6 +685,17 @@ def solve_steady(
                         restart=s.nk_restart,
                         max_iterations=s.nk_max_krylov,
                         method=s.nk_gmres,
+                        full_output=True,
+                    )
+                if not lin_converged and s.nk_unconverged == "reject":
+                    # A solve stopped at the product cap above the forcing
+                    # tolerance is no Newton step: reject it as a linear
+                    # failure (CFL cut, fresh factorization) instead of
+                    # trying an update of unknown quality.
+                    _note(callback, "GMRES unconverged")
+                    raise LinearSolverError(
+                        f"GMRES missed the tolerance {tolerance:.2g} "
+                        f"in {lin_its} products"
                     )
                 if s.nk_variable_scaling:
                     du = unscale(du)

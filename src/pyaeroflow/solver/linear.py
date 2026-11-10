@@ -362,6 +362,7 @@ def solve_matrix_free(
     restart=50,
     max_iterations=200,
     method="scipy",
+    full_output=False,
 ):
     """Restarted, preconditioned GMRES for an operator given as a function.
 
@@ -387,6 +388,8 @@ def solve_matrix_free(
         product per cycle). ``"right"``: :func:`gmres_right`, which minimizes
         the true residual |b - A x| directly, so the stopping test is the
         one the forcing term refers to.
+    full_output : bool
+        Also return whether the solve met ``tolerance``.
 
     Returns
     -------
@@ -394,6 +397,10 @@ def solve_matrix_free(
     iterations : int
         Number of GMRES iterations (matrix-vector products, the products of
         the residual checks between cycles included).
+    converged : bool
+        Only with ``full_output``: the relative residual reached
+        ``tolerance`` (``"right"``: the Arnoldi estimate of the true
+        residual; ``"scipy"``: SciPy's ``info == 0``).
 
     Raises
     ------
@@ -401,15 +408,16 @@ def solve_matrix_free(
         If the solution is not finite.
     """
     if method == "right":
-        x, its = gmres_right(
+        x, its, converged = gmres_right(
             apply,
             rhs,
             precondition,
             tolerance=tolerance,
             restart=restart,
             max_iterations=max_iterations,
+            full_output=True,
         )
-        return _finite(x), its
+        return (_finite(x), its, converged) if full_output else (_finite(x), its)
     if method != "scipy":
         raise ValueError(f"GMRES method must be one of {GMRES_METHODS}")
     n = rhs.size
@@ -427,11 +435,19 @@ def solve_matrix_free(
     )
     if info < 0:
         raise LinearSolverError(f"GMRES breakdown (info = {info})")
+    if full_output:
+        return _finite(x), count["n"], info == 0
     return _finite(x), count["n"]
 
 
 def gmres_right(
-    apply, rhs, precondition, tolerance=1.0e-2, restart=50, max_iterations=200
+    apply,
+    rhs,
+    precondition,
+    tolerance=1.0e-2,
+    restart=50,
+    max_iterations=200,
+    full_output=False,
 ):
     """Right-preconditioned restarted GMRES (Saad & Schultz 1986, Saad 2003 9.3.2).
 
@@ -447,14 +463,21 @@ def gmres_right(
 
     Returns ``(x, products)``; ``products`` counts the operator applications,
     the true-residual products at restarts included. A solve that reaches
-    ``max_iterations`` returns its best iterate (as SciPy's does).
+    ``max_iterations`` returns its last iterate, which is also its best: the
+    residual never rises within a cycle nor across restarts. With
+    ``full_output`` it returns ``(x, products, converged)``; ``converged`` is
+    False when the solve stopped at ``max_iterations`` (or on a breakdown)
+    above the tolerance. Such a step is not a Newton step of the requested
+    accuracy: on the NACA 0012 at alpha 15 (CFL 4e3, preconditioner of
+    CFL 1e3) 200 products left 0.3 of the residual, with an update 20 times
+    larger than that of 10 products, and the nonlinear residual rose 5-fold.
     """
     b = np.asarray(rhs, dtype=float)
     n = b.size
     x = np.zeros(n)
     b_norm = float(np.linalg.norm(b))
     if b_norm == 0.0 or not np.isfinite(b_norm):
-        return x, 0
+        return (x, 0, True) if full_output else (x, 0)
     target = tolerance * b_norm
     products = 0
     r, beta = b, b_norm
@@ -507,8 +530,11 @@ def gmres_right(
         r = b - np.asarray(apply(x)).ravel()
         products += 1
         beta = float(np.linalg.norm(r))
+        resid = beta
         if beta <= target:
             break
+    if full_output:
+        return x, products, bool(resid <= target)
     return x, products
 
 

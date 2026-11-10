@@ -724,6 +724,16 @@ SCHEMA = {
                 "the forcing term refers to; no wasted restarts)",
                 choices=("scipy", "right"),
             ),
+            "unconverged": Opt(
+                "string",
+                "reject",
+                "Newton step whose GMRES stops at max_iterations above the "
+                "forcing tolerance: reject (default since 1.6.1; rejected like a "
+                "failed linear solve: CFL x cfl.cut_factor and a fresh "
+                "factorization, log note 'GMRES unconverged') or accept (1.6.0: "
+                "the update is tried as it is)",
+                choices=("reject", "accept"),
+            ),
             "forcing_max": Opt(
                 "float",
                 0.5,

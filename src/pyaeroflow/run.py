@@ -1153,6 +1153,7 @@ def _pseudo_time_settings(cfg):
         nk_linearize=solver["newton_krylov"]["linearize"],
         nk_variable_scaling=solver["newton_krylov"]["variable_scaling"],
         nk_gmres=solver["newton_krylov"]["gmres"],
+        nk_unconverged=solver["newton_krylov"]["unconverged"],
         nk_forcing_max=solver["newton_krylov"]["forcing_max"],
         nk_forcing_safeguard=solver["newton_krylov"]["forcing_safeguard"],
         nk_approximate_drop=solver["newton_krylov"]["approximate_products_until"],
@@ -1611,6 +1612,8 @@ def _control_loop_rows(solver, rans):
             parts.append("float32 Jacobian products (float64 fallback)")
         if nk["gmres"] == "right":
             parts.append("right-preconditioned GMRES")
+        if nk["unconverged"] == "accept":
+            parts.append("unconverged GMRES steps accepted")
         if nk["forcing_safeguard"] or nk["forcing_max"] != 0.5:
             parts.append(
                 f"forcing <= {nk['forcing_max']:g}"
