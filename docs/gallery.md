@@ -192,15 +192,17 @@ solution is a weak shock at 39.31° with p₂/p₁ = 1.7066.
 
 | | |
 |---|---|
-| Mesh | 96 × 64 quads, made by `make_meshes.py` |
+| Mesh | 96 × 64 quads, or 192 × 128 for the picture (sharper shock); made by `make_meshes.py` |
 | Flow | M = 2, compressible Euler |
-| Case file | `ramp_10deg_m2.toml` |
+| Case files | `ramp_10deg_m2.toml` (96 × 64), `ramp_10deg_m2_fine.toml` (192 × 128, needs PARDISO) |
 | Validation | [§12 Compressible Euler](validation.md#sec-12) |
 
 ```
 python examples/cases/make_meshes.py
 cd examples/cases
-pyaeroflow run ramp_10deg_m2.toml
+pyaeroflow run ramp_10deg_m2_fine.toml
 ```
+
+Colour the VTU by `density_gradient` with a log scale and the X Ray (white to black) colour map. The last column of cells at the outlet shows an artefact in this field (the boundary face carries the freestream state); clip it off or colour by `density`.
 
 [↑ back to top](#example-gallery)
