@@ -38,3 +38,4 @@ mach = 2.0
 [output]
 directory = "output/ramp_10deg_m2"
 force_boundaries = []
+fields = ["pressure", "velocity", "mach", "density", "density_gradient"]

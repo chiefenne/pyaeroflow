@@ -53,8 +53,12 @@ about 35 % on the lower surface. 49k-cell O-grid, C<sub>L</sub> = 0.344,
 C<sub>D</sub> = 0.0225 (pure wave drag); see
 [validation §12](docs/validation.md#sec-12).*
 
+More examples with the commands to run them: [example gallery](docs/gallery.md).
+
 ## Documentation
 
+- [Example gallery](docs/gallery.md): pictures of selected cases with the commands that reproduce them
+- [Recipes](docs/recipes.md): commands for everyday tasks (polars, restarts, plots, control files, refinement)
 - [Requirements](docs/requirements.md): decisions, planned features, stage plan
 - [Case configuration](docs/configuration.md): TOML case-file reference
 - [From a PyAero mesh to a result](docs/pyaero.md): mesh settings (y⁺, farfield), case file, log, limits
