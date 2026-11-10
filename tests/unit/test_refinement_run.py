@@ -137,16 +137,24 @@ def test_refined_run_and_restart_replay(cyl_dir):
 
 def test_limiter_frozen_in_the_cycles_after_a_refinement():
     text = CYL.replace('limiter = "none"', 'limiter = "venkatakrishnan-wang"')
-    config = resolve(_raw(text))
 
     def freeze(cfg, k):
         c = _cycle_config(cfg, k, False, None, "continue", None)
         return c.data["numerics"]["limiter_freeze"]["after_residual_drop"]
 
+    # incompressible (the default flow): off unless asked for
+    config = resolve(_raw(text))
+    assert freeze(config, 0) is None
+    assert freeze(config, 1) is None
+    on = resolve(_raw(text.replace("cycles = 1", "cycles = 1\nlimiter_freeze = 1.5")))
+    assert freeze(on, 1) == 1.5
+    assert on.data["numerics"]["limiter_freeze"]["after_residual_drop"] is None
+    # compressible: after one order by default
+    config.data["physics"]["flow"] = "compressible"
     assert freeze(config, 0) is None
     assert freeze(config, 1) == 1.0
-    assert config.data["numerics"]["limiter_freeze"]["after_residual_drop"] is None
     off = resolve(_raw(text.replace("cycles = 1", "cycles = 1\nlimiter_freeze = 0")))
+    off.data["physics"]["flow"] = "compressible"
     assert freeze(off, 1) is None
     own = text.replace(
         "[numerics]", "[numerics]\nlimiter_freeze = { after_iterations = 30 }"

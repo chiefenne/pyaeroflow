@@ -1059,12 +1059,14 @@ SCHEMA = {
         ),
         "limiter_freeze": Opt(
             "float",
-            1.0,
+            None,
             "Freeze the limiter in every cycle after a refinement once the "
             "residual of the cycle fell by this many orders (0 = off); not "
-            "used when numerics.limiter_freeze is set. Without it the limiter "
-            "of a captured shock on a refined mesh can stall the Newton "
-            "iteration",
+            "used when numerics.limiter_freeze is set. Default: 1 for "
+            "compressible flow (the limiter of a captured shock on a refined "
+            "mesh can stall the Newton iteration), off for incompressible "
+            "flow (a limiter frozen early in the cycle raises the drag and "
+            "can make the cycle diverge later)",
             minimum=0.0,
         ),
     },
