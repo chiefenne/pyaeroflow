@@ -2,6 +2,7 @@
 # Exact: weak oblique shock at 39.31 deg, p2/p1 = 1.7066, M2 = 1.6405
 # (pyaeroflow.cases.oblique_shock). Mesh: python examples/cases/make_meshes.py
 # (96 x 64 quadrilaterals, ramp corner at x = 0.25 m, domain 1.25 m x 1 m).
+# Finer meshes for a sharper shock picture: ramp_10deg_m2_fine.toml.
 
 [case]
 name = "ramp_10deg_m2"
@@ -38,3 +39,4 @@ mach = 2.0
 [output]
 directory = "output/ramp_10deg_m2"
 force_boundaries = []
+fields = ["pressure", "velocity", "mach", "density", "density_gradient"]

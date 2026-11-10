@@ -1,0 +1,46 @@
+# Mach 2 flow over a 10-degree compression ramp (compressible Euler, L1).
+# Exact: weak oblique shock at 39.31 deg, p2/p1 = 1.7066, M2 = 1.6405
+# (pyaeroflow.cases.oblique_shock). Mesh: python examples/cases/make_meshes.py
+# (96 x 64 quadrilaterals, ramp corner at x = 0.25 m, domain 1.25 m x 1 m).
+# This file: the same case on 192 x 128 quadrilaterals (24.6k cells); for 384 x 256
+# (98k cells, cell width 3.3 mm) set mesh.file to ramp_10deg_384x256.su2.
+# Needs PARDISO (pypardiso): with SuperLU one factorization takes minutes. Not yet
+# run to convergence by the author of this file: check the log.
+
+[case]
+name = "ramp_10deg_m2_fine"
+
+[mesh]
+file = "ramp_10deg_192x128.su2"     # boundary faces: wall, inflow, top, outflow
+
+[physics]
+flow = "compressible"
+model = "euler"
+
+[numerics]
+convective_flux = "roe"           # default for Euler is slau2
+
+[solver]
+max_iterations = 600
+residual_drop = 10.0
+linear_solver = { type = "pardiso" }
+
+[boundary.wall]
+type = "slip-wall"
+
+[boundary.inflow]
+type = "farfield"
+mach = 2.0
+
+[boundary.top]
+type = "farfield"
+mach = 2.0
+
+[boundary.outflow]
+type = "farfield"                 # supersonic outflow: the interior state leaves
+mach = 2.0
+
+[output]
+directory = "output/ramp_10deg_m2_fine"
+force_boundaries = []
+fields = ["pressure", "velocity", "mach", "density", "density_gradient"]
