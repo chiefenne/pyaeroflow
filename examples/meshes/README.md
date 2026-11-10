@@ -37,6 +37,12 @@ across the slot (marker `slot`, a `velocity-inlet` for the jet), 29.9k cells.
 It is not committed: `python examples/meshes/make_jet_crossflow.py
 examples/cases/jet_crossflow.su2`.
 
+`make_naca0012_shedding_mesh.py` writes the O-grid of the vortex shedding case
+(`naca0012_re1000_a20_*.toml`, gallery example 1): 108k cells, 387 surface
+nodes, first cell 0.002 c, 0.025 c cells out to 5 chords, farfield at 30 chords,
+markers airfoil, farfield. Not committed: `python examples/meshes/make_naca0012_shedding_mesh.py
+examples/cases/naca0012_shedding.su2`.
+
 `split_marker.py` moves the faces of a marker in an x range (upper, lower or
 both sides) to a new marker, e.g. a slot for a `transpiration-wall`:
 `python split_marker.py IN.su2 OUT.su2 airfoil slot XMIN XMAX upper`. The
