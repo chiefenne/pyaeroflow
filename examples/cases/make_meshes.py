@@ -49,6 +49,8 @@ def main():
             farfield_radius=100.0,
         ),
         "ramp_10deg_96x64.su2": ramp_mesh(96, 64, angle=10.0),
+        "ramp_10deg_192x128.su2": ramp_mesh(192, 128, angle=10.0),
+        "ramp_10deg_384x256.su2": ramp_mesh(384, 256, angle=10.0),
     }
     for name, mesh in meshes.items():
         write_su2(HERE / name, mesh)
