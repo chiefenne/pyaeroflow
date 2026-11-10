@@ -256,11 +256,14 @@ class PseudoTimeSettings:
         ``nk_cfl_adapt_iterations`` refactorizes instead of cutting the CFL
         cap.
         The factorization is also rebuilt when the CFL has grown more than
-        ``refactor_cfl_ratio`` times since it was made (as with ``fixed``):
+        ``pc_lag_cfl_ratio`` times since it was made (as with ``fixed``):
         NACA 0012 alpha 15, CFL 967 -> 4273 on a lagged factorization, GMRES
         hit the product cap.
     pc_lag_max : int
         Largest number of Newton steps per factorization (``adaptive``).
+    pc_lag_cfl_ratio : float
+        CFL growth since the factorization that triggers a refactorization in
+        adaptive lagging (``refactor_cfl_ratio`` is the fixed mode's).
     pc_lag_growth : float
         GMRES growth factor that triggers a new factorization (``adaptive``).
     linear : LinearSettings
@@ -314,6 +317,7 @@ class PseudoTimeSettings:
     pc_lagging: str = "adaptive"
     pc_lag_max: int = 10
     pc_lag_growth: float = 1.5
+    pc_lag_cfl_ratio: float = 4.0
     linear: LinearSettings = LinearSettings()
 
 
@@ -635,7 +639,7 @@ def solve_steady(
                         and steps_since_factor < s.pc_lag_max
                         and 0.5 * cfl_at_factor
                         <= cfl
-                        <= cfl_at_factor * s.refactor_cfl_ratio
+                        <= cfl_at_factor * s.pc_lag_cfl_ratio
                         and not stale
                     )
                 )

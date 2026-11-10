@@ -1161,6 +1161,7 @@ def _pseudo_time_settings(cfg):
         pc_lagging=solver["newton_krylov"]["preconditioner_lagging"],
         pc_lag_max=solver["newton_krylov"]["lag_max"],
         pc_lag_growth=solver["newton_krylov"]["lag_growth"],
+        pc_lag_cfl_ratio=solver["newton_krylov"]["lag_cfl_ratio"],
         refactor_interval=solver["refactor_interval"],
         step_control=solver["step_control"],
         alpha_min=solver["step_alpha_min"],

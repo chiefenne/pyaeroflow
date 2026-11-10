@@ -793,6 +793,13 @@ SCHEMA = {
                 "GMRES growth that triggers a refactorization (adaptive lagging)",
                 minimum=1.0,
             ),
+            "lag_cfl_ratio": Opt(
+                "float",
+                4.0,
+                "Adaptive lagging refactorizes when the CFL has grown more than "
+                "this factor since the factorization (1e9 switches the check off)",
+                minimum=1.0,
+            ),
         },
         "linear_solver": {
             "type": Opt(

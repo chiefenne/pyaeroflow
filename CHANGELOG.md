@@ -3,7 +3,7 @@
 ## Unreleased – Newton-Krylov safeguards for right GMRES
 
 - Adaptive preconditioner lagging now also refactorizes when the CFL has
-  grown more than `refactor_cfl_ratio` (4) times since the factorization, as
+  grown more than `newton_krylov.lag_cfl_ratio` (4) times since the factorization, as
   the fixed mode does. NACA 0012 alpha 15 (256 x 128): at CFL 967 -> 4273 the
   lagged factorization left GMRES at 0.31 of the residual after 200 products;
   with a fresh one it converges in 34.
