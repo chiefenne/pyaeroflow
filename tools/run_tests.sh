@@ -42,6 +42,7 @@ run_one() {
     [ "$MARK_MODE" = slow ] && mark=(-m slow)
     name=$(echo "$f" | tr '/' '_' | sed 's/\.py$//')
     log="$OUT/$name.log"
+    : > "$OUT/.running_$name"
     # -v prints each test with a running percentage, e.g. "[ 3%]"
     if [ "$JOBS_N" = 1 ]; then
         # one file at a time: show the per-test lines live and keep the log
@@ -53,8 +54,10 @@ run_one() {
         rc=$?
     fi
     echo "$rc $f" >> "$OUT/status.txt"
+    rm -f "$OUT/.running_$name"
     # one line per finished file: position, file, last summary line
     n=$(wc -l < "$OUT/status.txt")
+    printf '\r\033[K'
     echo "[$n/$TOTAL] $(date +%H:%M:%S) $f: $(grep -E '[0-9]+ (passed|failed|error|skipped)' "$log" | tail -n 1 | tr -d '=' | sed 's/^ *//')"
 }
 export -f run_one
@@ -62,7 +65,28 @@ export OUT MARK_MODE="$MODE" TOTAL="${#FILES[@]}" JOBS_N="$JOBS"
 : > "$OUT/status.txt"
 
 echo "Running ${#FILES[@]} files ($MODE, $JOBS at a time) -> $OUT"
+
+# Parallel runs: per-test lines go to the logs only, so show a live status
+# line with the current percentage of every running file (terminal only).
+MONITOR_PID=""
+if [ "$JOBS" -gt 1 ] && [ -t 1 ]; then
+    (
+        while :; do
+            line=""
+            for m in "$OUT"/.running_*; do
+                [ -e "$m" ] || continue
+                name=${m##*/.running_}
+                pct=$(grep -o '\[ *[0-9]*%\]' "$OUT/$name.log" 2>/dev/null | tail -n 1 | tr -d '[] ')
+                line="$line ${name#*_test_} ${pct:-0%} |"
+            done
+            printf '\r\033[K  running:%s' "${line%|}"
+            sleep 2
+        done
+    ) &
+    MONITOR_PID=$!
+fi
 printf '%s\n' "${FILES[@]}" | xargs -P "$JOBS" -I{} bash -c 'run_one "$@"' _ {}
+if [ -n "$MONITOR_PID" ]; then kill "$MONITOR_PID" 2>/dev/null; printf '\r\033[K'; fi
 
 # Lint, same checks as CI-style review.
 {
