@@ -9,8 +9,9 @@
   Every product is checked for non-finite entries; on the first one the
   Newton step continues with a float64 linearization, and after 5 such steps
   in a row the run stays in float64. The summary reports products and
-  fallbacks. SST and LM: precision-dependent denominator floors and clamped
-  tanh/exp arguments, so that single precision neither underflows nor
+  fallbacks. SST and LM: precision-dependent denominator floors (including the
+  F_thetat thickness floor, whose 1/delta^2 tangent overflowed in single
+  precision at cells with zero vorticity) and clamped tanh/exp arguments, so that single precision neither underflows nor
   overflows; float64 results are bitwise unchanged.
 - Local mesh refinement, stage R1: `pyaeroflow.mesh.refine` splits
   quadrilaterals `nu x nv` along their own directions (any integers, e.g.

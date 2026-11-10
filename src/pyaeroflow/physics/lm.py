@@ -45,6 +45,20 @@ def tiny(x):
     return TINY if jnp.result_type(x) == jnp.float64 else TINY_SINGLE
 
 
+# Floor of the boundary-layer thickness delta of F_thetat. The tangent of
+# distance / delta contains 1 / delta^2: with the float64 floor (1e-20) that is
+# 1e40, an overflow in single precision (inf * 0 = NaN through the clamp).
+# Where the floor acts, distance / delta is far above the clamp, so F_thetat
+# does not depend on it.
+DELTA_FLOOR = 1.0e-20
+DELTA_FLOOR_SINGLE = 1.0e-12
+
+
+def delta_floor(x):
+    """Floor of delta for the precision of ``x`` (float64 unchanged)."""
+    return DELTA_FLOOR if jnp.result_type(x) == jnp.float64 else DELTA_FLOOR_SINGLE
+
+
 def _safe_sqrt(x):
     """sqrt(max(x, 0)) with a zero derivative for x <= 0."""
     positive = x > 0.0
@@ -186,7 +200,7 @@ def _theta_blending(gamma, re_t, omega, nu, vorticity, distance, speed, smooth=0
     # double precision too, and the power cannot overflow in single precision
     # (0 * inf = NaN tangent, float32 products).
     f_wake = jnp.exp(-(jnp.minimum(re_omega / 1.0e5, 30.0) ** 2))
-    delta = 375.0 * vorticity * nu * re_t * distance / u2 + 1.0e-20
+    delta = 375.0 * vorticity * nu * re_t * distance / u2 + delta_floor(u2)
     var = (CE2 * gamma - 1.0) / (CE2 - 1.0)
     return _smin(
         _smax(

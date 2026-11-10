@@ -10,7 +10,7 @@ from test_rans import RANS_MINIMAL
 
 import pyaeroflow.driver as dr
 from pyaeroflow.config import resolve
-from pyaeroflow.physics import rans_sst, sst
+from pyaeroflow.physics import lm, rans_sst, sst
 from pyaeroflow.solver import PseudoTimeSettings
 
 
@@ -122,6 +122,23 @@ def test_sst_blending_clamp_is_exact_and_float32_safe():
             *(np.asarray(a, np.float32) for a in (d, kgw)),
         )
     assert np.isfinite(np.asarray(g)).all()
+
+
+def test_theta_blending_tangent_is_finite_at_zero_vorticity():
+    """Freestream cell: the float32 vorticity cancels to exactly 0, so delta
+    sits on its floor; 1 / delta^2 must not overflow into an inf * 0 = NaN."""
+    args = (0.998, 668.0, 9.3e-7, 0.1085, 1.6667e-5, 0.194, 0.0, 0.1686, 0.9876)
+    tang = (1.0, 1.0, 1e-6, 1e-2, 0.0, 1.0, 1.0, 0.0, 1.0)
+    fn = lambda *a: lm.effective_intermittency(*a)  # noqa: E731
+    with jax.enable_x64(False):
+        _, t32 = jax.jvp(
+            fn, tuple(np.float32(a) for a in args), tuple(np.float32(a) for a in tang)
+        )
+    _, t64 = jax.jvp(
+        fn, tuple(np.float64(a) for a in args), tuple(np.float64(a) for a in tang)
+    )
+    assert np.isfinite(float(t32))
+    assert float(t32) == pytest.approx(float(t64), rel=1e-3)
 
 
 def test_float32_cavity_run_matches_float64():
