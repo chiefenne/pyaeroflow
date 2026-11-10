@@ -196,6 +196,10 @@ pyaeroflow refine case.toml      # writes <output.directory>/<name>.band.vtu, no
 pyaeroflow run case.toml         # makes the same band, then runs (cycles = 0 is fine)
 ```
 
+Start the band run from a converged state of the unrefined mesh
+(`initial.restart = "<unrefined run>.backup_<n>.npz"`); it is injected onto
+the band mesh. From freestream the NACA 0012 225 band (54k cells) stalled.
+
 [↑ back to top](#recipes)
 
 ---
