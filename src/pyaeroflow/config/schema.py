@@ -748,6 +748,18 @@ SCHEMA = {
                 "or once the limiter is frozen",
                 minimum=0.0,
             ),
+            "product_precision": Opt(
+                "string",
+                "float64",
+                "Precision of the Jacobian-vector products of GMRES: float32 "
+                "evaluates the linearized residual in single precision (about "
+                "half the time per product, accurate to ~1e-5, enough for the "
+                "forcing tolerance); a product with non-finite entries is "
+                "recomputed in float64 for the rest of that Newton step, and "
+                "after 5 such steps in a row the run stays in float64. The "
+                "residual, GMRES and the update stay float64",
+                choices=("float64", "float32"),
+            ),
             "preconditioner_lagging": Opt(
                 "string",
                 "adaptive",

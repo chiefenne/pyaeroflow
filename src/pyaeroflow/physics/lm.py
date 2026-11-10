@@ -33,7 +33,30 @@ GAMMA_LIMITS = (1.0e-4, 5.0)  # solution limits (floors keep gamma positive)
 RE_THETA_LIMITS = (1.0e-4, 1.0e15)
 RE_THETA_EQ_MIN = 20.0
 EQ_ITERATIONS = 12  # fixed-point iterations of Re_thetat^eq(lambda(theta))
-TINY = 1.0e-30
+TINY = 1.0e-30  # floor of the speed (float64)
+# Floor in single precision (float32 Jacobian products,
+# newton_krylov.product_precision): the floor is squared, and 1e-30 squared is
+# 0 in float32.
+TINY_SINGLE = 1.0e-18
+
+
+def tiny(x):
+    """Floor of the speed for the precision of ``x`` (float64 unchanged)."""
+    return TINY if jnp.result_type(x) == jnp.float64 else TINY_SINGLE
+
+
+# Floor of the boundary-layer thickness delta of F_thetat. The tangent of
+# distance / delta contains 1 / delta^2: with the float64 floor (1e-20) that is
+# 1e40, an overflow in single precision (inf * 0 = NaN through the clamp).
+# Where the floor acts, distance / delta is far above the clamp, so F_thetat
+# does not depend on it.
+DELTA_FLOOR = 1.0e-20
+DELTA_FLOOR_SINGLE = 1.0e-12
+
+
+def delta_floor(x):
+    """Floor of delta for the precision of ``x`` (float64 unchanged)."""
+    return DELTA_FLOOR if jnp.result_type(x) == jnp.float64 else DELTA_FLOOR_SINGLE
 
 
 def _safe_sqrt(x):
@@ -90,7 +113,7 @@ def _ssqrt(x, w):
 
 def turbulence_intensity(k, speed):
     """Local Tu = 100 sqrt(2k/3) / U in percent, at least 0.027."""
-    tu = 100.0 * _safe_sqrt(2.0 * k / 3.0) / jnp.maximum(speed, TINY)
+    tu = 100.0 * _safe_sqrt(2.0 * k / 3.0) / jnp.maximum(speed, tiny(speed))
     return jnp.maximum(tu, TU_MIN)
 
 
@@ -129,7 +152,7 @@ def equilibrium_re_theta(tu, du_ds, nu, speed, smooth=0.0):
     limited to [-0.1, 0.1]; Re_thetat^eq >= 20 (TMR).
     """
     base = _re_theta_tu(tu)
-    scale = nu * du_ds / jnp.maximum(speed, TINY) ** 2  # lambda / Re_theta^2
+    scale = nu * du_ds / jnp.maximum(speed, tiny(speed)) ** 2  # lambda / Re_theta^2
     w_lam, w_re = smooth * LAMBDA_LIMIT, smooth * RE_THETA_EQ_MIN
     re = _smax(base, RE_THETA_EQ_MIN, w_re)
     for _ in range(EQ_ITERATIONS):
@@ -171,13 +194,20 @@ def blending_f3(k, nu, distance):
 
 def _theta_blending(gamma, re_t, omega, nu, vorticity, distance, speed, smooth=0.0):
     """F_thetat of the Re_thetat production (and of gamma_sep)."""
-    u2 = jnp.maximum(speed, TINY) ** 2
+    u2 = jnp.maximum(speed, tiny(speed)) ** 2
     re_omega = omega * distance**2 / nu
-    f_wake = jnp.exp(-((re_omega / 1.0e5) ** 2))
-    delta = 375.0 * vorticity * nu * re_t * distance / u2 + 1.0e-20
+    # Arguments clamped before the power: exp(-900) and exp(-1e4) are 0 in
+    # double precision too, and the power cannot overflow in single precision
+    # (0 * inf = NaN tangent, float32 products).
+    f_wake = jnp.exp(-(jnp.minimum(re_omega / 1.0e5, 30.0) ** 2))
+    delta = 375.0 * vorticity * nu * re_t * distance / u2 + delta_floor(u2)
     var = (CE2 * gamma - 1.0) / (CE2 - 1.0)
     return _smin(
-        _smax(f_wake * jnp.exp(-((distance / delta) ** 4)), 1.0 - var**2, smooth),
+        _smax(
+            f_wake * jnp.exp(-(jnp.minimum(distance / delta, 10.0) ** 4)),
+            1.0 - var**2,
+            smooth,
+        ),
         1.0,
         smooth,
     )
@@ -284,7 +314,7 @@ def sources(
 
     tu = turbulence_intensity(k, speed)
     re_eq = equilibrium_re_theta(tu, du_ds, nu, speed, w)
-    inv_t = jnp.maximum(speed, TINY) ** 2 / (500.0 * nu)  # 1 / T
+    inv_t = jnp.maximum(speed, tiny(speed)) ** 2 / (500.0 * nu)  # 1 / T
     f_theta = _theta_blending(gamma, re_t, omega, nu, vorticity, distance, speed, w)
     p_t = C_THETA * inv_t * (re_eq - re_t) * (1.0 - f_theta)
     return p_g - e_g, p_t

@@ -47,6 +47,7 @@ from pyaeroflow.solver import (
     solve_unsteady,
     structural_masks,
 )
+from pyaeroflow.solver.profile import timers
 
 PRESSURE_FIXING = {"pressure-outlet", "farfield", "total-pressure-inlet"}
 INFLOW_TYPES = {"velocity-inlet", "total-pressure-inlet", "farfield"}
@@ -145,6 +146,32 @@ GAMMA_STEP_DIAGNOSTICS = GAMMA_DIAGNOSTICS[:6]
 def _apply_linear(lin, dw):
     """Evaluate a ``jax.linearize`` map (compiled once per structure)."""
     return lin(dw)
+
+
+PRODUCT_PRECISIONS = ("float64", "float32")
+# Float32 products: after this many Newton steps in a row in which a product
+# had to be recomputed in float64, the run stays in float64 (each such step
+# pays the float32 attempt and a second, float64 linearization).
+FLOAT32_FALLBACK_LIMIT = 5
+
+
+def _to_float32(tree):
+    """Cast a pytree to single precision (float32 and int32 arrays).
+
+    int64 index arrays become int32, which JAX uses with 64-bit types off
+    anyway (without the truncation warning).
+    """
+
+    def cast(a):
+        if not isinstance(a, (np.ndarray, jax.Array)):
+            return a
+        if np.issubdtype(a.dtype, np.floating):
+            return np.asarray(a, dtype=np.float32)
+        if a.dtype == np.int64 and a.size and np.abs(np.asarray(a)).max() < 2**31:
+            return np.asarray(a, dtype=np.int32)
+        return a
+
+    return jax.tree_util.tree_map(cast, tree)
 
 
 class FlowProblem:
@@ -296,6 +323,17 @@ class FlowProblem:
         # Column of the first turbulence variable (nu_tilde or k).
         self.turbulence_column = getattr(self.physics, "NT", rans.NT)
         self._pattern = None  # Jacobian sparsity, built at the first assembly
+        self._geom32 = None  # float32 copy of the geometry (float32 products)
+        # Float32 Jacobian products of the run (newton_krylov.product_precision)
+        self.product_stats = {
+            "linearizations": 0,
+            "products": 0,
+            "fallback_products": 0,
+            "fallback_steps": 0,
+            "fallback_streak": 0,
+            "previous_fell_back": False,
+            "disabled": False,
+        }
         self._fi = partial(self.physics.interior_flux, model)
         self._fb = partial(self.physics.boundary_flux, model)
 
@@ -468,14 +506,24 @@ class FlowProblem:
             )
         )
 
-    def linearize(self, w, params, psi=None, gamma=None):
+    def linearize(self, w, params, psi=None, gamma=None, precision="float64"):
         """Return ``apply(dw) -> dR/dw(w) @ dw`` linearized once at ``w``.
 
         ``jax.linearize`` stores the intermediates of the residual and the
         returned function evaluates only the tangent, which costs about a
         quarter of a full ``jax.jvp`` product (C1). The stored arrays live as
         long as the returned function does.
+
+        ``precision = "float32"`` linearizes and evaluates the tangent in
+        single precision (:meth:`linearize_float32`); input and output stay
+        float64.
         """
+        if precision not in PRODUCT_PRECISIONS:
+            raise ValueError(
+                f"product precision {precision!r}: not one of {PRODUCT_PRECISIONS}"
+            )
+        if precision == "float32" and not self.product_stats["disabled"]:
+            return self.linearize_float32(w, params, psi, gamma)
         extra = {} if gamma is None else {"gamma": gamma}
         _, lin = self.physics.residual_linearize(
             self.model,
@@ -490,6 +538,67 @@ class FlowProblem:
 
         def apply(dw):
             return np.asarray(_apply_linear(lin, jnp.asarray(dw)))
+
+        return apply
+
+    def linearize_float32(self, w, params, psi=None, gamma=None):
+        """Single-precision linearization with a float64 fallback.
+
+        The residual is linearized at ``w`` cast to float32, with float32
+        geometry, boundary data, limiter and intermittency, and traced with
+        64-bit types off, so that the whole tangent runs in single precision
+        (about half the time of a float64 product: the kernels are
+        memory-bound). The Newton step only needs the product to the accuracy
+        of the forcing term (1e-2 to 0.5); a float32 product is accurate to
+        about 1e-5 relative. The residual, GMRES and the update stay float64.
+
+        Fallback: every product is checked for non-finite entries (an
+        overflow or 0/0 that double precision does not have). On the first
+        such product the state is linearized in float64 and that product and
+        all later ones of this Newton step use it, so one GMRES solve never
+        mixes operators. After ``FLOAT32_FALLBACK_LIMIT`` Newton steps in a
+        row with a fallback, the run continues in float64.
+        """
+        stats = self.product_stats
+        stats["linearizations"] += 1
+        if not stats["previous_fell_back"]:
+            stats["fallback_streak"] = 0
+        stats["previous_fell_back"] = False
+        if self._geom32 is None:
+            self._geom32 = _to_float32(self.geom)
+        extra = {} if gamma is None else {"gamma": _to_float32(np.asarray(gamma))}
+        with jax.enable_x64(False):
+            _, lin32 = self.physics.residual_linearize(
+                self.model,
+                self._geom32,
+                _to_float32(self.bc),
+                np.asarray(w, dtype=np.float32),
+                self.model.spatial_order,
+                _to_float32(params),
+                None if psi is None else np.asarray(psi, dtype=np.float32),
+                **extra,
+            )
+        exact = {}
+
+        def apply(dw):
+            stats["products"] += 1
+            if "apply" not in exact:
+                with jax.enable_x64(False):
+                    out = np.asarray(
+                        _apply_linear(lin32, np.asarray(dw, dtype=np.float32)),
+                        dtype=np.float64,
+                    )
+                if np.isfinite(out).all():
+                    return out
+                with timers.section("float64 fallback linearize"):
+                    exact["apply"] = self.linearize(w, params, psi, gamma)
+                stats["fallback_steps"] += 1
+                stats["fallback_streak"] += 1
+                stats["previous_fell_back"] = True
+                if stats["fallback_streak"] >= FLOAT32_FALLBACK_LIMIT:
+                    stats["disabled"] = True
+            stats["fallback_products"] += 1
+            return exact["apply"](dw)
 
         return apply
 
@@ -1022,6 +1131,8 @@ class FlowProblem:
                 if resume.get("gamma") is not None:
                     state["gamma"] = jnp.asarray(resume["gamma"])
         uses_limiter = self.model.limiter != "none" and self.model.spatial_order == 2
+        settings = settings or PseudoTimeSettings()
+        precision = settings.nk_product_precision
         params_at = self.parameter_tracker()
 
         def residual(w):
@@ -1122,14 +1233,14 @@ class FlowProblem:
                 w, params_at(w), cfl, transition_cfl_max, **kw
             ),
             w0,
-            settings or PseudoTimeSettings(),
+            settings,
             residual_startup=residual_startup,
             callback=on_iteration,
             jvp=lambda w, dw: self.jvp(
                 w, dw, params_at(w), state["psi"], state["gamma"]
             ),
             linearize=lambda w: self.linearize(
-                w, params_at(w), state["psi"], state["gamma"]
+                w, params_at(w), state["psi"], state["gamma"], precision
             ),
             # R1 products (Phase B): the limiter frozen at the state, unless
             # the run has frozen or released it already.
@@ -1140,6 +1251,7 @@ class FlowProblem:
                         params_at(w),
                         self.limiter(w) if state["psi"] is None else state["psi"],
                         state["gamma"],
+                        precision,
                     )
                 )
                 if uses_limiter
@@ -1418,7 +1530,9 @@ class FlowProblem:
             callback=callback,
             inner_callback=inner_callback,
             jvp=lambda w, dw: self.jvp(w, dw, params_at(w)),
-            linearize=lambda w: self.linearize(w, params_at(w)),
+            linearize=lambda w: self.linearize(
+                w, params_at(w), precision=settings.inner.nk_product_precision
+            ),
             limit_step=self._step_limiter(
                 nu_tilde_step_limit, transition_clip, gamma_guard
             ),

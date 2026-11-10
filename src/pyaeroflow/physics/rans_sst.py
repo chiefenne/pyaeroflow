@@ -150,8 +150,8 @@ def _flow_inputs(w, grad):
         u * u * grad[:, U, 0]
         + u * v * (grad[:, U, 1] + grad[:, V, 0])
         + v * v * grad[:, V, 1]
-    ) / jnp.maximum(u2, lm.TINY)
-    return vort, jnp.sqrt(u2 + lm.TINY), du_ds
+    ) / jnp.maximum(u2, lm.tiny(u2))
+    return vort, jnp.sqrt(u2 + lm.tiny(u2)), du_ds
 
 
 def _lm_arguments(model, geom, w, grad, strain):
