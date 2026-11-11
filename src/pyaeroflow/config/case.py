@@ -644,6 +644,21 @@ def _consistency(data, explicit, problems, notices, path):
             "solver.convergence.fields ignored in an unsteady run "
             "(see time.convergence)"
         )
+    sa_default = (
+        rans
+        and physics["turbulence"] == "sa-neg"
+        and data["physics"]["transition"]["model"] == "none"
+        and not compressible  # validated incompressible only
+    )
+    limit = data["solver"]["nu_tilde_step_limit"]
+    if limit == 0.0:
+        data["solver"]["nu_tilde_step_limit"] = None  # 0 = no cap
+    elif sa_default and "solver.nu_tilde_step_limit" not in explicit:
+        # Plain SA caps the nu_tilde update at 0.5 max(|nu_tilde|, nu) per cell:
+        # NACA 0012 225 / 449 (alpha 10) converge in 77 / 74 iterations instead
+        # of 300+ / 140, and the 54k airfoil band mesh converges from freestream
+        # (98 iterations) where it stalled at C_D 0.085 (1.0 does not).
+        data["solver"]["nu_tilde_step_limit"] = 0.5
     if data["physics"]["transition"]["model"] == "lm":
         # Langtry-Menter defaults: the settings of the fresh SD7003 320k polar
         # (alpha 0, 2, 4 to 7 orders, 2026-11-02). Explicit values win.

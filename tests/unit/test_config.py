@@ -238,3 +238,42 @@ def test_lm_solver_defaults():
     assert base["cfl"]["max"] == 1.0e10
     assert base["newton_krylov"]["variable_scaling"] is False
     assert base["line_search_merit"] == "all"
+
+
+def test_sa_nu_tilde_step_limit_default():
+    """Plain SA caps the nu_tilde update at 0.5 (NACA 0012 225 / 449 and the
+    airfoil band mesh converge from freestream); explicit values win, 0 turns
+    it off, and SST and the transition models keep the old off default."""
+
+    def case(turbulence="sa-neg", transition="none", solver=None):
+        raw = {
+            **MINIMAL,
+            "physics": {
+                "model": "rans",
+                "turbulence": turbulence,
+                "transition": {"model": transition},
+            },
+        }
+        if solver is not None:
+            raw["solver"] = solver
+        return resolve(raw, "c.toml")
+
+    assert case()["solver"]["nu_tilde_step_limit"] == 0.5
+    assert (
+        case(solver={"nu_tilde_step_limit": 1.0})["solver"]["nu_tilde_step_limit"]
+        == 1.0
+    )
+    assert (
+        case(solver={"nu_tilde_step_limit": 0.0})["solver"]["nu_tilde_step_limit"]
+        is None
+    )
+    assert case("sst")["solver"]["nu_tilde_step_limit"] is None
+    aft = {"model": "aft", "turbulence_intensity": 0.001}
+    raw = {
+        **MINIMAL,
+        "physics": {"model": "rans", "turbulence": "sa-neg", "transition": aft},
+    }
+    assert resolve(raw, "c.toml")["solver"]["nu_tilde_step_limit"] is None
+    cfg = case()
+    again = resolve(tomllib.loads(cfg.to_toml()), "c.toml")
+    assert again["solver"]["nu_tilde_step_limit"] == 0.5

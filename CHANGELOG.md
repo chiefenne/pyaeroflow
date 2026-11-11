@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `solver.nu_tilde_step_limit` now defaults to 0.5 for plain incompressible SA
+  (`sa-neg`, no transition model, `0` = off). The freestream start of the
+  NACA 0012 TMR cases (SA, alpha 10, Wang limiter) converges much faster: 225
+  x 65 in 77 iterations (300 without converging before), 449 x 129 in 74 (140),
+  same CL/CD. The 54k airfoil band mesh (`refinement.band`), which stalled
+  from freestream at CD 0.085 (a nu_tilde blow-up in single steps at the band
+  interfaces), converges in 98 iterations without a warm start or mesh
+  sequencing; a limit of 1.0 does not (the cap must be tight). Compressible
+  SA, SA-BCM/AFT and SST keep their defaults.
+
 - Refinement band (R5): `[refinement.band]` with `distances` (m, decreasing)
   splits, before cycle 0 and without a solution, every cell closer to the
   walls than each level's distance (trailing edge and near wake included),
@@ -14,7 +24,7 @@
 - `refinement.wall_curve = "straight"` keeps new wall nodes on the straight
   faces of the input mesh (faceted contour) instead of the spline.
 - Band runs from freestream converge: mesh sequencing,
-  `refinement.band.sequence_residual_drop` (new, default 3, 0 = off). A band
+  `refinement.band.sequence_residual_drop` (new, default 0 = off since the SA step cap below makes the direct start converge). A band
   run without `initial.restart` first solves on the original mesh to that
   many orders, injects the state onto the band mesh and restarts the CFL
   ramp there. NACA 0012 225 band (54k cells, SA, alpha 10): ~100 iterations

@@ -352,6 +352,8 @@ def test_band_run_and_cli(cyl_dir, capsys):
         assert f'Name="{name}"' in text
 
     # pyaeroflow run makes the same mesh before cycle 0, cycles = 0 included.
+    seq_text = band_case().replace("[output]", "sequence_residual_drop = 3.0\n[output]")
+    (cyl_dir / "band.toml").write_text(seq_text)
     result = run_case(cyl_dir / "band.toml", console=False)
     assert result.converged
     assert result.restart_file.parent == cyl_dir / "out" / "cycle_0"
@@ -363,16 +365,15 @@ def test_band_run_and_cli(cyl_dir, capsys):
     log = (cyl_dir / "out" / "cyl.refinement.log").read_text()
     assert "band level 1" in log
     # From the initial state the run first solves on the original mesh
-    # (mesh sequencing, band.sequence_residual_drop = 3) and injects that.
+    # (mesh sequencing, band.sequence_residual_drop = 3, opt-in) and injects that.
     assert "(the original mesh) to 3 orders" in log
     assert "injected onto the band mesh" in log
     seq = sorted((cyl_dir / "out" / "sequence").glob("cyl_sequence.backup_*.npz"))
     assert seq and np.load(seq[-1])["w"].shape[0] == 32 * 8
 
 
-def test_band_sequence_off_starts_on_the_band_mesh(cyl_dir):
-    text = band_case().replace("[output]", "sequence_residual_drop = 0.0\n[output]")
-    (cyl_dir / "band.toml").write_text(text)
+def test_band_sequence_is_off_by_default(cyl_dir):
+    (cyl_dir / "band.toml").write_text(band_case())
     result = run_case(cyl_dir / "band.toml", console=False)
     assert result.converged
     log = (cyl_dir / "out" / "cyl.refinement.log").read_text()

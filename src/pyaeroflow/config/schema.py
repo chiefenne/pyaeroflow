@@ -837,8 +837,10 @@ SCHEMA = {
             None,
             "SA, implicit and unsteady (inner iterations): cap every update "
             "of nu_tilde to this multiple of max(|nu_tilde|, nu) per cell "
-            "before the line search (e.g. 1 = at most double); off by default. "
-            "Stops a Newton step from multiplying nu_tilde in one "
+            "before the line search (e.g. 1 = at most double); default 0.5 for "
+            "plain incompressible SA (sa-neg without a transition model), off "
+            "otherwise; 0 = "
+            "off. Stops a Newton step from multiplying nu_tilde in one "
             "boundary-layer cell",
             minimum=0.0,
         ),
@@ -1057,13 +1059,13 @@ SCHEMA = {
             ),
             "sequence_residual_drop": Opt(
                 "float",
-                3.0,
-                "Mesh sequencing for a start without initial.restart: the run "
+                0.0,
+                "Optional mesh sequencing for a start without initial.restart: the run "
                 "first solves on the original mesh until the residual dropped "
                 "this many orders (at most refinement.iterations, default "
                 "solver.max_iterations), then injects that state onto the band "
-                "mesh and continues there; 0 = start on the band mesh from the "
-                "initial state",
+                "mesh and continues there; 0 (default) = start on the band mesh "
+                "from the initial state (converges with the default SA step cap)",
                 minimum=0.0,
             ),
         },

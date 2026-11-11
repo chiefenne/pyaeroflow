@@ -196,11 +196,10 @@ pyaeroflow refine case.toml      # writes <output.directory>/<name>.band.vtu, no
 pyaeroflow run case.toml         # makes the same band, then runs (cycles = 0 is fine)
 ```
 
-From freestream the run first solves on the original mesh to 3 orders
-(`refinement.band.sequence_residual_drop`, in `<output.directory>/sequence`),
-then continues on the band mesh from that state. Started on the band mesh
-directly (`sequence_residual_drop = 0`), the NACA 0012 225 band (54k cells)
-stalled at C_D 0.085; sequenced it converged in ~100 + 30 iterations.
+A band run converges from freestream (NACA 0012 225 band, 54k cells: 98
+iterations): the SA step cap `solver.nu_tilde_step_limit` is 0.5 by default;
+with `0` (off) it stalls at C_D 0.085. `refinement.band.sequence_residual_drop`
+(opt-in) solves the original mesh first and starts the band from that state.
 
 [↑ back to top](#recipes)
 
