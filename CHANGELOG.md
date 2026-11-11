@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Persistent XLA compilation cache: compiled kernels are kept in
+  `~/.cache/pyaeroflow/jax` (`PYAEROFLOW_CACHE_DIR` moves it,
+  `PYAEROFLOW_JAX_CACHE=0` switches it off, an own `JAX_COMPILATION_CACHE_DIR`
+  is respected), so a new run, polar angle or refinement cycle with the same
+  kernel shapes does not compile them again. NACA 0012 225 SA, first 8
+  iterations: setup and compilation 1.1 s -> 0.4 s, wall 13.5 s -> 10.9 s;
+  larger models and the Newton-Krylov phase compile more.
+- `pyaeroflow polar --predictor tangent`: at every converged angle one linear
+  solve gives the tangent dw/dalpha = -(dR/dw)^-1 dR/dalpha (matrix-free
+  products of `jax.linearize`, factorized first-order Jacobian as
+  preconditioner, 15-17 products on NACA 0012 225 SA). The exact slopes
+  dCL/dalpha, dCD/dalpha, dCM/dalpha (per degree) go to
+  `<name>.sensitivity.csv` and the next angle starts from
+  w + d_alpha dw/dalpha (`<name>.predicted_from_alpha_<a>.npz`). NACA 0012
+  225 SA polar 0, 4, 8 deg: alpha 4 in 49 iterations instead of 165, same
+  coefficients. Steady runs without `[refinement]` and farfield vortex only.
+
 - `solver.nu_tilde_step_limit` now defaults to 0.5 for plain incompressible SA
   (`sa-neg`, no transition model, `0` = off). The freestream start of the
   NACA 0012 TMR cases (SA, alpha 10, Wang limiter) converges much faster: 225

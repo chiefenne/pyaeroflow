@@ -2537,7 +2537,7 @@ def _polar_config(raw, path, base, alpha, previous):
     return resolve(case, path)
 
 
-def run_polar(path, angles, console=True):
+def run_polar(path, angles, console=True, predictor="none"):
     """Run a case at several angles of attack, restarting from the previous one.
 
     Every farfield boundary and ``reference.angle_of_attack`` take the angle;
@@ -2560,10 +2560,20 @@ def run_polar(path, angles, console=True):
     averaged onto it and refines for its own flow; an interrupted angle
     continues its chain from the newest backup of its highest cycle.
 
+    ``predictor="tangent"`` solves the tangent ``dw/dalpha`` of every
+    converged angle (:mod:`pyaeroflow.sensitivity`, one linear solve),
+    starts the next angle from ``w + delta_alpha dw/dalpha`` (file
+    ``<name>.predicted_from_alpha_<angle>.npz`` in the output directory) and
+    writes the exact slopes to ``<name>.sensitivity.csv``. Steady runs without
+    ``[refinement]`` and farfield vortex only; otherwise the chain is as
+    without it.
+
     Returns
     -------
     list of RunResult
     """
+    if predictor not in ("none", "tangent"):
+        raise ValueError("predictor must be 'none' or 'tangent'")
     path = Path(path)
     raw = tomllib.loads(path.read_text())
     base = load_case(path)
@@ -2612,6 +2622,13 @@ def run_polar(path, angles, console=True):
             )
         )
         results.append(result)
+        predicted = None
+        if predictor == "tangent" and result.restart_file is not None:
+            predicted = _predict_next(
+                result, alpha, angles[i + 1 :], raw, path, base, out_dir, console
+            )
+            if predicted is not None:
+                previous = predicted
         rows.sort(key=lambda r: r[0])
         np.savetxt(
             polar_csv,
@@ -2622,6 +2639,72 @@ def run_polar(path, angles, console=True):
             fmt=["%.4f", "%.8e", "%.8e", "%.8e", "%.8e", "%.8e", "%d", "%d"],
         )
     return results
+
+
+def _predict_next(result, alpha, later, raw, path, base, out_dir, console):
+    """Tangent of a converged angle: slopes to CSV, predicted start of the next.
+
+    Returns the predicted restart file for ``later[0]``, or None (not
+    converged, refinement, unsupported case or failed solve: the chain then
+    restarts from the final state as without the predictor).
+    """
+    from pyaeroflow.sensitivity import alpha_tangent, write_predicted_restart
+    from pyaeroflow.solver.linear import LinearSolverError
+
+    def say(text):
+        if console:
+            print(f"  [predictor] {text}")
+
+    if not result.converged:
+        say(f"alpha {alpha:g} not converged: no tangent")
+        return None
+    rc = base.data["refinement"]
+    if rc["cycles"] or rc["band"]["distances"]:
+        say("refinement active: no tangent")
+        return None
+    state = load_restart_state(result.restart_file)
+    try:
+        tangent = alpha_tangent(
+            result,
+            state,
+            lambda a: _polar_config(raw, path, base, a, None),
+        )
+    except (ValueError, LinearSolverError) as error:
+        say(f"no tangent: {error}")
+        return None
+    say(
+        f"alpha {alpha:g}: dCL/da {tangent.dcl:.5f}, dCD/da {tangent.dcd:.6f} per deg"
+        f" ({tangent.products} products, {tangent.seconds:.1f} s)"
+        + ("" if tangent.converged else ", linear solve NOT converged")
+    )
+    csv = out_dir / f"{base.name}.sensitivity.csv"
+    rows = _read_polar(csv)
+    rows = [r for r in rows if abs(r[0] - alpha) > 1e-9]
+    rows.append(
+        (
+            alpha,
+            tangent.dcl,
+            tangent.dcd,
+            tangent.dcm,
+            tangent.products,
+            int(tangent.converged),
+        )
+    )
+    rows.sort(key=lambda r: r[0])
+    np.savetxt(
+        csv,
+        np.array(rows, dtype=float),
+        delimiter=",",
+        header="alpha,dCL_dalpha,dCD_dalpha,dCM_dalpha,products,converged",
+        comments="",
+        fmt=["%.4f", "%.8e", "%.8e", "%.8e", "%d", "%d"],
+    )
+    if not later or not tangent.converged:
+        return None
+    target = out_dir / f"{base.name}.predicted_from_alpha_{alpha:g}.npz"
+    write_predicted_restart(result.restart_file, target, tangent.du, later[0] - alpha)
+    say(f"alpha {later[0]:g} starts from w + {later[0] - alpha:g} dw/dalpha")
+    return target
 
 
 def _latest_state(directory, name):

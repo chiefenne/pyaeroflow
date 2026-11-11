@@ -29,6 +29,13 @@ def main(argv=None):
     polar.add_argument("case", help="TOML case file with farfield boundaries")
     polar.add_argument("--alpha", nargs="+", type=float, required=True, help="deg")
     polar.add_argument("--quiet", action="store_true", help="no console output")
+    polar.add_argument(
+        "--predictor",
+        choices=("none", "tangent"),
+        default="none",
+        help="tangent: start each angle from w + d_alpha dw/dalpha and write "
+        "the slopes dCL/dalpha ... to <name>.sensitivity.csv",
+    )
     init = sub.add_parser(
         "init-case",
         help="write a case file for an airfoil mesh (.su2 from PyAero, or .msh)",
@@ -153,7 +160,9 @@ def main(argv=None):
         if args.command == "polar":
             from pyaeroflow.run import run_polar
 
-            results = run_polar(args.case, args.alpha, console=not args.quiet)
+            results = run_polar(
+                args.case, args.alpha, console=not args.quiet, predictor=args.predictor
+            )
             return 0 if all(r.converged for r in results) else 2
         from pyaeroflow.run import run_case
 
