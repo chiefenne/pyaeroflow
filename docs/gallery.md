@@ -30,7 +30,7 @@ At α = 20° the flow separates from the whole upper surface and the airfoil
 sheds a vortex street. The run has two phases: a spin-up from an impulsive
 start until the time-averaged C_L has settled, then a restart that writes a
 field file every 2 time steps for the animation (ParaView: open the `.pvd`,
-File > Save Animation).
+File > Save Animation; step by step in [recipe 7](recipes.md#video)).
 
 | | |
 |---|---|
@@ -249,6 +249,6 @@ pyaeroflow plot output/naca0012_sa_a10_band/cycle_0/naca0012_sa_a10_band_cycle_0
 
 In ParaView colour the `.band.vtu` by `factor_u` (split factor along the
 wall) or `band_distance`; Surface With Edges shows the cells. How to set up a
-band on your own mesh: [recipe 9](recipes.md#band).
+band on your own mesh: [recipe 10](recipes.md#band).
 
 [↑ back to top](#example-gallery)

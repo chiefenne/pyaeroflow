@@ -10,12 +10,13 @@ Pictures of complete cases are in the [Example gallery](gallery.md).
 4. [Continue or restart a run](#restart)
 5. [Stop a run or write fields while it runs](#control-files)
 6. [Unsteady run: field series, probes and the shedding frequency](#unsteady)
-7. [Use a Gmsh mesh](#gmsh)
-8. [Refine the mesh during a run](#refinement)
-9. [Put a refinement band around an airfoil](#band)
-10. [Run a refined mesh from freestream](#refined-cold-start)
-11. [Speed up the Newton phase](#speed)
-12. [Clean up the output of a case](#clean)
+7. [Make a video of an unsteady run](#video)
+8. [Use a Gmsh mesh](#gmsh)
+9. [Refine the mesh during a run](#refinement)
+10. [Put a refinement band around an airfoil](#band)
+11. [Run a refined mesh from freestream](#refined-cold-start)
+12. [Speed up the Newton phase](#speed)
+13. [Clean up the output of a case](#clean)
 
 ---
 
@@ -141,8 +142,8 @@ pyaeroflow run case.toml
 pyaeroflow plot output/case/case.probes.csv --spectrum v --from 20
 ```
 
-Open `<name>.pvd` in ParaView for the animation. The spectrum gives the
-shedding frequency; `--length` and `--velocity` make it a Strouhal number.
+Open `<name>.pvd` in ParaView for the animation; [recipe 7](#video) makes
+a video of it. The spectrum gives the shedding frequency; `--length` and `--velocity` make it a Strouhal number.
 `time.convergence` ends the run once the time-averaged forces have settled.
 A complete case is [gallery example 1](gallery.md#shedding).
 
@@ -150,8 +151,71 @@ A complete case is [gallery example 1](gallery.md#shedding).
 
 ---
 
+<a id="video"></a>
+## 7. Make a video of an unsteady run
+
+Two runs: a spin-up until the shedding is periodic, then a restart that
+writes a field file every few steps (the frames). The complete case is
+[gallery example 1](gallery.md#shedding); the commands below use its files.
+
+```
+python examples/meshes/make_naca0012_shedding_mesh.py examples/cases/naca0012_shedding.su2
+cd examples/cases
+pyaeroflow run naca0012_re1000_a20_spinup.toml          # ends when the averaged C_L has settled
+ls output/naca0012_re1000_a20/*.backup_*.npz             # the last backup is the start of the video
+pyaeroflow restart-info output/naca0012_re1000_a20/naca0012_re1000_a20.backup_001775.npz
+```
+
+In the video case set `initial.restart` to that backup and `time.end_time`
+to its time plus the length of the video (`end_time` is a total, the step
+counter continues):
+
+```toml
+[initial]
+restart = "output/naca0012_re1000_a20/naca0012_re1000_a20.backup_001775.npz"
+
+[time]
+end_time = 47.7                 # backup time 35.7 + 12 c/U, about 6 shedding periods
+
+[output]
+fields = ["vorticity", "q_criterion", "cp", "velocity_magnitude"]  # scalars only: smaller files
+fields_interval = 2             # one frame every 2 steps (about 50 frames per period)
+```
+
+```
+pyaeroflow run naca0012_re1000_a20_video.toml
+```
+
+The run writes `<name>_<step>.vtu` and the series file `<name>.pvd`
+(300 frames of about 14 MB here, so about 4 GB).
+
+In ParaView:
+
+1. Open `<name>.pvd` (not the single VTU files) and press Apply.
+2. Colour by `vorticity`, set a fixed range (Rescale to Custom Range, e.g.
+   -5 to 5) and switch off automatic rescaling, otherwise the colours jump
+   from frame to frame.
+3. Set the view, then File > Save Animation: PNG frames (`frame.0000.png`, ...)
+   or directly an `.avi`/`.ogv` file.
+
+From PNG frames to a video or GIF with ffmpeg (25 frames per second):
+
+```
+ffmpeg -framerate 25 -i frame.%04d.png -c:v libx264 -pix_fmt yuv420p -crf 20 shedding.mp4
+ffmpeg -i shedding.mp4 -vf "fps=15,scale=800:-1:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse" shedding.gif
+```
+
+The second command makes a GIF with its own colour palette (sharper than the
+default). Delete the frames afterwards with
+`pyaeroflow clean naca0012_re1000_a20_video.toml --fields --yes`
+([recipe 13](#clean)).
+
+[↑ back to top](#recipes)
+
+---
+
 <a id="gmsh"></a>
-## 7. Use a Gmsh mesh
+## 8. Use a Gmsh mesh
 
 ```
 pyaeroflow check-mesh wing.msh --re 1e6
@@ -167,7 +231,7 @@ are the physical curves of the 2D mesh. Supported formats and limits:
 ---
 
 <a id="refinement"></a>
-## 8. Refine the mesh during a run
+## 9. Refine the mesh during a run
 
 ```toml
 [refinement]
@@ -182,14 +246,14 @@ from the transferred state. `<name>.refinement.csv` lists cells and
 coefficients per cycle. Only quadrilaterals are split; steady runs only. All
 keys: [configuration: refinement](configuration.md#refinement).
 
-A band around the airfoil made before the run is [recipe 9](#band).
+A band around the airfoil made before the run is [recipe 10](#band).
 
 [↑ back to top](#recipes)
 
 ---
 
 <a id="band"></a>
-## 9. Put a refinement band around an airfoil
+## 10. Put a refinement band around an airfoil
 
 ```toml
 [refinement]
@@ -224,7 +288,7 @@ ratio. A complete case with a before/after picture is
 ---
 
 <a id="refined-cold-start"></a>
-## 10. Run a refined mesh from freestream
+## 11. Run a refined mesh from freestream
 
 ```toml
 [numerics]
@@ -265,7 +329,7 @@ these have not been run from freestream on a band mesh.
 ---
 
 <a id="speed"></a>
-## 11. Speed up the Newton phase
+## 12. Speed up the Newton phase
 
 ```toml
 [solver]
@@ -282,7 +346,7 @@ save about 9 % on the 320k SD7003 LM case with identical forces.
 ---
 
 <a id="clean"></a>
-## 12. Clean up the output of a case
+## 13. Clean up the output of a case
 
 ```
 pyaeroflow clean case.toml                    # list what the case wrote
