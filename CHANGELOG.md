@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased – Newton-Krylov safeguards for right GMRES
+## 1.6.1 – Newton-Krylov safeguard for unconverged GMRES (2026-11-11)
 
 - `newton_krylov.lag_cfl_ratio` (new, default 1e9 = off): adaptive lagging
   can refactorize when the CFL has grown more than this factor since the
