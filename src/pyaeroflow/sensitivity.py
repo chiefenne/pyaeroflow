@@ -154,6 +154,28 @@ def alpha_tangent(
     )
 
 
+def start_residuals(result, state, config_at, du, alpha_next):
+    """RMS residual at ``alpha_next`` of the plain and the predicted start.
+
+    Both states are evaluated with the farfield data of ``alpha_next`` and
+    the converged frozen limiter: the final state of the angle that was run
+    (the plain restart chain) and ``w + (alpha_next - alpha) dw/dalpha``.
+    The predictor is only worth using if the second is lower.
+    """
+    from pyaeroflow.run import setup, state_scale
+
+    problem, scaling = result.problem, result.scaling
+    u = np.asarray(result.w) / state_scale(problem, scaling)
+    alpha = float(result.config.data["reference"]["angle_of_attack"])
+    bc = setup(config_at(alpha_next), result.mesh)[0].bc
+    psi, gamma = state.get("psi"), state.get("gamma")
+    out = []
+    for w in (u, u + (alpha_next - alpha) * du):
+        r = _residual_at_alpha(problem, w, bc, psi, gamma)
+        out.append(float(np.sqrt(np.mean(r**2))))
+    return tuple(out)
+
+
 def _linear_settings(config):
     from pyaeroflow.run import _pseudo_time_settings
 

@@ -17,7 +17,8 @@
   `<name>.sensitivity.csv` and the next angle starts from
   w + d_alpha dw/dalpha (`<name>.predicted_from_alpha_<a>.npz`). NACA 0012
   225 SA polar 0, 4, 8 deg: alpha 4 in 49 iterations instead of 165, same
-  coefficients. Steady runs without `[refinement]` and farfield vortex only.
+  coefficients. Steady runs without `[refinement]` and farfield vortex only. The residual of the plain and the predicted start at the next angle is
+  compared (logged); the prediction is used only if it is lower.
 
 - `solver.nu_tilde_step_limit` now defaults to 0.5 for plain incompressible SA
   (`sa-neg`, no transition model, `0` = off). The freestream start of the

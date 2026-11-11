@@ -2648,7 +2648,11 @@ def _predict_next(result, alpha, later, raw, path, base, out_dir, console):
     converged, refinement, unsupported case or failed solve: the chain then
     restarts from the final state as without the predictor).
     """
-    from pyaeroflow.sensitivity import alpha_tangent, write_predicted_restart
+    from pyaeroflow.sensitivity import (
+        alpha_tangent,
+        start_residuals,
+        write_predicted_restart,
+    )
     from pyaeroflow.solver.linear import LinearSolverError
 
     def say(text):
@@ -2700,6 +2704,15 @@ def _predict_next(result, alpha, later, raw, path, base, out_dir, console):
         fmt=["%.4f", "%.8e", "%.8e", "%.8e", "%d", "%d"],
     )
     if not later or not tangent.converged:
+        return None
+    config_at = lambda a: _polar_config(raw, path, base, a, None)  # noqa: E731
+    plain, predicted = start_residuals(result, state, config_at, tangent.du, later[0])
+    say(
+        f"alpha {later[0]:g}: start residual (RMS) {plain:.3e} plain, "
+        f"{predicted:.3e} predicted"
+    )
+    if not predicted < plain:
+        say("the prediction is not better: the next angle starts from the final state")
         return None
     target = out_dir / f"{base.name}.predicted_from_alpha_{alpha:g}.npz"
     write_predicted_restart(result.restart_file, target, tangent.du, later[0] - alpha)
