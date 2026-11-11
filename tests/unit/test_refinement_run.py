@@ -360,7 +360,24 @@ def test_band_run_and_cli(cyl_dir, capsys):
     info = read_refinement_info(result.restart_file)
     assert info["cycle"] == 0 and len(info["log"]) == 2
     assert info["options"]["wall_curve"] == "spline"
-    assert "band level 1" in (cyl_dir / "out" / "cyl.refinement.log").read_text()
+    log = (cyl_dir / "out" / "cyl.refinement.log").read_text()
+    assert "band level 1" in log
+    # From the initial state the run first solves on the original mesh
+    # (mesh sequencing, band.sequence_residual_drop = 3) and injects that.
+    assert "(the original mesh) to 3 orders" in log
+    assert "injected onto the band mesh" in log
+    seq = sorted((cyl_dir / "out" / "sequence").glob("cyl_sequence.backup_*.npz"))
+    assert seq and np.load(seq[-1])["w"].shape[0] == 32 * 8
+
+
+def test_band_sequence_off_starts_on_the_band_mesh(cyl_dir):
+    text = band_case().replace("[output]", "sequence_residual_drop = 0.0\n[output]")
+    (cyl_dir / "band.toml").write_text(text)
+    result = run_case(cyl_dir / "band.toml", console=False)
+    assert result.converged
+    log = (cyl_dir / "out" / "cyl.refinement.log").read_text()
+    assert "sequence" not in log and "injected" not in log
+    assert not (cyl_dir / "out" / "sequence").exists()
 
 
 def test_band_injects_a_start_state_from_the_original_mesh(cyl_dir):

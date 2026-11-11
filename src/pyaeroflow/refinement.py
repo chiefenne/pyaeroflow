@@ -202,8 +202,11 @@ def latest_chain_backup(directory, name):
     return latest_backup(directory, name)
 
 
-def _cycle_config(base, k, final, previous, mode, extra, refined=True):
-    """Return the resolved configuration of cycle ``k`` (a copy of ``base``)."""
+def _cycle_config(base, k, final, previous, mode, extra, refined=True, cfl_reset=False):
+    """Return the resolved configuration of cycle ``k`` (a copy of ``base``).
+
+    ``cfl_reset`` restarts the CFL ramp (the start after mesh sequencing).
+    """
     data = copy.deepcopy(base.data)
     rc = data["refinement"]
     name = f"{base.name}_cycle_{k}"
@@ -249,14 +252,54 @@ def _cycle_config(base, k, final, previous, mode, extra, refined=True):
         # After a refinement the polar option decides whether the CFL ramp
         # starts again; a start from another case keeps solver.cfl.polar_reset.
         data["solver"]["cfl"]["polar_reset"] = rc["cfl_reset"]
+    if cfl_reset:
+        data["solver"]["cfl"]["polar_reset"] = True
     config = Resolved(data, set(base.explicit), base.path, list(base.notices))
     config.refinement_cycle = True
     config.restart_extra = extra
     if base.reload is not None:
         config.reload = lambda: _cycle_config(
-            base.reload(), k, final, previous, mode, extra, refined
+            base.reload(), k, final, previous, mode, extra, refined, cfl_reset
         )
     return config
+
+
+def _stopped(*directories):
+    return any((Path(d) / STOP).exists() for d in directories)
+
+
+def _run_sequence(config, mesh, out_dir, note, console):
+    """Solve on the original mesh before the band (mesh sequencing).
+
+    Runs in ``<output.directory>/sequence`` as ``<name>_sequence`` until
+    ``refinement.band.sequence_residual_drop`` orders (at most
+    ``refinement.iterations``); returns its :class:`RunResult`.
+    """
+    from pyaeroflow.run import run_case
+
+    data = copy.deepcopy(config.data)
+    rc = data["refinement"]
+    drop = rc["band"]["sequence_residual_drop"]
+    data["case"]["name"] = f"{config.name}_sequence"
+    data["output"]["directory"] = str(Path(data["output"]["directory"]) / "sequence")
+    data["solver"]["residual_drop"] = drop
+    if rc["iterations"] is not None:
+        data["solver"]["max_iterations"] = rc["iterations"]
+    data["solver"]["convergence"]["fields"] = []  # the orders decide
+    seq = Resolved(data, set(config.explicit), config.path, list(config.notices))
+    seq.refinement_cycle = True
+    note(
+        f"sequence: {mesh.n_cells} cells (the original mesh) to {drop:g} orders, "
+        "then the band"
+    )
+    result = run_case(seq, console=console, mesh=mesh, restart_mode="continue")
+    h = result.history
+    reached = -np.log10(max(float(h["measure"][-1]), np.finfo(float).tiny))
+    note(
+        f"sequence: {reached:.2f} orders in {int(h['iteration'][-1])} iterations, "
+        f"start state {Path(result.restart_file).name}"
+    )
+    return result
 
 
 def indicator_fields(result, config, names):
@@ -378,6 +421,7 @@ def run_refined(config, console=True, mesh=None):
     names = [n for n in names_used(rc["indicator"]) if n in BY_NAME] if cycles else []
 
     previous, start, ref, restricted = None, 0, None, None
+    sequenced = False
     if cfg["initial"]["restart"] is not None:
         previous = config.resolve_path(cfg["initial"]["restart"])
         info = read_refinement_info(previous)
@@ -409,6 +453,20 @@ def run_refined(config, console=True, mesh=None):
         what = "no refinement cycles"
     note(f"case '{name}': {what}, start at cycle {start} with {ref.n_cells} cells")
     if fresh and rc["band"]["distances"]:
+        if previous is None and rc["band"]["sequence_residual_drop"] > 0:
+            # Mesh sequencing (as CFL3D and FUN3D start the TMR grids): from
+            # freestream the 54k band of NACA 0012 225 x 65 (SA, alpha 10)
+            # stalled at C_D 0.085 (a trailing-edge separation that spreads
+            # forward; the original mesh damps it out); 3 orders on the
+            # original mesh first (~100 iterations), then 7.4 orders on the
+            # band in 30 Newton iterations, C_L 1.07224, C_D 0.013615.
+            result = _run_sequence(config, mesh, out_dir, note, console)
+            if _stopped(out_dir, out_dir / "sequence"):
+                note("sequence: .stop file found, the band mesh is not run")
+                return result
+            previous = result.restart_file
+            result = None
+            sequenced = True
         # The band is geometry: it is applied to the original mesh before
         # cycle 0 (a restart of the own chain has it in its log already).
         band_source = apply_band(ref, rc, note)
@@ -467,7 +525,14 @@ def run_refined(config, console=True, mesh=None):
             mode = "continue"  # a fresh start: nothing to take over
         extra = {"refinement": _info_json(ref, options, k)} if ref.log else None
         refined = previous is not None and own_chain(previous, name)
-        cycle_config = _cycle_config(config, k, final, previous, mode, extra, refined)
+        # After the sequence the CFL ramp starts again on the band mesh
+        # (Newton-Krylov switch and limiter kept): NACA 0012 225 band, 3
+        # orders on the original mesh, then 7.4 orders in 30 Newton
+        # iterations without a rejected step, against 75 iterations with 6
+        # rejected steps at the inherited CFL.
+        cycle_config = _cycle_config(
+            config, k, final, previous, mode, extra, refined, sequenced and k == 0
+        )
         result = run_case(
             cycle_config, console=console, mesh=ref.mesh, restart_mode=mode
         )

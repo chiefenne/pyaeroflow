@@ -13,6 +13,14 @@
   it in ParaView.
 - `refinement.wall_curve = "straight"` keeps new wall nodes on the straight
   faces of the input mesh (faceted contour) instead of the spline.
+- Band runs from freestream converge: mesh sequencing,
+  `refinement.band.sequence_residual_drop` (new, default 3, 0 = off). A band
+  run without `initial.restart` first solves on the original mesh to that
+  many orders, injects the state onto the band mesh and restarts the CFL
+  ramp there. NACA 0012 225 band (54k cells, SA, alpha 10): ~100 iterations
+  on 14k cells, then 7.4 orders in 30 Newton iterations, CL 1.07224,
+  CD 0.013615 (same as the manual warm start); started on the band mesh it
+  stalled at CD 0.085 (a trailing-edge separation spreading forward).
 
 ## 1.6.1 – Newton-Krylov safeguard for unconverged GMRES (2026-11-11)
 

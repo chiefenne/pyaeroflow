@@ -1055,6 +1055,17 @@ SCHEMA = {
                 "(other cells 2 x 2)",
                 minimum=2,
             ),
+            "sequence_residual_drop": Opt(
+                "float",
+                3.0,
+                "Mesh sequencing for a start without initial.restart: the run "
+                "first solves on the original mesh until the residual dropped "
+                "this many orders (at most refinement.iterations, default "
+                "solver.max_iterations), then injects that state onto the band "
+                "mesh and continues there; 0 = start on the band mesh from the "
+                "initial state",
+                minimum=0.0,
+            ),
         },
         "placement": Opt(
             "string",
