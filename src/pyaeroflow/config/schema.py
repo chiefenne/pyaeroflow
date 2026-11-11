@@ -724,6 +724,16 @@ SCHEMA = {
                 "the forcing term refers to; no wasted restarts)",
                 choices=("scipy", "right"),
             ),
+            "unconverged": Opt(
+                "string",
+                "reject",
+                "Newton step whose GMRES stops at max_iterations above the "
+                "forcing tolerance: reject (default since 1.6.1; rejected like a "
+                "failed linear solve: CFL x cfl.cut_factor and a fresh "
+                "factorization, log note 'GMRES unconverged') or accept (1.6.0: "
+                "the update is tried as it is)",
+                choices=("reject", "accept"),
+            ),
             "forcing_max": Opt(
                 "float",
                 0.5,
@@ -781,6 +791,15 @@ SCHEMA = {
                 "float",
                 1.5,
                 "GMRES growth that triggers a refactorization (adaptive lagging)",
+                minimum=1.0,
+            ),
+            "lag_cfl_ratio": Opt(
+                "float",
+                1.0e9,
+                "Adaptive lagging refactorizes when the CFL has grown more than "
+                "this factor since the factorization. Default 1e9 (off): with 4 the "
+                "320k SD7003 LM alpha 0 needed 147 iterations / 1400 s instead of "
+                "104 / 1049 s, because the CFL doubles on most steps while it ramps",
                 minimum=1.0,
             ),
         },

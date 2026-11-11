@@ -41,7 +41,21 @@ def test_naca0012_alpha10_coarse():
 def test_naca0012_medium(alpha):
     """256 x 128 (33k cells): C_L within 2 % (-0.008, 1.076, 1.536); the drag
     is 13-45 % high, dominated by the pressure drag on the coarse O-grid wake."""
-    r = naca0012.solve(alpha, 256, 128, release_limiter=False)
+    settings = None
+    if alpha == 15.0:
+        # Right GMRES (default since 1.4) stops exactly at the forcing term
+        # (|r| ~ 0.45 at eta 0.5); this case needs the oversolving of SciPy's
+        # stopping test (|r| 0.05-0.3) and stalls near 1e-5 otherwise.
+        from pyaeroflow.solver import PseudoTimeSettings
+
+        settings = PseudoTimeSettings(
+            residual_drop=7.0,
+            max_iterations=400,
+            nk_switch_residual_drop=1.5,
+            nk_switch_iteration=40,
+            nk_gmres="scipy",
+        )
+    r = naca0012.solve(alpha, 256, 128, settings=settings, release_limiter=False)
     # The first spacing is sized for C_f = 0.003; at the 15-degree suction
     # peak C_f is twice that and y+ reaches 2.2.
     assert r.converged and r.y_plus_max < (3.0 if alpha == 15.0 else 2.0)

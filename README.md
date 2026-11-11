@@ -5,7 +5,7 @@ JAX, developed as a companion to
 [PyAero](https://github.com/chiefenne/PyAero).
 Command and package: `pyaeroflow`.
 
-**Status:** version 1.6.0 (see the [changelog](CHANGELOG.md)).
+**Status:** version 1.6.1 (see the [changelog](CHANGELOG.md)).
 
 **Incompressible flow** (artificial compressibility, `physics.flow = "incompressible"`)
 - Models: laminar, inviscid (Euler), and RANS with Spalart–Allmaras (SA-neg) or k-ω SST
