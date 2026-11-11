@@ -196,9 +196,11 @@ pyaeroflow refine case.toml      # writes <output.directory>/<name>.band.vtu, no
 pyaeroflow run case.toml         # makes the same band, then runs (cycles = 0 is fine)
 ```
 
-Start the band run from a converged state of the unrefined mesh
-(`initial.restart = "<unrefined run>.backup_<n>.npz"`); it is injected onto
-the band mesh. From freestream the NACA 0012 225 band (54k cells) stalled.
+From freestream the run first solves on the original mesh to 3 orders
+(`refinement.band.sequence_residual_drop`, in `<output.directory>/sequence`),
+then continues on the band mesh from that state. Started on the band mesh
+directly (`sequence_residual_drop = 0`), the NACA 0012 225 band (54k cells)
+stalled at C_D 0.085; sequenced it converged in ~100 + 30 iterations.
 
 [↑ back to top](#recipes)
 
