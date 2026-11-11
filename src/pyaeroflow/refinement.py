@@ -427,7 +427,8 @@ def run_refined(config, console=True, mesh=None):
             f"another case), averaged onto the original mesh: {previous.name}"
         )
     if (
-        previous is not None
+        cycles
+        and previous is not None
         and restricted is None
         and not rc["refine_restart"]
         and not own_chain(previous, name)
