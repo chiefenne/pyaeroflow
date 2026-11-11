@@ -12,8 +12,10 @@ Pictures of complete cases are in the [Example gallery](gallery.md).
 6. [Unsteady run: field series, probes and the shedding frequency](#unsteady)
 7. [Use a Gmsh mesh](#gmsh)
 8. [Refine the mesh during a run](#refinement)
-9. [Speed up the Newton phase](#speed)
-10. [Clean up the output of a case](#clean)
+9. [Put a refinement band around an airfoil](#band)
+10. [Run a refined mesh from freestream](#refined-cold-start)
+11. [Speed up the Newton phase](#speed)
+12. [Clean up the output of a case](#clean)
 
 ---
 
@@ -180,15 +182,22 @@ from the transferred state. `<name>.refinement.csv` lists cells and
 coefficients per cycle. Only quadrilaterals are split; steady runs only. All
 keys: [configuration: refinement](configuration.md#refinement).
 
-A band around the airfoil needs no solution: each level splits the cells
-closer to the wall than its distance (trailing edge and near wake included),
-before cycle 0. Check the mesh in ParaView first:
+A band around the airfoil made before the run is [recipe 9](#band).
+
+[↑ back to top](#recipes)
+
+---
+
+<a id="band"></a>
+## 9. Put a refinement band around an airfoil
 
 ```toml
 [refinement]
 wall_curve = "spline"                   # "straight": keep the faceted input contour
 [refinement.band]
-distances = [0.05, 0.02, 0.008]         # m, one level each: thin cells 2, 4, 8 x along the wall
+distances = [0.05, 0.02, 0.008]         # m, one level each, strictly decreasing
+# boundaries = ["airfoil"]              # default: all walls
+# n_max = 2                             # split factor of a thin cell per level
 ```
 
 ```
@@ -196,17 +205,67 @@ pyaeroflow refine case.toml      # writes <output.directory>/<name>.band.vtu, no
 pyaeroflow run case.toml         # makes the same band, then runs (cycles = 0 is fine)
 ```
 
-A band run converges from freestream (NACA 0012 225 band, 54k cells: 98
-iterations): the SA step cap `solver.nu_tilde_step_limit` is 0.5 by default;
-with `0` (off) it stalls at C_D 0.085. `refinement.band.sequence_residual_drop`
-(opt-in) solves the original mesh first and starts the band from that state.
+Each level splits the cells whose centre is closer to the wall than its
+distance, thin cells along the wall and the others 2 × 2, so three levels
+give 2, 4 and 8 times the wall resolution; the trailing edge and the near
+wake are inside the band, so no hanging node sits on the wall. No solution
+is needed. Choose the distances in chords: the outer one about the
+boundary-layer thickness near the trailing edge, each further one about
+half or less of the one before. Open the `.band.vtu` in ParaView with
+Surface With Edges and colour it by `factor_u` (split factor along the
+wall) or `band_distance` before you start the run; the `refine` command
+also prints the cells per level, the wall faces and the largest aspect
+ratio. A complete case with a before/after picture is
+[gallery example 7](gallery.md#band); keys in
+[configuration: refinement](configuration.md#refinement).
+
+[↑ back to top](#recipes)
+
+---
+
+<a id="refined-cold-start"></a>
+## 10. Run a refined mesh from freestream
+
+```toml
+[numerics]
+limiter = "venkatakrishnan-wang"        # active, never frozen
+limiter_threshold = 0.2
+
+[solver]
+cfl = { control = "ser" }
+newton_krylov = { switch_at_residual_drop = 1.5, switch_at_iteration = 40 }
+# nu_tilde_step_limit = 0.5             # default for incompressible sa-neg
+```
+
+```
+pyaeroflow run case.toml
+pyaeroflow plot output/case/case.log    # residuals, CFL and forces per iteration
+```
+
+A band mesh, with hanging nodes inside the boundary layer, needs no warm
+start: the NACA 0012 225 band (54k cells) converges
+7 orders from freestream in about 100 iterations with these settings. The
+key is the SA step cap `solver.nu_tilde_step_limit`, which limits each update
+of ν̃ in a cell to half its value; it is on by default for incompressible `sa-neg`
+without a transition model. With `0` (off) the same run stalls at C_D 0.085
+because ν̃ blows up in single Newton steps at the cells between two band
+levels. A stall shows in the log as a flat residual with C_D far above the
+expected value. If a mesh still stalls, solve on the original mesh first:
+
+```toml
+[refinement.band]
+sequence_residual_drop = 3              # original mesh to 3 orders, then the band
+```
+
+The cap is off by default for SST, SA with transition and compressible SA;
+these have not been run from freestream on a band mesh.
 
 [↑ back to top](#recipes)
 
 ---
 
 <a id="speed"></a>
-## 9. Speed up the Newton phase
+## 11. Speed up the Newton phase
 
 ```toml
 [solver]
@@ -223,7 +282,7 @@ save about 9 % on the 320k SD7003 LM case with identical forces.
 ---
 
 <a id="clean"></a>
-## 10. Clean up the output of a case
+## 12. Clean up the output of a case
 
 ```
 pyaeroflow clean case.toml                    # list what the case wrote

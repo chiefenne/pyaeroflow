@@ -1,0 +1,65 @@
+# NACA 0012 (TMR 225 x 65 C-grid), Re 6e6, alpha 10, SA-neg, with a
+# refinement band around the airfoil (gallery example 7).
+#
+# The band is made before the run, no solution needed: cells closer than
+# 0.05 / 0.02 / 0.008 c to the wall are split 2 / 4 / 8 x along the wall,
+# the trailing edge and near wake included; no hanging node on the wall.
+# 14 336 -> 53 624 cells. Check the mesh first:
+#   pyaeroflow refine naca0012_sa_a10_band.toml
+# (writes output/naca0012_sa_a10_band/naca0012_sa_a10_band.band.vtu)
+#
+# Runs from freestream with the default SA step cap
+# (solver.nu_tilde_step_limit = 0.5): 101 iterations, 7.3 orders,
+# CL 1.0722, CD 0.01362. Results go to output/naca0012_sa_a10_band/cycle_0/.
+[case]
+name = "naca0012_sa_a10_band"
+
+[mesh]
+file = "../meshes/naca0012_tmr_225x65.su2"
+
+[physics]
+model = "rans"
+turbulence = "sa-neg"
+
+[fluid]
+density = 1.0
+viscosity = 1.6666667e-7
+
+[reference]
+velocity = 1.0
+length = 1.0
+moment_center = [0.25, 0.0]
+vortex_correction = true
+
+[boundary.airfoil]
+type = "wall"
+
+[boundary.farfield]
+type = "farfield"
+velocity = 1.0
+angle_of_attack = 10
+pressure = 0.0
+turbulence = { nu_tilde_ratio = 3.0 }
+
+[numerics]
+# active Wang limiter, never frozen
+limiter = "venkatakrishnan-wang"
+limiter_threshold = 0.2
+
+[solver]
+residual_drop = 7.0
+max_iterations = 400
+cfl = { control = "ser" }
+newton_krylov = { switch_at_residual_drop = 1.5, switch_at_iteration = 40 }
+linear_solver = { type = "pardiso" }   # pip install pypardiso; remove for SuperLU
+
+[output]
+directory = "output/naca0012_sa_a10_band"
+force_boundaries = ["airfoil"]
+fields = ["pressure", "velocity", "eddy_viscosity_ratio", "wall_distance"]
+
+[refinement]
+wall_curve = "spline"   # "straight": keep the faceted contour of the 225 mesh
+
+[refinement.band]
+distances = [0.05, 0.02, 0.008]
