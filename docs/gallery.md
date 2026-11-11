@@ -223,6 +223,14 @@ so no hanging node sits on the wall. New wall nodes go on a smooth spline
 through the original ones (`wall_curve = "straight"` keeps the faceted
 contour). The band mesh runs from freestream like the original one.
 
+![Velocity magnitude at the leading edge on the band mesh, with cell edges](figures/gallery/naca0012_band_le_velocity_mesh.png)
+
+![Velocity magnitude at the leading edge on the band mesh](figures/gallery/naca0012_band_le_velocity.png)
+
+Velocity magnitude around the leading edge on the band mesh, with and
+without the cell edges: the field is smooth across the steps between the
+band levels.
+
 | | |
 |---|---|
 | Mesh | `naca0012_tmr_225x65.su2` (14 336 cells) → band 53 624 cells |
