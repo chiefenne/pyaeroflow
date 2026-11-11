@@ -795,9 +795,11 @@ SCHEMA = {
             ),
             "lag_cfl_ratio": Opt(
                 "float",
-                4.0,
+                1.0e9,
                 "Adaptive lagging refactorizes when the CFL has grown more than "
-                "this factor since the factorization (1e9 switches the check off)",
+                "this factor since the factorization. Default 1e9 (off): with 4 the "
+                "320k SD7003 LM alpha 0 needed 147 iterations / 1400 s instead of "
+                "104 / 1049 s, because the CFL doubles on most steps while it ramps",
                 minimum=1.0,
             ),
         },

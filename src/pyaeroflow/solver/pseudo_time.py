@@ -255,15 +255,17 @@ class PseudoTimeSettings:
         which this rule watches. A step with a lagged preconditioner that hits
         ``nk_cfl_adapt_iterations`` refactorizes instead of cutting the CFL
         cap.
-        The factorization is also rebuilt when the CFL has grown more than
-        ``pc_lag_cfl_ratio`` times since it was made (as with ``fixed``):
-        NACA 0012 alpha 15, CFL 967 -> 4273 on a lagged factorization, GMRES
-        hit the product cap.
+        With ``pc_lag_cfl_ratio`` below 1e9 the factorization is also rebuilt
+        when the CFL has grown more than that factor since it was made (as
+        with ``fixed``). Off by default: it costs 35 % on the 320k SD7003 LM
+        (the CFL doubles on most steps while it ramps), and a lagged
+        factorization that is too stale makes GMRES hit its cap, which is
+        rejected and refactorized (``nk_unconverged``).
     pc_lag_max : int
         Largest number of Newton steps per factorization (``adaptive``).
     pc_lag_cfl_ratio : float
         CFL growth since the factorization that triggers a refactorization in
-        adaptive lagging (``refactor_cfl_ratio`` is the fixed mode's).
+        adaptive lagging (``refactor_cfl_ratio`` is the fixed mode's); 1e9 = off.
     pc_lag_growth : float
         GMRES growth factor that triggers a new factorization (``adaptive``).
     linear : LinearSettings
@@ -317,7 +319,7 @@ class PseudoTimeSettings:
     pc_lagging: str = "adaptive"
     pc_lag_max: int = 10
     pc_lag_growth: float = 1.5
-    pc_lag_cfl_ratio: float = 4.0
+    pc_lag_cfl_ratio: float = 1.0e9
     linear: LinearSettings = LinearSettings()
 
 
