@@ -180,6 +180,26 @@ from the transferred state. `<name>.refinement.csv` lists cells and
 coefficients per cycle. Only quadrilaterals are split; steady runs only. All
 keys: [configuration: refinement](configuration.md#refinement).
 
+A band around the airfoil needs no solution: each level splits the cells
+closer to the wall than its distance (trailing edge and near wake included),
+before cycle 0. Check the mesh in ParaView first:
+
+```toml
+[refinement]
+wall_curve = "spline"                   # "straight": keep the faceted input contour
+[refinement.band]
+distances = [0.05, 0.02, 0.008]         # m, one level each: thin cells 2, 4, 8 x along the wall
+```
+
+```
+pyaeroflow refine case.toml      # writes <output.directory>/<name>.band.vtu, no run
+pyaeroflow run case.toml         # makes the same band, then runs (cycles = 0 is fine)
+```
+
+Start the band run from a converged state of the unrefined mesh
+(`initial.restart = "<unrefined run>.backup_<n>.npz"`); it is injected onto
+the band mesh. From freestream the NACA 0012 225 band (54k cells) stalled.
+
 [↑ back to top](#recipes)
 
 ---

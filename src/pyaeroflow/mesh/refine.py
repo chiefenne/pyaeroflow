@@ -104,6 +104,7 @@ class Refinement:
     decay: float = 1.0e4
     placement: str = "smooth"
     corner_angle: float = 30.0
+    wall_curve: str = "spline"
     _original: Mesh = None
     _patches: dict = field(default_factory=dict)  # edge (a, b) -> 4 x 2 points
     _continuation: dict = None
@@ -114,7 +115,13 @@ class Refinement:
 
     @classmethod
     def from_mesh(
-        cls, mesh, walls=(), corner_angle=30.0, decay=1.0e4, placement="smooth"
+        cls,
+        mesh,
+        walls=(),
+        corner_angle=30.0,
+        decay=1.0e4,
+        placement="smooth",
+        wall_curve="spline",
     ):
         """Refinement state of an unrefined mesh (no split yet).
 
@@ -150,9 +157,20 @@ class Refinement:
             linearly, so neighbouring lines stay consistent. ``linear``: on the straight
             line between the bracketing nodes (equal parts; the stretching
             ratio then jumps at every original node).
+        wall_curve : {"spline", "straight"}
+            Where a new node of a ``walls`` face goes: ``spline`` on the
+            Catmull-Rom cubic (a smooth contour), ``straight`` on the straight
+            face between its two original nodes, so the refined mesh keeps
+            the faceted contour of the input mesh. The grid nodes above a
+            wall node follow its move from the smooth position as with the
+            spline (``decay``), so the first-cell height stays smooth.
         """
         if placement not in ("smooth", "linear"):
             raise MeshError(f"placement must be smooth or linear, not {placement!r}")
+        if wall_curve not in ("spline", "straight"):
+            raise MeshError(
+                f"wall_curve must be spline or straight, not {wall_curve!r}"
+            )
         nodes = [tuple(p) for p in mesh.nodes.tolist()]
         boundary_of_face = {}
         for name, faces in mesh.boundary_faces.items():
@@ -182,6 +200,7 @@ class Refinement:
             decay=decay,
             placement=placement,
             corner_angle=corner_angle,
+            wall_curve=wall_curve,
         )
         ref._original = mesh
         ref.curves = _wall_curves(mesh, walls, corner_angle, line_of_key)
@@ -391,10 +410,16 @@ class Refinement:
             # bracketing nodes it would be wrong once a neighbour on the same
             # face is already on the curve.
             (a0, b0), (a1, b1) = self.nodes[line.first], self.nodes[line.last]
-            if smooth is None:
-                p = _catmull_rom(self.curves[lid], float(t))
-                s = float(t)
-                straight = (a0 + s * (a1 - a0), b0 + s * (b1 - b0))
+            s = float(t)
+            face = (a0 + s * (a1 - a0), b0 + s * (b1 - b0))
+            if self.wall_curve == "straight":
+                # The faceted input contour: the node stays on the original
+                # face; the nodes above follow it from the smooth position.
+                p = face
+                straight = face if smooth is None else smooth
+            elif smooth is None:
+                p = _catmull_rom(self.curves[lid], s)
+                straight = face
             else:
                 # The nodes above sit at their smooth positions: the wall
                 # node moves from its smooth position to the nearest curve

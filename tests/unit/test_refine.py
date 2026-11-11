@@ -216,6 +216,34 @@ def test_new_wall_nodes_lie_on_curve():
     assert wall_radius_error(ref.mesh, on_wall) < 1e-2 * sagitta
 
 
+def test_wall_curve_straight_keeps_the_faceted_contour():
+    m0 = ring(growth=1.1, n_radial=10)
+    wall = m0.boundary_faces["cylinder"]
+    radius = []
+    for curve in ("spline", "straight"):
+        ref = Refinement.from_mesh(m0, walls=["cylinder"], wall_curve=curve)
+        ref.split(m0.owner[wall], 2, 2, max_hanging=None)
+        m = ref.mesh
+        check(m, m.cell_area.sum())
+        new = np.arange(m0.n_nodes, m.n_nodes)
+        on_wall = np.intersect1d(new, m.face_nodes[m.boundary_faces["cylinder"]])
+        assert on_wall.size == wall.size
+        radius.append(wall_radius_error(m, on_wall))
+        if curve == "straight":
+            # Every new wall node is the midpoint of its original face.
+            a, b = m0.nodes[m0.face_nodes[wall]].transpose(1, 0, 2)
+            mid = 0.5 * (a + b)
+            d = np.linalg.norm(m.nodes[on_wall][:, None] - mid[None], axis=2)
+            np.testing.assert_allclose(d.min(axis=1), 0.0, atol=1e-14)
+    spline, straight = radius
+    assert straight > 1e-3 > 1e2 * spline  # the sagitta of the faces stays
+
+
+def test_wall_curve_is_checked():
+    with pytest.raises(MeshError, match="wall_curve"):
+        Refinement.from_mesh(ring(n_radial=4), wall_curve="kinked")
+
+
 def test_straight_wall_and_corner_stay_exact():
     xs = np.linspace(0.0, 1.0, 5)
     m0 = structured(xs, xs)

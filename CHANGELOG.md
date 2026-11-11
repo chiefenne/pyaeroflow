@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Refinement band (R5): `[refinement.band]` with `distances` (m, decreasing)
+  splits, before cycle 0 and without a solution, every cell closer to the
+  walls than each level's distance (trailing edge and near wake included),
+  thin cells along the wall; no hanging node sits on the wall. Works with
+  `cycles = 0`. NACA 0012 225, SA, alpha 10: the hanging nodes of an
+  indicator refinement at the wall made the wall Cp wavy, a band does not.
+- `pyaeroflow refine case.toml` writes the band mesh as VTU (band distance,
+  split factors, aspect ratio, area, original cell) without a run, to check
+  it in ParaView.
+- `refinement.wall_curve = "straight"` keeps new wall nodes on the straight
+  faces of the input mesh (faceted contour) instead of the spline.
+
 ## 1.6.1 – Newton-Krylov safeguard for unconverged GMRES (2026-11-11)
 
 - `newton_krylov.lag_cfl_ratio` (new, default 1e9 = off): adaptive lagging

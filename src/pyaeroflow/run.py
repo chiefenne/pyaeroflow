@@ -1036,7 +1036,9 @@ def run_case(path, console=True, mesh=None, restart_mode="continue"):
     """
     config = path if isinstance(path, Resolved) else load_case(path)
     cfg = config.data
-    if cfg["refinement"]["cycles"] and not getattr(config, "refinement_cycle", False):
+    rc = cfg["refinement"]
+    refine = rc["cycles"] or rc["band"]["distances"]
+    if refine and not getattr(config, "refinement_cycle", False):
         from pyaeroflow.refinement import run_refined
 
         return run_refined(config, console=console, mesh=mesh)
