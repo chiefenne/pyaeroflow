@@ -17,6 +17,7 @@ Case files are in `examples/cases/`, meshes in `examples/meshes/`
 | 4 | [Suction and blowing through a slot on a NACA 0012](#airfoil-slot) | incompressible, steady | SA-neg |
 | 5 | [Jet in crossflow over a flat plate](#jet-crossflow) | incompressible, steady | laminar |
 | 6 | [Oblique shock on a Mach 2 compression ramp](#ramp) | compressible, steady | Euler |
+| 7 | [Refinement band around a NACA 0012](#band) | incompressible, steady | SA-neg |
 
 ---
 
@@ -204,5 +205,42 @@ pyaeroflow run ramp_10deg_m2_fine.toml
 ```
 
 Colour the VTU by `density_gradient` with a log scale and the X Ray (white to black) colour map. The last column of cells at the outlet shows an artefact in this field (the boundary face carries the freestream state); clip it off or colour by `density`.
+
+[↑ back to top](#example-gallery)
+
+---
+
+<a id="band"></a>
+## 7. Refinement band around a NACA 0012
+
+![NACA 0012 225 x 65 mesh before and after the refinement band](figures/gallery/naca0012_band_mesh.png)
+
+Left the TMR 225 × 65 C-grid, right the same mesh with a refinement band of
+three levels, split with hanging nodes before the run. Cells closer than
+0.05, 0.02 and 0.008 chords to the wall are split 2, 4 and 8 times along the
+wall; the band wraps the whole airfoil, trailing edge and near wake included,
+so no hanging node sits on the wall. New wall nodes go on a smooth spline
+through the original ones (`wall_curve = "straight"` keeps the faceted
+contour). The band mesh runs from freestream like the original one.
+
+| | |
+|---|---|
+| Mesh | `naca0012_tmr_225x65.su2` (14 336 cells) → band 53 624 cells |
+| Flow | Re = 6·10⁶, α = 10°, SA-neg, Wang limiter |
+| Case file | `naca0012_sa_a10_band.toml` |
+| Result | 101 iterations from freestream, 7.3 orders; C_L 1.0722, C_D 0.01362 (original mesh, same settings: C_L 1.0732, C_D 0.01495) |
+| Reference | NASA TMR, CFL3D SA on the 897 × 257 grid: C_L 1.0909, C_D 0.01231 |
+
+```
+cd examples/cases
+pyaeroflow refine naca0012_sa_a10_band.toml   # band mesh only: output/naca0012_sa_a10_band/naca0012_sa_a10_band.band.vtu
+pyaeroflow run naca0012_sa_a10_band.toml
+pyaeroflow plot output/naca0012_sa_a10_band/cycle_0/naca0012_sa_a10_band_cycle_0.wall_airfoil.csv \
+    --ref builtin:tmr_naca0012_cp_cfl3d_sa:alpha=10@CFL3D
+```
+
+In ParaView colour the `.band.vtu` by `factor_u` (split factor along the
+wall) or `band_distance`; Surface With Edges shows the cells. How to set up a
+band on your own mesh: [recipe 9](recipes.md#band).
 
 [↑ back to top](#example-gallery)
