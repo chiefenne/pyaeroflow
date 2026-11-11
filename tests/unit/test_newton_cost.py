@@ -115,3 +115,64 @@ def test_adaptive_lagging_factorizes_less_often():
         for m, rec in records.items()
     }
     assert nk_factor["adaptive"] <= nk_factor["fixed"]
+
+
+def test_right_gmres_reports_convergence():
+    a, b = system(seed=4)
+    ilu = spla.spilu(a, drop_tol=0.05)
+    x, its, converged = gmres_right(
+        a.dot, b, ilu.solve, tolerance=1e-6, max_iterations=400, full_output=True
+    )
+    assert converged and np.linalg.norm(b - a @ x) <= 1e-6 * np.linalg.norm(b)
+    x, its, converged = gmres_right(
+        a.dot,
+        b,
+        lambda r: r,
+        tolerance=1e-14,
+        restart=5,
+        max_iterations=12,
+        full_output=True,
+    )
+    assert not converged and its >= 12
+
+
+@pytest.mark.parametrize("method", ["scipy", "right"])
+def test_solve_matrix_free_full_output(method):
+    a, b = system(seed=5)
+    out = solve_matrix_free(
+        a.dot,
+        b,
+        lambda r: r,
+        tolerance=1e-14,
+        restart=5,
+        max_iterations=10,
+        method=method,
+        full_output=True,
+    )
+    assert len(out) == 3 and out[2] is False
+
+
+@pytest.mark.parametrize("action", ["reject", "accept"])
+def test_unconverged_gmres_step(action):
+    prob = cavity()
+    records = []
+    result = prob.solve(
+        settings=PseudoTimeSettings(
+            max_iterations=12,
+            nk_switch_iteration=3,
+            nk_forcing=False,
+            nk_linear_tolerance=1e-12,
+            nk_max_krylov=2,
+            nk_unconverged=action,
+        ),
+        debug=records.append,
+    )
+    h = result.history
+    accepted = dict(zip(h["iteration"].tolist(), h["accepted"].tolist(), strict=True))
+    missed = [r["it"] for r in records if "GMRES missed" in r.get("error", "")]
+    if action == "reject":
+        # tolerance 1e-12 in 2 products: missed at all but the tiny-CFL steps
+        assert len(missed) >= 5
+        assert not any(accepted[it] for it in missed)
+    else:
+        assert not missed and h["accepted"][h["newton_krylov"]].all()
