@@ -59,6 +59,7 @@ from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
 from pyaeroflow.physics import lm, rans, rans_sst
 from pyaeroflow.physics import spalart_allmaras as sa
+from pyaeroflow.potential import potential_state
 from pyaeroflow.reload import LIVE_STEADY, LIVE_UNSTEADY, reload_case
 from pyaeroflow.solver import DualTimeSettings, LinearSettings, PseudoTimeSettings
 from pyaeroflow.solver.convergence import CauchyCriterion, WindowedCauchyCriterion
@@ -364,6 +365,7 @@ def setup(config, mesh=None):
         nu_tilde = entry.get("nu_tilde")
         k_omega = (entry["k"], entry["omega"]) if "k" in entry else None
     w0 = problem.initial_state(velocity, pressure, nu_tilde, k_omega)
+    w0 = _potential_start(config, problem, w0, velocity)
     if init["restart"] is not None:
         restart = config.resolve_path(init["restart"])
         w0, n_read = load_restart(restart, mesh, w0, flow=problem.flow.FLOW)
@@ -378,6 +380,23 @@ def setup(config, mesh=None):
         config.notices.append(note)
     problem.turbulence_values = turbulence
     return problem, scaling, w0, mesh
+
+
+def _potential_start(config, problem, w0, velocity):
+    """Return the initial state with the flow of ``initial.potential_flow``."""
+    init = config.data["initial"]
+    if not init["potential_flow"] or init["restart"] is not None:
+        return w0
+    w0, solution = potential_state(problem, w0, init["potential_flow"], velocity)
+    n_bodies = len(solution.bodies)
+    panels = sum(b.nodes.shape[0] - 1 for b in solution.bodies)
+    circulation = sum(solution.circulation(k) for k in range(n_bodies))
+    config.notices.append(
+        "initial state from the potential flow around "
+        + ", ".join(f"'{n}'" for n in init["potential_flow"])
+        + f" ({panels} panels, circulation {circulation:.4f} in reference units)"
+    )
+    return w0
 
 
 # Sutherland's law of air (mu_ref at T_ref, White 2006): used when a compressible
@@ -565,6 +584,7 @@ def _setup_compressible(config, mesh):
         k_omega=k_omega,
         temperature=temperature,
     )
+    w0 = _potential_start(config, problem, w0, velocity)
     if init["restart"] is not None:
         restart = config.resolve_path(init["restart"])
         w0, n_read = load_restart(restart, mesh, w0, flow=comp.FLOW)

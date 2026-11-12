@@ -269,6 +269,13 @@ SCHEMA = {
             "string", None, "Uniform initial field equal to this boundary's state"
         ),
         "turbulence": Opt("table", None, TURBULENCE_DESCRIPTION),
+        "potential_flow": Opt(
+            "string_list",
+            None,
+            "Wall boundaries (closed airfoil contours) around which the initial "
+            "velocity and pressure are the potential flow of a panel method "
+            "instead of the uniform state; ignored with restart",
+        ),
         "restart": Opt(
             "string",
             None,
