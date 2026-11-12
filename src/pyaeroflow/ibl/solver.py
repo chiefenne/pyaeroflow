@@ -442,33 +442,85 @@ def _initial_state(system, vinv, winv):
     return U, a, turb
 
 
-def _march_amplification(system, U, xi, nodes):
-    """N along one side on the current state; index of the first node above n_crit."""
-    nu, nc = system.nu, system.ncrit
-    ncur = 0.0
-    out = {nodes[0]: 0.0}
-    for m in range(1, len(nodes)):
-        i, p = nodes[m], nodes[m - 1]
-        th1, ds1, ue1 = U[p, 0], U[p, 1], abs(U[p, 3])
-        th2, ds2, ue2 = U[i, 0], U[i, 1], abs(U[i, 3])
-        r1 = float(_amplification_jit(th1, ds1, ncur, ue1, nu, nc))
+def _amplification_march(th, ds, ue, x, length, nu, nc):
+    """Compiled march of the amplification equation along one side.
+
+    The inputs are the node values in marching order, padded to a fixed size
+    (one compiled program per panelling); ``length`` is the number of real
+    nodes. At every interval n2 = n1 + (rate(1) + rate(2)) / 2 dxi, four
+    fixed-point passes for rate(2). Returns the position of the first node
+    whose n exceeds n_crit (``th.size`` if none) and n at the nodes before it
+    (n_crit at and after it).
+    """
+    size = th.shape[0]
+
+    def step(carry, m):
+        ncur, hit = carry
+        r1 = cl.amplification_rate(th[m - 1], ds[m - 1], ncur, ue[m - 1], nu, nc)
         n2 = ncur
         for _ in range(4):
-            r2 = float(_amplification_jit(th2, ds2, n2, ue2, nu, nc))
-            n2 = ncur + 0.5 * (r1 + r2) * (xi[i] - xi[p])
-        if n2 > nc:
-            return m, out
-        out[i] = n2
-        ncur = n2
-    return None, out
+            r2 = cl.amplification_rate(th[m], ds[m], n2, ue[m], nu, nc)
+            n2 = ncur + 0.5 * (r1 + r2) * (x[m] - x[m - 1])
+        active = (hit == size) & (m < length)
+        above = active & (n2 > nc)
+        below = active & ~above
+        hit = jnp.where(above, m, hit)
+        return (jnp.where(below, n2, ncur), hit), jnp.where(below, n2, nc)
+
+    (_, hit), amp = jax.lax.scan(
+        step, (jnp.zeros(()), jnp.asarray(size)), jnp.arange(1, size)
+    )
+    return hit, jnp.concatenate((jnp.zeros(1), amp))
+
+
+_amplification_march_jit = cached_jit(
+    "amplification_march",
+    jax.vmap(_amplification_march, in_axes=(0, 0, 0, 0, 0, None, None)),
+)
+
+
+def _march_sides(system, U, xi, sides):
+    """Transition march of both airfoil sides in one compiled call.
+
+    Returns, per side, (index of the first node above n_crit or None,
+    {node: n}) as the Python march did.
+    """
+    n = system.n
+    order = np.empty((2, n), dtype=np.int32)
+    length = np.empty(2, dtype=np.int32)
+    for k, nodes in enumerate(sides):
+        order[k, : len(nodes)] = nodes
+        order[k, len(nodes) :] = nodes[-1]
+        length[k] = len(nodes)
+    hit, amp = _amplification_march_jit(
+        U[order, 0],
+        U[order, 1],
+        np.abs(U[order, 3]),
+        xi[order],
+        length,
+        system.nu,
+        system.ncrit,
+    )
+    hit, amp = np.asarray(hit), np.asarray(amp)
+    out = []
+    for k, nodes in enumerate(sides):
+        m = int(hit[k])
+        stop = m if m < n else len(nodes)
+        found = m if m < n else None
+        out.append(
+            (found, dict(zip(nodes[:stop], amp[k, :stop].tolist(), strict=True)))
+        )
+    return out
 
 
 def _update_transition(system, U, a, turb, xi, step_limit=True):
     changed = False
     nu = system.nu
-    for nodes in system.surfaces(a)[:2]:
+    sides = system.surfaces(a)[:2]
+    for nodes, (m_new, amp) in zip(
+        sides, _march_sides(system, U, xi, sides), strict=True
+    ):
         first_turb = next((m for m, i in enumerate(nodes) if turb[i]), None)
-        m_new, amp = _march_amplification(system, U, xi, nodes)
         if m_new == first_turb:
             continue
         changed = True
