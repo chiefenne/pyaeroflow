@@ -1,4 +1,4 @@
-"""Command line: run, check, polar, refine, fields, init-case, check-mesh, ..."""
+"""Command line: run, check, polar, refine, fields, init-case, check-mesh, foil, ..."""
 
 import argparse
 import sys
@@ -109,6 +109,9 @@ def main(argv=None):
     from pyaeroflow.plotting.cli import add_parser as add_plot
 
     add_plot(sub)
+    from pyaeroflow.ibl.cli import add_parser as add_foil
+
+    add_foil(sub)
     args = parser.parse_args(argv)
 
     try:
@@ -146,6 +149,10 @@ def main(argv=None):
             return 0
         if args.command == "clean":
             return _clean(args)
+        if args.command == "foil":
+            from pyaeroflow.ibl.cli import run as run_foil
+
+            return run_foil(args)
         if args.command == "plot":
             from pyaeroflow.plotting.cli import run as run_plot
 
