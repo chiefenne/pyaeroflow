@@ -489,7 +489,8 @@ plates with SA, BCM and Langtry–Menter, jet in crossflow, cylinder, NACA 0012
 shedding, SA and Euler, Mach 2 ramp) together with the mesh it runs on. `init`
 writes the case file and builds the mesh next to it, so it works after a
 plain `pip install`, without the repository. Edit the case file from there;
-every key is in [Case configuration](configuration.md).
+every key is in [Case configuration](configuration.md). The [Case catalogue](cases.md) lists
+all 45 example cases with their physics, mesh and where they are discussed.
 
 For your own airfoil mesh use the `airfoil` template, the same as
 `pyaeroflow init-case`:
