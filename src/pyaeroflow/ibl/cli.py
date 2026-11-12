@@ -21,6 +21,17 @@ def add_parser(sub):
     p.add_argument(
         "--panels", type=int, default=200, help="number of panel nodes (200)"
     )
+    p.add_argument(
+        "--max-iterations",
+        type=int,
+        default=100,
+        help="Newton steps of one solve (100)",
+    )
+    p.add_argument(
+        "--cold",
+        action="store_true",
+        help="start every angle from scratch (default: from the previous angle)",
+    )
     p.add_argument("--output", help="polar CSV (default <airfoil>_Re<re>.polar.csv)")
     p.add_argument(
         "--cp", action="store_true", help="also write <output>_a<alpha>.wall.csv"
@@ -49,11 +60,21 @@ def run(args):
     rows = []
     print(
         f"{'alpha':>7} {'CL':>9} {'CD':>9} {'CDf':>9} {'CM':>9} "
-        f"{'xtr_up':>7} {'xtr_lo':>7}  conv"
+        f"{'xtr_up':>7} {'xtr_lo':>7}  conv (steps, start)"
     )
     ok = True
+    previous = None
     for alpha in args.alpha:
-        r = analyse(nodes, alpha, args.re, ncrit=args.ncrit)
+        r = analyse(
+            nodes,
+            alpha,
+            args.re,
+            ncrit=args.ncrit,
+            max_iterations=args.max_iterations,
+            initial=None if args.cold else previous,
+        )
+        if r.converged:
+            previous = r
         ok &= r.converged
         xu, xl = r.x_transition
         rows.append(
@@ -61,7 +82,8 @@ def run(args):
         )
         print(
             f"{alpha:7.2f} {r.cl:9.5f} {r.cd:9.6f} {r.cdf:9.6f} {r.cm:9.5f} "
-            f"{xu:7.4f} {xl:7.4f}  {'yes' if r.converged else 'NO'} ({r.iterations})",
+            f"{xu:7.4f} {xl:7.4f}  {'yes' if r.converged else 'NO'} "
+            f"({r.iterations}, {r.start})",
             flush=True,
         )
         if args.cp:

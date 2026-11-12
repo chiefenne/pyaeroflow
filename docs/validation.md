@@ -9,7 +9,7 @@ behind the figures (iMac 2019, 3.6 GHz 8-core Intel Core i9, 32 GB, October
 2026). Versions: sections 1 to 6 are from 0.7.1, section 7 from the 0.8
 development (released in 0.9), sections 8 to 10 from 0.9, the LM polar in
 section 10 from 1.0 and the positive-linearization measurement there from
-1.1. The meshes are in `examples/meshes/` (`README.md` there), the case
+1.1, section 18 from 1.7 (sandbox, 4 cores, November 2026). The meshes are in `examples/meshes/` (`README.md` there), the case
 files in `examples/cases/`.
 
 Click a case to jump to its section; each section ends with a link back here.
@@ -38,6 +38,7 @@ Click a case to jump to its section; each section ends with a link back here.
 | L1 C2 | [Compressible laminar: flat plate, NACA 0012 Re 5000](#sec-13) | verification/validation | compressible similarity solution, Swanson & Langer 2016 | `python examples/l1_laminar.py` |
 | L1 C3 | [Compressible SA-neg: TMR flat plate M 0.2, NACA 0012 M 0.15](#sec-14) | verification/validation | NASA TMR (CFL3D, FUN3D) | `pyaeroflow run examples/cases/naca0012_sa_m015.toml` |
 | L1 C4 | [Compressible SST: TMR flat plate M 0.2, NACA 0012 M 0.15](#sec-15) | verification/validation | NASA TMR SST (CFL3D) | `pyaeroflow run examples/cases/naca0012_sst_m015.toml` |
+| IBL (1.7) | [Viscous panel method `pyaeroflow foil`: mfoil, E387, SD7003](#sec-18) | verification/validation | mfoil (corrected copy), NASA TM 4062, Penn State 2007, XFOIL | `python examples/ibl_validation.py` |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
 the scripts write) is not tracked.
@@ -1148,6 +1149,183 @@ The 817 x 217 grid (the grid of the TMR reference data) moves the reattachment
 by less than 0.01 c, so the discrepancy is not a grid effect: without control
 PyAeroFlow 1.263 matches the CFL3D/FUN3D SA band 1.26 - 1.27.
 
+<a id="sec-18"></a>
+
+## 18. Viscous panel method (`pyaeroflow foil`)
+
+`pyaeroflow foil` (since 1.7, `src/pyaeroflow/ibl/`) couples a
+linear-vorticity panel method to an integral boundary layer: two-equation
+laminar and turbulent closures with shear lag, the envelope e^N transition
+criterion, and a wake. All of it is solved in one global Newton iteration, the
+viscous–inviscid approach of XFOIL-type codes. It was written from the
+published papers (Drela & Giles 1987, Drela 1989, Fidkowski 2022) and not from
+code. The same boundary-layer solution builds the start field of
+`initial.boundary_layer` ([recipe 15](recipes.md#ibl-start)). Three checks:
+code-to-code against mfoil on the same panel nodes, the Eppler 387 polar
+against two wind tunnels and XFOIL, and the SD7003 polar against XFOIL and
+the CFD polars of §9 and §10.
+
+`python examples/ibl_validation.py` runs the polars and the field of
+§18.4 and draws the figures (about 1.5 min on 4 cores). Coordinates:
+`examples/airfoils/e387.dat` and `sd7003.dat` (the PyAero airfoil library),
+repanelled to 200 nodes, sharp trailing edge. The polars are run like
+`pyaeroflow foil` runs them: each angle starts from the previous one, and an
+angle that does not converge that way starts cold (§18.5).
+
+### 18.1 Code-to-code: mfoil on the same nodes
+
+mfoil (Fidkowski; the Python port pymfoil 0.1.0, MIT licence) is run only as
+a reference, on the nodes of its own panelling, which are then passed to
+`foil`, so both codes solve the same discrete geometry. The pymfoil copy used
+was corrected in four places first. Two of them change results: `cl /= chord`
+was inside the panel loop (C_L about 2 % high when the chord is not 1, as for
+the SD7003 file), and the wake source influence (`Csig`, the linear sources
+on the wake half panels) dropped the cross terms between neighbouring wake
+panels. The other two (`X.shape(1)`, and a shape test on `R_x`) are
+Python slips that stop the run on a sharp trailing edge. The SD7003 file has
+a trailing-edge gap of 10⁻⁴ c, which pymfoil needs.
+
+| case | C_L foil / mfoil | C_D foil / mfoil | x_tr upper foil / mfoil |
+|---|---|---|---|
+| NACA 2412, Re 10⁶, α 2° | 0.44919 / 0.44935 | 0.005784 / 0.005778 | 0.526 / 0.526 (lower 0.966 both) |
+| SD7003, Re 6·10⁴, α 0° | 0.06153 / 0.06164 | 0.014796 / 0.014792 | laminar both |
+| SD7003, α 2° | 0.43079 / 0.43093 | 0.017184 / 0.017167 ¹ | 0.8374 / 0.8374 |
+| SD7003, α 4° | 0.62662 / 0.62673 | 0.019345 / 0.019333 ¹ | 0.5661 / 0.5661 |
+| SD7003, α 6° | 0.81965 / 0.81945 ¹ | 0.025029 / 0.025011 ¹ | 0.3275 / 0.3276 |
+
+N_crit 9 throughout; NACA 2412 CM −0.04800 / −0.04803, CDf 0.004116 both;
+19 Newton steps. ¹ mfoil without the `Csig` correction. That correction moves
+C_L by 10⁻⁴ at α 2° and 4°, and by 0.004 at α 0°, where the laminar
+separated layer at the upper trailing edge puts a large mass defect into the
+wake. Before it, the α 0° values differed by 0.004 in C_L. The two codes
+agree to 3·10⁻⁴ in C_L and 0.1 % in C_D. Recorded 2026-11-12. The comparison
+script stays outside the repository; it runs pymfoil.
+
+### 18.2 Eppler 387, Re 2·10⁵
+
+Free transition, N_crit 8.15 (Tu 0.1 % by Mack's relation, the setting of
+§8). References: NASA TM 4062 (Langley LTPT, McGhee et al. 1988), Penn State
+2007 (Somers & Maughmer, Tu ≈ 0.045 %) and XFOIL 6.99 at N_crit 8.15 on the
+PyAero mesh contour (built-in `e387_xfoil_re200k`). The oil-flow bubble is
+from Somers & Maughmer, table IV (Penn State).
+
+![E387 polar, viscous panel method](figures/ibl_e387_polar.png)
+
+| α | C_L | C_D | C_M | ΔC_L / ΔC_D TM 4062 | ΔC_L / ΔC_D XFOIL 8.15 | x_tr upper | bubble LS–TR (oil flow) |
+|---|---|---|---|---|---|---|---|
+| −2 | 0.179 | 0.01137 | −0.084 | – | −0.000 / −1.3 % | 0.765 | 0.52–0.78 |
+| −1 | 0.287 | 0.00918 | −0.082 | +0.035 / −23 % | −0.005 / 0.0 % | 0.734 | |
+| 0 | 0.397 | 0.00962 | −0.081 | +0.046 / −8.5 % | −0.003 / −0.1 % | 0.706 | 0.48–0.72 |
+| 2 | 0.618 | 0.01074 | −0.081 | +0.048 / −8.8 % | −0.001 / −0.1 % | 0.656 | 0.44–0.67 |
+| 4 | 0.835 | 0.01192 | −0.080 | +0.049 / −10.4 % | −0.000 / −0.0 % | 0.599 | 0.40–0.61 |
+| 5 | 0.942 | 0.01236 | −0.079 | +0.051 / −10.7 % | +0.001 / −0.1 % | 0.562 | 0.35–0.59 |
+| 6 | 1.045 | 0.01270 | −0.077 | +0.050 / −11.7 % | +0.002 / 0.0 % | 0.508 | 0.34–0.55 |
+| 7 | 1.134 | 0.01391 | −0.072 | +0.047 / −12 % | +0.003 / −0.3 % | 0.334 | 0.33–0.47 |
+| 8 | 1.180 | 0.02061 | −0.066 | +0.001 / +19 % | +0.011 / 0.0 % | 0.040 | |
+| 10 | 1.254 | 0.03253 | −0.051 | (Penn State +0.014 / +19 %) | – | 0.019 | |
+
+ΔC_D relative. α 1°, 3° and 9° are in the CSV and in the figure. All 13 angles converge.
+C_M is nose-up positive (the experiments' convention; the CFD solver writes
+nose-down positive).
+
+What the polar shows:
+
+- `foil` reproduces XFOIL 8.15 from α −2° to 8°: C_L within 0.005 (0.011 at
+  8°) and C_D within 1.3 %, the transition location within 0.01 c (0.508
+  against 0.507 at 6°). Both
+  are the same model, written independently, so this checks the
+  implementation, not the physics.
+- Against both wind tunnels, C_L is 0.04–0.05 (TM 4062) and 0.04–0.08 (Penn
+  State) too high and C_D 8–12 % too low from 0° to 7°. That is the known gap
+  of the e^N panel codes on this airfoil; XFOIL has it too (§8). The SA-AFT
+  CFD of §8 is closer in C_L.
+- The computed transition lies inside the oil-flow bubble at every angle
+  from −2° to 7°. Up to 5° it is 0.01–0.03 c ahead of the measured
+  reattachment; at 7° it is near the measured separation. The laminar bubble
+  and its movement with α are captured.
+- C_M follows the measurements to 0.002 up to 6°; above 7° the nose-up trend
+  is steeper than measured.
+
+![E387 alpha 4 Cp, Cf and H](figures/ibl_e387_a4_cp_cf.png)
+
+At α 4° the upper layer separates at x/c ≈ 0.45 (C_f < 0, H up to 6.7)
+and transitions at 0.599. The measured bubble is 0.40–0.61. After transition
+it reattaches within 0.04 c and H drops to 1.5.
+
+### 18.3 SD7003, Re 6·10⁴
+
+N_crit 8.15, α 0° to 10°, against XFOIL 6.99 (N_crit 8.15) and the CFD
+polars of §9 and §10 on the 320k PyAero mesh (SA-AFT, SST-LM at Tu 0.1 %).
+
+![SD7003 polar, viscous panel method](figures/ibl_sd7003_polar.png)
+
+| α | C_L foil | C_D foil | C_L XFOIL | C_D XFOIL | x_tr upper |
+|---|---|---|---|---|---|
+| 0 | −0.026 | 0.01633 | 0.058 | 0.0148 | 0.993 |
+| 2 | 0.466 | 0.01694 | 0.424 | 0.0165 | 0.800 |
+| 4 | 0.622 | 0.01872 | 0.620 | 0.0188 | 0.549 |
+| 6 | 0.814 | 0.02405 | 0.813 | 0.0243 | 0.317 |
+| 8 | 0.997 | 0.03366 | 0.992 | 0.0342 | 0.163 |
+| 9 | 1.070 | 0.04115 | 1.065 | 0.0429 | 0.112 |
+| 10 | 1.118 | 0.05233 | 1.109 | 0.0557 | 0.084 |
+
+From 4° to 10° `foil` matches XFOIL to 0.01 in C_L and 6 % in C_D. Like
+XFOIL it does not show the early stall of the RANS models at 10°; it is an
+attached-flow method and stays optimistic near stall. At 0° to 2° the
+transition sits at the trailing edge (x_tr 0.8–0.99), the long bubble is
+not closed on the airfoil, and the result depends on the panelling and on
+N_crit: −0.026 and 0.466 against 0.058 and 0.424. At N_crit 9 the same
+coordinates give C_L 0.059 at α 0° (run of 2026-11-12). Treat
+low-α SD7003 values at Re 6·10⁴ as uncertain to ±0.05 in C_L.
+
+### 18.4 The boundary-layer start field
+
+![Boundary-layer start field around a NACA 0012](figures/ibl_naca0012_field.png)
+
+`initial.boundary_layer` builds the CFD start field from this solution: the
+outer flow of the panel method with the displacement sources, a velocity
+profile with the computed shape factor in the layers and the wake, and the
+eddy viscosity of the turbulent layers (for SA). The figure shows it on the TMR
+225 × 65 grid at Re 6·10⁶, α 10°, N_crit 9 (C_L 1.067, C_D 0.00948; upper
+transition at 0.017). `examples/output/ibl/naca0012_ibl_field.vtu` holds
+velocity, C_p and ν_t/ν per cell for ParaView. The effect on the iteration
+count is in [recipe 15](recipes.md#ibl-start).
+
+### 18.5 Start-up, robustness and limits
+
+- **Start of one angle.** A single angle starts cold: the boundary layer is
+  marched on the inviscid pressure, then the coupled Newton iteration runs
+  (100 steps, `--max-iterations`). On the inviscid pressure the laminar layer
+  can separate at the leading-edge suction peak and the march puts the
+  transition there, far from the coupled answer. E387 α 6° is such a case:
+  transition starts at x/c 0.05, the answer is 0.508, and Newton stalls with
+  steps of 10⁻³. `foil` recognises the stall (15 steps below 5 % of the
+  Newton step without halving the residual) and then solves a neighbouring
+  angle that starts well (1°, 2°, 3° away, the side towards α 0° first) and
+  approaches the requested angle from it, halving the step in α when a step
+  fails. E387 α 6° comes from 5° (60 Newton steps in all), SD7003 α 8° from
+  7°. The table that `foil` prints names the start (`cold`, `warm`,
+  `continuation from 5`).
+- **Polar.** Each angle starts from the previous converged one (`--cold`
+  switches that off). A warm start that has not converged in 30 steps is
+  dropped and the angle starts cold. It helps on the E387 (7 to 17 steps per
+  degree up to 6°); on the SD7003 at 1° steps most angles fall back to the cold start,
+  because the transition point moves one node per Newton step.
+- **Uniqueness.** Where the transition jumps (E387 between 7° and 8°) two
+  states can exist; the continuation comes from the lower |α|. Warm and cold
+  results of this section agree to all printed digits.
+- **Speed** (4 cores): about 0.06 s per Newton step, 1 s for an easy angle;
+  E387, 13 angles: about 30 s. The compiled and the traced kernels are kept
+  in `~/.cache/pyaeroflow` (`PYAEROFLOW_JAX_CACHE=0` switches it off): the
+  first angle of a run takes about 6 s instead of 24 s, the very first run
+  after an installation about 40 s.
+- Incompressible only (no Kármán–Tsien correction), single element, no
+  forced transition (trip) yet.
+- Attached and mildly separated flow; C_L max and the post-stall branch
+  are not predicted.
+
+[↑ back to table](#stage-table)
+
 ## References
 
 - Ghia, U., Ghia, K. N., Shin, C. T. (1982): High-Re solutions for
@@ -1199,6 +1377,9 @@ PyAeroFlow 1.263 matches the CFL3D/FUN3D SA band 1.26 - 1.27.
   development, Part I: test cases T3A and T3B. In: Numerical Simulation of
   Unsteady Flows and Transition to Turbulence, Cambridge University Press.
   Data: ERCOFTAC Classic Collection, case 020.
+- Fidkowski, K. J. (2022): A coupled inviscid–viscous airfoil analysis
+  solver, revisited. AIAA J. 60(5), 2961–2971 †. mfoil, the reference of
+  §18.1.
 
 ### Turbulence and transition models, numerics, other codes
 

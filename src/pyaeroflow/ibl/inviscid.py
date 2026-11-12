@@ -15,7 +15,6 @@ of the stagnation point without any sign switch.
 
 from typing import NamedTuple
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -116,16 +115,9 @@ def trace_wake(solution, count, length):
     x = body.nodes
     first = 0.5 * (np.linalg.norm(x[1] - x[0]) + np.linalg.norm(x[-1] - x[-2]))
     steps = _wake_spacing(first, length * chord, count)
-    gamma = jnp.asarray(solution.gamma[0])
-    u_inf = np.asarray(solution.velocity)
-
-    @jax.jit
-    def vel(p):
-        g = jax.grad(lambda q: panel._influence(q[None, :], body)[0] @ gamma)(p)
-        return jnp.stack((g[1], -g[0]))
 
     def velocity(p):
-        return np.asarray(vel(jnp.asarray(p))) + u_inf
+        return panel.velocity(solution, np.asarray(p)[None, :])[0]
 
     pts = [mid + 1e-5 * chord * bisector]
     direction = bisector

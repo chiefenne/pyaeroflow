@@ -55,6 +55,11 @@ C<sub>D</sub> = 0.0225 (pure wave drag); see
 
 More examples with the commands to run them: [example gallery](docs/gallery.md).
 
+No mesh at hand? `pyaeroflow foil examples/airfoils/e387.dat --re 2e5 --alpha 0 2 4 6`
+gives a polar with transition locations in seconds: a panel method coupled to
+an integral boundary layer ([recipe 14](docs/recipes.md#foil),
+[validation §18](docs/validation.md#sec-18)).
+
 ## Documentation
 
 - [Example gallery](docs/gallery.md): pictures of selected cases with the commands that reproduce them
@@ -141,6 +146,7 @@ python examples/stage3_benchmarks.py
 python examples/stage4_unsteady.py
 python examples/stage5_rans.py
 python examples/stage6_naca0012.py [--medium]
+python examples/ibl_validation.py     # viscous panel method: E387, SD7003 polars
 ```
 
 The examples write VTU files (for ParaView) and plots to `examples/output/`.

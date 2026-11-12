@@ -370,7 +370,8 @@ Nothing is deleted without `--yes`.
 
 ```
 pyaeroflow foil naca2412 --alpha 0 2 4 --re 1e6 --cp
-pyaeroflow foil sd7003.dat --alpha 2 4 6 --re 6e4 --ncrit 9
+pyaeroflow foil examples/airfoils/sd7003.dat --alpha 2 4 6 --re 6e4 --ncrit 9
+pyaeroflow foil examples/airfoils/e387.dat --alpha 6 --re 2e5 --ncrit 8.15   # one angle
 ```
 
 `foil` is a panel method coupled to an integral boundary layer (the
@@ -384,8 +385,15 @@ quiet wind tunnel, 1 fully turbulent) and `--panels` for the resolution
 angles have a laminar bubble, before building a mesh. It is an estimate
 for attached and mildly separated flow, not a replacement for the CFD
 solution. NACA 2412, Re 10⁶, α 2: CL 0.452, CD 0.00578. The first angle
-takes about 45 s (compilation, see [recipe 17](#compile-cache)), the next
-ones a few seconds.
+takes about 6 s (40 s in the very first run, which compiles; see
+[recipe 17](#compile-cache)), the next ones about 1 s. In a polar each angle
+starts from the previous one (`--cold`: every angle from scratch). Checks
+against mfoil, the E387 wind-tunnel data and XFOIL:
+[validation §18](validation.md#sec-18); picture: [gallery 8](gallery.md#foil).
+The last column says how each angle
+was started: `warm`, `cold`, or `continuation from 5` when the cold start
+stalled and `foil` came from a neighbouring angle on its own (E387 α 6°). An
+angle marked `NO` did not converge even so.
 
 [↑ back to top](#recipes)
 
@@ -464,6 +472,10 @@ the Newton phase gain more). Nothing to switch on. Environment variables:
 export PYAEROFLOW_CACHE_DIR=/scratch/pyaeroflow   # other place, e.g. a fast disk
 export PYAEROFLOW_JAX_CACHE=0                     # switch the cache off
 ```
+
+`pyaeroflow foil` and `initial.boundary_layer` keep their kernels in
+`~/.cache/pyaeroflow/ibl` as well (the first angle then takes about 6 s
+instead of 24 s); the two variables apply to it too.
 
 An own `JAX_COMPILATION_CACHE_DIR` is respected. The folder grows with
 every new mesh size; delete it any time. A new JAX version starts a fresh
