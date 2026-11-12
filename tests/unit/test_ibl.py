@@ -219,8 +219,66 @@ def test_foil_cli_max_iterations_option():
     sub = argparse.ArgumentParser().add_subparsers()
     p = add_parser(sub)
     args = p.parse_args(["naca0012", "--alpha", "-1", "2", "--re", "1e6"])
-    assert args.max_iterations == 60 and args.alpha == [-1.0, 2.0]
+    assert args.max_iterations == 100 and args.alpha == [-1.0, 2.0]
     args = p.parse_args(
         ["e387.dat", "--alpha", "6", "--re", "2e5", "--max-iterations", "200"]
     )
     assert args.max_iterations == 200
+
+
+def test_stall_needs_small_steps_and_a_level_residual():
+    from pyaeroflow.ibl.solver import _stalled
+
+    level = [10.0] * 40
+    assert _stalled(level, [0.001] * 39)
+    assert not _stalled(level, [0.001] * 30 + [1.0] + [0.001] * 8)  # a full step
+    falling = [10.0 * 0.9**k for k in range(40)]
+    assert not _stalled(falling, [0.001] * 39)
+    assert not _stalled(level[:10], [0.001] * 9)  # too short
+
+
+def test_cached_jit_stores_and_reloads_the_traced_program(tmp_path, monkeypatch):
+    from pyaeroflow.ibl import cache
+
+    monkeypatch.setenv("PYAEROFLOW_CACHE_DIR", str(tmp_path))
+    monkeypatch.delenv("PYAEROFLOW_JAX_CACHE", raising=False)
+
+    def f(x, k):
+        return jnp.sin(x) * k
+
+    x = np.linspace(0.0, 1.0, 5)
+    first = cache.cached_jit("unit_test_kernel", f)
+    y = np.asarray(first(x, 2.0))
+    files = list((tmp_path / "ibl").glob("unit_test_kernel-*.bin"))
+    assert len(files) == 1
+    second = cache.cached_jit("unit_test_kernel", f)  # new process: loads the file
+    np.testing.assert_allclose(np.asarray(second(x, 3.0)), 1.5 * y, rtol=1e-14)
+    assert len(list((tmp_path / "ibl").glob("*.bin"))) == 1
+    np.testing.assert_allclose(y, 2.0 * np.sin(x), rtol=1e-14)
+    # another shape is another program
+    second(np.zeros(3), 1.0)
+    assert len(list((tmp_path / "ibl").glob("*.bin"))) == 2
+    monkeypatch.setenv("PYAEROFLOW_JAX_CACHE", "0")
+    assert cache.cache_directory() is None
+
+
+@pytest.mark.slow
+def test_e387_alpha6_single_case_and_warm_start():
+    """Cold start stalls (transition at the leading edge); continuation solves it."""
+    from pathlib import Path
+
+    from pyaeroflow.ibl import analyse
+    from pyaeroflow.ibl.geometry import read_coordinates
+
+    foil = Path(__file__).parents[2] / "examples" / "airfoils" / "e387.dat"
+    nodes = repanel(read_coordinates(foil), 200)
+    r = analyse(nodes, 6.0, 2e5, ncrit=8.15)
+    assert r.converged and r.start.startswith("continuation")
+    assert abs(r.cl - 1.0451) < 2e-3 and abs(r.cd - 0.01270) < 1e-4
+    assert abs(r.x_transition[0] - 0.508) < 0.01
+    cold = analyse(nodes, 6.0, 2e5, ncrit=8.15, continuation=False)
+    assert not cold.converged
+    r5 = analyse(nodes, 5.0, 2e5, ncrit=8.15)
+    warm = analyse(nodes, 6.0, 2e5, ncrit=8.15, initial=r5)
+    assert warm.converged and warm.start == "warm"
+    assert abs(warm.cl - r.cl) < 1e-6 and abs(warm.cd - r.cd) < 1e-7

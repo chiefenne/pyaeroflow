@@ -1166,11 +1166,11 @@ against two wind tunnels and XFOIL, and the SD7003 polar against XFOIL and
 the CFD polars of §9 and §10.
 
 `python examples/ibl_validation.py` runs the polars and the field of
-§18.4 and draws the figures (about 3 min on 4 cores, most of it the field of
-§18.4 and the first angle, which compiles). Coordinates: `examples/airfoils/e387.dat` and `sd7003.dat` (the
-PyAero airfoil library), repanelled to 200 nodes, sharp trailing edge. The
-script allows 200 Newton steps per angle (`pyaeroflow foil
---max-iterations 200`; the default is 60, see the limits below).
+§18.4 and draws the figures (about 1.5 min on 4 cores). Coordinates:
+`examples/airfoils/e387.dat` and `sd7003.dat` (the PyAero airfoil library),
+repanelled to 200 nodes, sharp trailing edge. The polars are run like
+`pyaeroflow foil` runs them: each angle starts from the previous one, and an
+angle that does not converge that way starts cold (§18.5).
 
 ### 18.1 Code-to-code: mfoil on the same nodes
 
@@ -1219,19 +1219,20 @@ from Somers & Maughmer, table IV (Penn State).
 | 2 | 0.618 | 0.01074 | −0.081 | +0.048 / −8.8 % | −0.001 / −0.1 % | 0.656 | 0.44–0.67 |
 | 4 | 0.835 | 0.01192 | −0.080 | +0.049 / −10.4 % | −0.000 / −0.0 % | 0.599 | 0.40–0.61 |
 | 5 | 0.942 | 0.01236 | −0.079 | +0.051 / −10.7 % | +0.001 / −0.1 % | 0.562 | 0.35–0.59 |
-| 6 | not converged | | | | | | 0.34–0.55 |
+| 6 | 1.045 | 0.01270 | −0.077 | +0.050 / −11.7 % | +0.002 / 0.0 % | 0.508 | 0.34–0.55 |
 | 7 | 1.134 | 0.01391 | −0.072 | +0.047 / −12 % | +0.003 / −0.3 % | 0.334 | 0.33–0.47 |
 | 8 | 1.180 | 0.02061 | −0.066 | +0.001 / +19 % | +0.011 / 0.0 % | 0.040 | |
 | 10 | 1.254 | 0.03253 | −0.051 | (Penn State +0.014 / +19 %) | – | 0.019 | |
 
-ΔC_D relative. α 1°, 3° and 9° are in the CSV and in the figure.
+ΔC_D relative. α 1°, 3° and 9° are in the CSV and in the figure. All 13 angles converge.
 C_M is nose-up positive (the experiments' convention; the CFD solver writes
 nose-down positive).
 
 What the polar shows:
 
 - `foil` reproduces XFOIL 8.15 from α −2° to 8°: C_L within 0.005 (0.011 at
-  8°) and C_D within 1.3 %, the transition location within 0.01 c. Both
+  8°) and C_D within 1.3 %, the transition location within 0.01 c (0.508
+  against 0.507 at 6°). Both
   are the same model, written independently, so this checks the
   implementation, not the physics.
 - Against both wind tunnels, C_L is 0.04–0.05 (TM 4062) and 0.04–0.08 (Penn
@@ -1264,11 +1265,11 @@ polars of §9 and §10 on the 320k PyAero mesh (SA-AFT, SST-LM at Tu 0.1 %).
 | 2 | 0.466 | 0.01694 | 0.424 | 0.0165 | 0.800 |
 | 4 | 0.622 | 0.01872 | 0.620 | 0.0188 | 0.549 |
 | 6 | 0.814 | 0.02405 | 0.813 | 0.0243 | 0.317 |
-| 8 | not converged | | 0.992 | 0.0342 | |
+| 8 | 0.997 | 0.03366 | 0.992 | 0.0342 | 0.163 |
 | 9 | 1.070 | 0.04115 | 1.065 | 0.0429 | 0.112 |
 | 10 | 1.118 | 0.05233 | 1.109 | 0.0557 | 0.084 |
 
-At 4°, 6°, 9° and 10° `foil` matches XFOIL to 0.01 in C_L and 6 % in C_D. Like
+From 4° to 10° `foil` matches XFOIL to 0.01 in C_L and 6 % in C_D. Like
 XFOIL it does not show the early stall of the RANS models at 10°; it is an
 attached-flow method and stays optimistic near stall. At 0° to 2° the
 transition sits at the trailing edge (x_tr 0.8–0.99), the long bubble is
@@ -1290,15 +1291,34 @@ transition at 0.017). `examples/output/ibl/naca0012_ibl_field.vtu` holds
 velocity, C_p and ν_t/ν per cell for ParaView. The effect on the iteration
 count is in [recipe 15](recipes.md#ibl-start).
 
-### 18.5 Limits
+### 18.5 Start-up, robustness and limits
 
-- **Convergence near a transition jump.** Each angle starts cold. Where the
-  transition point jumps between the bubble and the leading edge (E387
-  α 6°, SD7003 α 8°) Newton does not converge in 200 steps. E387 α −1° and
-  7° need 69 and 84 steps, more than the default 60 of `pyaeroflow foil`
-  (`--max-iterations 200` covers them); an angle that does not converge is
-  marked `NO` and has `converged = 0` in the CSV. A continuation from the
-  previous angle is not implemented.
+- **Start of one angle.** A single angle starts cold: the boundary layer is
+  marched on the inviscid pressure, then the coupled Newton iteration runs
+  (100 steps, `--max-iterations`). On the inviscid pressure the laminar layer
+  can separate at the leading-edge suction peak and the march puts the
+  transition there, far from the coupled answer. E387 α 6° is such a case:
+  transition starts at x/c 0.05, the answer is 0.508, and Newton stalls with
+  steps of 10⁻³. `foil` recognises the stall (15 steps below 5 % of the
+  Newton step without halving the residual) and then solves a neighbouring
+  angle that starts well (1°, 2°, 3° away, the side towards α 0° first) and
+  approaches the requested angle from it, halving the step in α when a step
+  fails. E387 α 6° comes from 5° (60 Newton steps in all), SD7003 α 8° from
+  7°. The table that `foil` prints names the start (`cold`, `warm`,
+  `continuation from 5`).
+- **Polar.** Each angle starts from the previous converged one (`--cold`
+  switches that off). A warm start that has not converged in 30 steps is
+  dropped and the angle starts cold. It helps on the E387 (7 to 17 steps per
+  degree up to 6°); on the SD7003 at 1° steps most angles fall back to the cold start,
+  because the transition point moves one node per Newton step.
+- **Uniqueness.** Where the transition jumps (E387 between 7° and 8°) two
+  states can exist; the continuation comes from the lower |α|. Warm and cold
+  results of this section agree to all printed digits.
+- **Speed** (4 cores): about 0.06 s per Newton step, 1 s for an easy angle;
+  E387, 13 angles: about 30 s. The compiled and the traced kernels are kept
+  in `~/.cache/pyaeroflow` (`PYAEROFLOW_JAX_CACHE=0` switches it off): the
+  first angle of a run takes about 6 s instead of 24 s, the very first run
+  after an installation about 40 s.
 - Incompressible only (no Kármán–Tsien correction), single element, no
   forced transition (trip) yet.
 - Attached and mildly separated flow; C_L max and the post-stall branch

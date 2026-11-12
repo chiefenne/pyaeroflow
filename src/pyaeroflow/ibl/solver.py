@@ -23,6 +23,7 @@ import numpy as np
 from . import closures as cl
 from . import inviscid as inv_mod
 from . import residuals as res
+from .cache import cached_jit
 
 jax.config.update("jax_enable_x64", True)
 
@@ -61,6 +62,7 @@ class IblResult:
     state: np.ndarray = None  # Newton unknowns (N, 4); airfoil speeds signed
     stagnation: int = 0  # stagnation-point panel: between nodes a and a + 1
     inviscid: object = None  # the :class:`.inviscid.Inviscid` operators
+    start: str = "cold"  # cold, warm or "continuation from <angle>"
 
 
 def _local(u1, u2, x1, x2, g1, g2, kind, nu, nc):
@@ -122,20 +124,21 @@ def _residual(U, kind, prev, sgn, a, turbf, vinv, winv, geo):
     return jnp.concatenate((r, r_ue[:, None]), axis=1).ravel()
 
 
-# Compiled once per process (per problem size), shared by all analyses.
-_residual_jit = jax.jit(_residual)
+# Compiled once per problem size and kept on disk (see cache.py).
+_residual_jit = cached_jit("residual", _residual)
 # scalar closures called from the Python loops (transition march, start-up):
 # compiled once, eager JAX dispatch would cost about 1 ms per call
 _amplification_jit = jax.jit(cl.amplification_rate)
 _ctau_transition_jit = jax.jit(cl.ctau_transition)
 _unpack_jit = jax.jit(_unpack)
-_local_jac_jit = jax.jit(
+_local_jac_jit = cached_jit(
+    "local_jacobian",
     jax.vmap(
         jax.jacfwd(_local, argnums=(0, 1, 2, 3)),
         in_axes=(0, 0, 0, 0, 0, 0, 0, None, None),
-    )
+    ),
 )
-_te_jac_jit = jax.jit(jax.jacfwd(_te, argnums=(0, 1, 2)))
+_te_jac_jit = cached_jit("te_jacobian", jax.jacfwd(_te, argnums=(0, 1, 2)))
 
 
 def _station(kind):
@@ -146,7 +149,10 @@ def _station(kind):
             return res.transition_interval(u1, u2, x1, x2, nu, nc)[0]
         return res.interval(u1, u2, x1, x2, g1, g2, nu, kind != LAM, kind == WAKE, nc)
 
-    return jax.jit(f), jax.jit(jax.jacfwd(f, argnums=1))
+    return (
+        cached_jit(f"station{kind}", f),
+        cached_jit(f"station{kind}_jacobian", jax.jacfwd(f, argnums=1)),
+    )
 
 
 _STATION = {k: _station(k) for k in (LAM, TURB, TRAN, WAKE, SIMI)}
@@ -612,45 +618,38 @@ def _transition_x(system, U, a, turb, xi):
     return tuple(out)
 
 
-def analyse(
-    nodes,
-    alpha,
-    reynolds,
-    ncrit=9.0,
-    wake_length=1.0,
-    max_iterations=60,
-    tolerance=1e-10,
-    verbose=False,
-):
-    """Viscous analysis of an airfoil at one angle of attack.
+def _arc_length(system, U, a):
+    sgn = jnp.asarray(np.where(np.arange(system.n) <= a, -1.0, 1.0))
+    return np.asarray(system._unpack(jnp.asarray(U), sgn, a)[5])
 
-    Parameters
-    ----------
-    nodes : array_like (n, 2)
-        Panel nodes of the airfoil contour (see :func:`.geometry.repanel`).
-    alpha : float
-        Angle of attack in degrees.
-    reynolds : float
-        Chord Reynolds number (unit chord and freestream speed assumed).
-    ncrit : float
-        Critical amplification factor of the e^N method.
-    wake_length : float
-        Wake length in chords.
-    max_iterations, tolerance : int, float
-        Newton limits; converged when the residual norm drops below tolerance.
-    verbose : bool
-        Print the Newton history.
 
-    Returns
-    -------
-    IblResult
+def _stalled(history, steps, window=15, drop=0.5, small=0.05):
+    """No progress: tiny Newton steps that did not halve the residual.
+
+    The residual alone is not a measure: while the transition point walks
+    (one node per step) it stays level for many steps and then falls. A stall
+    is a run of ``window`` steps, all under-relaxed below ``small``, whose
+    best residual is not below ``drop`` times the best one before them.
     """
-    inv = inv_mod.build(nodes, alpha, wake_length)
-    system = _System(inv, reynolds, ncrit)
+    if len(steps) < window or len(history) <= window:
+        return False
+    if max(steps[-window:]) >= small:
+        return False
+    return min(history[-window:]) > drop * min(history[:-window])
+
+
+def _newton(system, alpha, U, a, turb, max_iterations, tolerance, verbose):
+    """Global Newton iteration from the state (U, a, turb).
+
+    Returns (U, a, turb, converged, iterations, residual norm, history); stops
+    early when the residual stops falling (see :func:`_stalled`).
+    """
+    inv = system.inv
     vinv, winv = inv.speeds(alpha)
-    U, a, turb = _initial_state(system, vinv, winv)
     jv, jw = jnp.asarray(vinv), jnp.asarray(winv)
+    U, turb = U.copy(), turb.copy()
     history = []
+    steps = []
     converged = False
     it = 0
     rnorm = np.inf
@@ -680,9 +679,17 @@ def analyse(
         if rnorm < tolerance:
             converged = True
             break
+        if _stalled(history, steps):
+            if verbose:
+                print("      stalled")
+            break
         J = system.jacobian(U, kind, prev, sgn, a, turb)
-        dU = np.linalg.solve(J, -R).reshape(system.N, 4)
+        try:
+            dU = np.linalg.solve(J, -R).reshape(system.N, 4)
+        except np.linalg.LinAlgError:
+            break
         omega, why = _limit(system, U, dU, turb)
+        steps.append(omega)
         if verbose:
             ft = [
                 next((m for m, i in enumerate(nd) if turb[i]), None)
@@ -701,18 +708,19 @@ def analyse(
             ctmax = np.max(U[turb, 2])
             neg = turb & (U[:, 2] <= 0.0)
             U[neg, 2] = 0.1 * ctmax
-        a = _update_stagnation(system, U, a, turb)
-        _, _, _, _, _, xi = (
-            np.asarray(t)
-            for t in system._unpack(
-                jnp.asarray(U),
-                jnp.asarray(np.where(np.arange(system.n) <= a, -1.0, 1.0)),
-                a,
-            )
-        )
-        _update_transition(system, U, a, turb, xi)
+        try:
+            a = _update_stagnation(system, U, a, turb)
+        except RuntimeError:
+            rnorm = np.inf
+            break
+        _update_transition(system, U, a, turb, _arc_length(system, U, a))
+    return U, a, turb, converged, it, rnorm, history
+
+
+def _result(system, alpha, reynolds, sol, start):
+    U, a, turb, converged, it, rnorm, history = sol
+    inv = system.inv
     lift, cd, cdf, cm, cp, cf, xi = _forces(inv, U, alpha, system, a, turb)
-    ue = np.abs(U[:, 3])
     return IblResult(
         alpha=float(alpha),
         reynolds=float(reynolds),
@@ -729,7 +737,7 @@ def analyse(
         wake=inv.wake,
         theta=U[:, 0],
         delta_star=U[:, 1],
-        ue=ue,
+        ue=np.abs(U[:, 3]),
         cp=cp,
         cf=cf,
         turbulent=turb.copy(),
@@ -737,4 +745,159 @@ def analyse(
         state=U.copy(),
         stagnation=int(a),
         inviscid=inv,
+        start=start,
     )
+
+
+def _solve(nodes, alpha, reynolds, ncrit, wake_length, guess, limits, verbose):
+    """One Newton solve at alpha: cold (guess None) or from a previous state."""
+    inv = inv_mod.build(nodes, alpha, wake_length)
+    system = _System(inv, reynolds, ncrit)
+    if guess is None:
+        vinv, winv = inv.speeds(alpha)
+        U, a, turb = _initial_state(system, vinv, winv)
+    else:
+        U, a, turb = guess
+        if U.shape[0] != system.N:
+            raise ValueError("initial: the state belongs to another panelling")
+    sol = _newton(system, alpha, U, a, turb, *limits, verbose)
+    return system, sol
+
+
+def _guess(sol):
+    return sol[0], sol[1], sol[2]
+
+
+def _march(common, a0, system, sol, limits, verbose):
+    """Approach alpha from the converged solution at a0 in adaptive steps.
+
+    A step that fails is halved, one that converges is doubled. Returns
+    (system, solution or None, Newton steps used).
+    """
+    nodes, alpha, reynolds, ncrit, wake_length = common
+    used = 0
+    cur, step = a0, alpha - a0
+    while abs(alpha - cur) > 1e-12 and abs(step) > 0.01:
+        nxt = alpha if abs(alpha - cur) <= abs(step) * 1.0001 else cur + step
+        system2, sol2 = _solve(
+            nodes, nxt, reynolds, ncrit, wake_length, _guess(sol), limits, False
+        )
+        used += sol2[4]
+        if verbose:
+            print(
+                f"  continuation {cur:g} -> {nxt:g}: "
+                f"{'ok' if sol2[3] else 'failed'} ({sol2[4]})"
+            )
+        if sol2[3]:
+            cur, system, sol = nxt, system2, sol2
+            step = 2.0 * step
+        else:
+            step = 0.5 * step
+    if abs(alpha - cur) > 1e-12:
+        return system, None, used
+    return system, sol, used
+
+
+def _continuation(common, limits, verbose):
+    """Reach alpha from a neighbouring angle that converges from a cold start.
+
+    Start angles 1, 2, 3 and 4.5 degrees away are tried, the side towards
+    alpha = 0 first; from there :func:`_march` approaches alpha. Returns
+    (system, solution, start angle, Newton steps used) or None.
+    """
+    nodes, alpha, reynolds, ncrit, wake_length = common
+    side = -1.0 if alpha >= 0.0 else 1.0
+    used = 0
+    for d in (1.0, -1.0, 2.0, -2.0, 3.0, 4.5):
+        a0 = alpha + side * d
+        system, sol = _solve(
+            nodes, a0, reynolds, ncrit, wake_length, None, limits, False
+        )
+        used += sol[4]
+        if not sol[3]:
+            continue
+        system, sol, n = _march(common, a0, system, sol, limits, verbose)
+        used += n
+        if sol is not None:
+            return system, sol, a0, used
+    return None
+
+
+def analyse(
+    nodes,
+    alpha,
+    reynolds,
+    ncrit=9.0,
+    wake_length=1.0,
+    max_iterations=100,
+    tolerance=1e-10,
+    verbose=False,
+    initial=None,
+    continuation=True,
+):
+    """Viscous analysis of an airfoil at one angle of attack.
+
+    Parameters
+    ----------
+    nodes : array_like (n, 2)
+        Panel nodes of the airfoil contour (see :func:`.geometry.repanel`).
+    alpha : float
+        Angle of attack in degrees.
+    reynolds : float
+        Chord Reynolds number (unit chord and freestream speed assumed).
+    ncrit : float
+        Critical amplification factor of the e^N method.
+    wake_length : float
+        Wake length in chords.
+    max_iterations, tolerance : int, float
+        Newton limits of one solve; converged when the residual norm drops
+        below tolerance. A solve also ends when the residual stops falling.
+    verbose : bool
+        Print the Newton history.
+    initial : IblResult, optional
+        Converged result of a neighbouring angle on the same nodes: the
+        Newton iteration starts from its state (warm start). If that does not
+        converge the angle is solved as without ``initial``.
+    continuation : bool
+        If the cold start does not converge, start from a neighbouring angle
+        that does and approach alpha in steps (see :func:`_continuation`).
+
+    Returns
+    -------
+    IblResult
+        ``start`` says how the state was reached: "cold", "warm" or
+        "continuation from <angle>"; ``iterations`` counts all Newton steps.
+    """
+    limits = (max_iterations, tolerance)
+    common = (nodes, alpha, reynolds, ncrit, wake_length)
+
+    def result(system, sol, used, start):
+        return _result(system, alpha, reynolds, sol[:4] + (used,) + sol[5:], start)
+
+    used = 0
+    if initial is not None and initial.converged and initial.state is not None:
+        guess = (
+            np.array(initial.state),
+            int(initial.stagnation),
+            np.array(initial.turbulent, dtype=bool),
+        )
+        # a warm start that helps converges quickly: give it 30 steps
+        short = (min(max_iterations, 30), tolerance)
+        system, sol = _solve(*common, guess, short, verbose)
+        used += sol[4]
+        if sol[3]:
+            return result(system, sol, used, "warm")
+        if verbose:
+            print("  warm start failed, cold start")
+    system, sol = _solve(*common, None, limits, verbose)
+    used += sol[4]
+    start = "cold"
+    if not sol[3] and continuation:
+        if verbose:
+            print("  cold start failed, continuation from a neighbouring angle")
+        found = _continuation(common, limits, verbose)
+        if found is not None:
+            system, sol, a0, n = found
+            used += n
+            start = f"continuation from {a0:g}"
+    return result(system, sol, used, start)

@@ -284,7 +284,7 @@ is on the NACA 0012 TMR grid, Re = 6·10⁶, α = 10°:
 | Validation | [§18 Viscous panel method](validation.md#sec-18) |
 
 ```
-pyaeroflow foil examples/airfoils/e387.dat --re 2e5 --ncrit 8.15 --alpha -2 -1 0 2 4 5 7 8 10 --cp --max-iterations 200
+pyaeroflow foil examples/airfoils/e387.dat --re 2e5 --ncrit 8.15 --alpha -2 -1 0 1 2 3 4 5 6 7 8 9 10 --cp
 python examples/ibl_validation.py        # all figures of this entry and §18, plus the field VTU
 ```
 

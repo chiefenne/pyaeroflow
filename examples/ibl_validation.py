@@ -2,7 +2,7 @@
 
 Run from the repository root:
 
-    python examples/ibl_validation.py            # everything, about 5 min
+    python examples/ibl_validation.py            # everything, about 2 min
     python examples/ibl_validation.py e387       # one part: e387, sd7003, field
 
 Parts:
@@ -82,13 +82,15 @@ def xfoil_zone(path, zone):
 def polar(name, nodes, alphas, re, ncrit):
     """Run the angles one by one; write and return the polar rows."""
     rows, walls = [], {}
+    previous = None
     for a in alphas:
-        r = analyse(nodes, a, re, ncrit=ncrit, max_iterations=200)
+        r = analyse(nodes, a, re, ncrit=ncrit, initial=previous)
+        previous = r if r.converged else previous
         xu, xl = r.x_transition
         print(
             f"{name} alpha {a:5.1f}: CL {r.cl:.4f} CD {r.cd:.5f} CM {r.cm:.4f} "
             f"x_tr {xu:.3f}/{xl:.3f} {'ok' if r.converged else 'NOT converged'} "
-            f"({r.iterations})",
+            f"({r.iterations}, {r.start})",
             flush=True,
         )
         rows.append((a, r.cl, r.cd, r.cdf, r.cm, xu, xl, r.converged, r.iterations))

@@ -9,14 +9,22 @@
   XFOIL and the CFD polars. Gallery entry 8 shows the E387 polar, C_p, C_f and
   H at α 4°, and the boundary-layer start field on a NACA 0012 mesh (VTU).
   New script `examples/ibl_validation.py`, coordinates in `examples/airfoils/`.
-- `pyaeroflow foil` is 4 to 6 times faster: the transition march calls a
-  compiled amplification rate (eager JAX dispatch took 80 % of the time),
-  and the panel velocity kernels compile once per airfoil instead of once
-  per angle. E387 polar, 11 angles: 178 s before, 41 s after (about 0.9 s
-  per converged angle after the first); results unchanged.
-- `pyaeroflow foil --max-iterations N`: Newton steps per angle (default 60).
-  200 converges the E387 angles at Re 2·10⁵ where the transition point moves
-  quickly (α −1° and 7°).
+- `pyaeroflow foil` converges single angles that stalled: when the cold
+  start stalls (the start-up march on the inviscid pressure puts the
+  transition at the leading edge, E387 Re 2·10⁵ α 6°, SD7003 Re 6·10⁴ α 8°),
+  the angle is reached by continuation from a neighbouring angle,
+  automatically. `analyse(..., continuation=False)` gives the old behaviour.
+- `pyaeroflow foil` polars start each angle from the previous one
+  (`--cold` to switch off; Python: `analyse(..., initial=previous)`); the
+  table shows the start of each angle. New option `--max-iterations`
+  (Newton steps of one solve, default now 100).
+- `pyaeroflow foil` is faster: the transition march calls a compiled
+  amplification rate (eager JAX dispatch took 80 % of the time), the panel
+  velocity kernels compile once per airfoil, and the traced kernels are kept
+  on disk (`~/.cache/pyaeroflow/ibl`, with the XLA cache; off with
+  `PYAEROFLOW_JAX_CACHE=0`). E387 polar: 178 s for 11 angles before, about
+  30 s for 13 now; first angle of a run 6 s instead of 24 s; a Newton step
+  0.06 s instead of 0.7 s. Results unchanged.
 
 ## 1.7.0 – case templates, mesh library, polar predictor and compile cache (2026-11-12)
 
