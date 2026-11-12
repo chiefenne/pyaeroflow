@@ -251,6 +251,22 @@ def solve(bodies, velocity):
         bodies = (bodies,)
     bodies = tuple(bodies)
     u = np.asarray(velocity, dtype=float)
+    matrix, rhs, offsets = assemble(bodies, u)
+    n_gamma = int(offsets[-1])
+    x = np.linalg.solve(matrix, rhs)
+    gamma = tuple(x[offsets[k] : offsets[k + 1]] for k in range(len(bodies)))
+    return PanelSolution(bodies, gamma, x[n_gamma:], u)
+
+
+def assemble(bodies, velocity):
+    """Linear system of the panel method: matrix, right-hand side, offsets.
+
+    Unknowns: gamma at the nodes of every body (body k at
+    offsets[k]:offsets[k+1]), then psi_0 of every body. Rows: one per node
+    (stream function = psi_0, or the trailing-edge extrapolation at a sharp
+    trailing edge), then one Kutta condition per body.
+    """
+    u = np.asarray(velocity, dtype=float)
     sizes = [b.nodes.shape[0] for b in bodies]
     offsets = np.concatenate(([0], np.cumsum(sizes)))
     n_gamma = int(offsets[-1])
@@ -275,9 +291,7 @@ def solve(bodies, velocity):
             rhs[last] = 0.0
         kutta = n_gamma + k
         matrix[kutta, first] = matrix[kutta, last] = 1.0
-    x = np.linalg.solve(matrix, rhs)
-    gamma = tuple(x[offsets[k] : offsets[k + 1]] for k in range(len(bodies)))
-    return PanelSolution(bodies, gamma, x[n_gamma:], u)
+    return matrix, rhs, offsets
 
 
 def _stream_function(point, solution):
