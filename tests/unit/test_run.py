@@ -444,3 +444,52 @@ def test_summary_counts_the_cut_steps():
     ((key, text),) = _line_search_rows(h)
     assert key == "line search"
     assert text == "step cut in 3 of 5 iterations (1/2: 1, 1/4: 2)"
+
+
+def test_polar_tangent_predicts_the_next_angle(tmp_path):
+    """dw/dalpha of a converged angle approximates the state of the next one."""
+    from pyaeroflow.mesh import annulus
+    from pyaeroflow.run import (
+        _polar_config,
+        load_restart_state,
+        run_polar,
+        state_scale,
+    )
+    from pyaeroflow.sensitivity import alpha_tangent
+
+    write_su2(tmp_path / "annulus.su2", annulus(32, 8, outer_radius=10.0, growth=1.3))
+    case = tmp_path / "cyl.toml"
+    case.write_text(POLAR.replace("residual_drop = 5.0", "residual_drop = 9.0"))
+    first, second = run_polar(case, [0.0, 1.0], console=False)
+    raw = tomllib.loads(case.read_text())
+    base = first.config
+    tangent = alpha_tangent(
+        first,
+        load_restart_state(first.restart_file),
+        lambda a: _polar_config(raw, case, base, a, None),
+        tolerance=1e-8,
+    )
+    assert tangent.converged
+    scale = state_scale(first.problem, first.scaling)
+    u0, u1 = first.w / scale, second.w / scale
+    moved = np.linalg.norm(u1 - u0)
+    assert moved > 1e-3
+    assert np.linalg.norm(u0 + tangent.du - u1) < 0.05 * moved
+    # a cylinder has no lift at any angle, so the slopes vanish
+    assert abs(tangent.dcl) < 1e-3
+
+
+def test_polar_predictor_writes_slopes_and_starts_from_prediction(tmp_path):
+    from pyaeroflow.mesh import annulus
+    from pyaeroflow.run import run_polar
+
+    write_su2(tmp_path / "annulus.su2", annulus(32, 8, outer_radius=10.0, growth=1.3))
+    (tmp_path / "cyl.toml").write_text(POLAR)
+    results = run_polar(
+        tmp_path / "cyl.toml", [0.0, 2.0], console=False, predictor="tangent"
+    )
+    assert all(r.converged for r in results)
+    out = tmp_path / "out"
+    assert (out / "cyl.predicted_from_alpha_0.npz").exists()
+    slopes = np.genfromtxt(out / "cyl.sensitivity.csv", delimiter=",", names=True)
+    assert slopes["alpha"][0] == 0.0 and slopes["converged"][0] == 1
