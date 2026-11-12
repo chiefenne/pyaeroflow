@@ -48,6 +48,7 @@ from pyaeroflow.solver import (
     structural_masks,
 )
 from pyaeroflow.solver.profile import timers
+from pyaeroflow.solver.pseudo_time import rms_per_variable
 
 PRESSURE_FIXING = {"pressure-outlet", "farfield", "total-pressure-inlet"}
 INFLOW_TYPES = {"velocity-inlet", "total-pressure-inlet", "farfield"}
@@ -1049,6 +1050,7 @@ class FlowProblem:
         debug=None,
         transition_cfl_max=None,
         whole_cell_relaxation=False,
+        reference_state=None,
     ):
         """Implicit pseudo-time solution (D25, D35).
 
@@ -1096,6 +1098,11 @@ class FlowProblem:
         (:meth:`_sst_limiter`); the counts go to the callback's
         ``info["gamma_guard"]``. The positive linearization of the gamma
         source is a model flag (``lm_positive_jacobian``).
+
+        ``reference_state`` (a uniform freestream state, when ``w0`` is a
+        prepared initial field) sets the reference of the residual drop: its
+        per-equation residual instead of that of ``w0``, so that a start
+        closer to the solution does not have to drop further.
 
         ``resume`` is the state of an earlier run (the ``state`` of its result
         or of a restart file, see :func:`pyaeroflow.run.load_restart_state`):
@@ -1226,6 +1233,11 @@ class FlowProblem:
 
         on_iteration.info["driver_state"] = driver_state
 
+        reference_norm = None
+        if reference_state is not None and not resume:
+            reference_norm = rms_per_variable(np.asarray(residual(reference_state)))
+            state["params"] = self.scheme_parameters(w0)
+
         result = solve_steady(
             residual,
             lambda w: self.jacobian(w, params_at(w)),
@@ -1266,6 +1278,7 @@ class FlowProblem:
             ),
             resume=resume,
             debug=debug,
+            reference_norm=reference_norm,
         )
         return result._replace(state={**result.state, **driver_state()})
 

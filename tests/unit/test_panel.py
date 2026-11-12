@@ -1,4 +1,4 @@
-"""Panel method and the potential-flow initial field (initial.potential_flow)."""
+"""Panel method and the boundary-layer initial field (initial.boundary_layer)."""
 
 import dataclasses
 
@@ -6,12 +6,10 @@ import numpy as np
 import pytest
 
 from pyaeroflow.config import ConfigError, resolve
-from pyaeroflow.driver import FlowProblem
+from pyaeroflow.ibl.field import mesh_ibl_field, wall_contours
 from pyaeroflow.mesh import naca0012_ogrid
 from pyaeroflow.mesh.mesh import MeshError
 from pyaeroflow.numerics import panel
-from pyaeroflow.physics.incompressible import IncompressibleModel
-from pyaeroflow.potential import potential_state, wall_contours
 
 
 def joukowski(n, e=0.08, f=0.05):
@@ -112,27 +110,27 @@ def ogrid():
     return naca0012_ogrid(64, 40, reynolds=1.0e4, farfield_radius=20.0)
 
 
-def test_potential_state_of_a_mesh(ogrid):
-    a = np.radians(4.0)
-    u = (np.cos(a), np.sin(a))
-    conditions = {
-        "airfoil": {"type": "wall"},
-        "farfield": {"type": "farfield", "velocity": u, "pressure": 0.0},
-    }
-    problem = FlowProblem(ogrid, IncompressibleModel(viscosity=1e-4), conditions)
-    w0 = problem.initial_state(u, 0.3)
-    w, sol = potential_state(problem, w0, ["airfoil"], u)
-    assert len(wall_contours(ogrid, ["airfoil"])) == 1
-    assert sol.lift_coefficient() == pytest.approx(0.48, abs=0.03)
-    speed2 = w[:, 1] ** 2 + w[:, 2] ** 2
-    # Bernoulli: total pressure of the freestream everywhere
-    assert w[:, 0] + 0.5 * speed2 == pytest.approx(0.3 + 0.5)
-    far = np.linalg.norm(ogrid.cell_centroid, axis=1) > 15.0
-    assert w[far, 1:3] == pytest.approx(np.tile(u, (far.sum(), 1)), abs=0.02)
-    assert speed2.max() > 1.3 and speed2.min() < 0.3
+def test_wall_contours_of_a_mesh(ogrid):
+    assert len(wall_contours(ogrid, "airfoil")) == 1
     part = dict(ogrid.boundary_faces, airfoil=ogrid.boundary_faces["airfoil"][:10])
     with pytest.raises(MeshError, match="closed"):
-        wall_contours(dataclasses.replace(ogrid, boundary_faces=part), ["airfoil"])
+        wall_contours(dataclasses.replace(ogrid, boundary_faces=part), "airfoil")
+
+
+@pytest.mark.slow
+def test_boundary_layer_field_of_a_mesh(ogrid):
+    a = np.radians(2.0)
+    u = (np.cos(a), np.sin(a))
+    f = mesh_ibl_field(ogrid, "airfoil", u, 1.0e-4)
+    assert f.result.converged
+    speed = np.linalg.norm(f.velocity, axis=1)
+    far = np.linalg.norm(ogrid.cell_centroid, axis=1) > 15.0
+    assert f.velocity[far] == pytest.approx(np.tile(u, (far.sum(), 1)), abs=0.02)
+    assert speed.min() < 0.1  # no slip in the first cells
+    # laminar layers at Re 1e4: eddy viscosity only in the (turbulent) wake
+    ahead = ogrid.cell_centroid[:, 0] < 0.9
+    assert np.all(f.eddy_viscosity[ahead] == 0.0)
+    assert f.eddy_viscosity.max() > 0.0
 
 
 def _case(**initial):
@@ -149,12 +147,12 @@ def _case(**initial):
 
 
 def test_config_accepts_walls_only():
-    cfg = resolve(_case(potential_flow=["airfoil"]))
-    assert cfg.data["initial"]["potential_flow"] == ["airfoil"]
-    assert resolve(_case()).data["initial"]["potential_flow"] is None
+    cfg = resolve(_case(boundary_layer="airfoil"))
+    assert cfg.data["initial"]["boundary_layer"] == "airfoil"
+    assert resolve(_case()).data["initial"]["boundary_layer"] is None
     with pytest.raises(ConfigError, match="not a wall"):
-        resolve(_case(potential_flow=["farfield"]))
+        resolve(_case(boundary_layer="farfield"))
     with pytest.raises(ConfigError, match="did you mean 'airfoil'"):
-        resolve(_case(potential_flow=["airfoi"]))
-    cfg = resolve(_case(potential_flow=["airfoil"], restart="x.npz"))
-    assert any("potential_flow ignored" in n for n in cfg.notices)
+        resolve(_case(boundary_layer="airfoi"))
+    cfg = resolve(_case(boundary_layer="airfoil", restart="x.npz"))
+    assert any("boundary_layer ignored" in n for n in cfg.notices)

@@ -269,12 +269,21 @@ SCHEMA = {
             "string", None, "Uniform initial field equal to this boundary's state"
         ),
         "turbulence": Opt("table", None, TURBULENCE_DESCRIPTION),
-        "potential_flow": Opt(
-            "string_list",
+        "boundary_layer": Opt(
+            "string",
             None,
-            "Wall boundaries (closed airfoil contours) around which the initial "
-            "velocity and pressure are the potential flow of a panel method "
-            "instead of the uniform state; ignored with restart",
+            "Airfoil wall (one closed contour) whose integral boundary-layer "
+            "solution (pyaeroflow foil) sets the initial velocity, pressure and "
+            "nu_tilde instead of the uniform state; incompressible flow, ignored "
+            "with restart",
+        ),
+        "boundary_layer_ncrit": Opt(
+            "float",
+            None,
+            "Critical amplification factor of that boundary-layer solution "
+            "(default 9 with a transition model or laminar flow, 1 for a fully "
+            "turbulent RANS model)",
+            minimum=0.0,
         ),
         "restart": Opt(
             "string",
