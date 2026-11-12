@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `naca0012_rans.toml` (example case and `naca0012-sa` template) converges again:
+  the limiter stays frozen after the start-up (`release = false`) and
+  `max_iterations` is 700. With the released limiter the 33k O-grid stalled at
+  4.5 orders in 400 iterations; the frozen run reaches 7 orders in 585
+  iterations (CL 1.0813, CD 0.01687, 7 min on 4 cores).
 - Case catalogue `docs/cases.md`: the 45 example cases with physics, mesh
   (template, library or repository), purpose and where they are discussed. A
   test loads every `examples/cases/*.toml` (the checks of `pyaeroflow check`)
