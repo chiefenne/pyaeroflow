@@ -58,6 +58,7 @@ More examples with the commands to run them: [example gallery](docs/gallery.md).
 ## Documentation
 
 - [Example gallery](docs/gallery.md): pictures of selected cases with the commands that reproduce them
+- [Case catalogue](docs/cases.md): the 45 example cases and the templates of `pyaeroflow init`
 - [Recipes](docs/recipes.md): commands for everyday tasks (polars, restarts, plots, control files, refinement)
 - [Requirements](docs/requirements.md): decisions, planned features, stage plan
 - [Case configuration](docs/configuration.md): TOML case-file reference

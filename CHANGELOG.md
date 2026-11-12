@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Case catalogue `docs/cases.md`: the 45 example cases with physics, mesh
+  (template, library or repository), purpose and where they are discussed. A
+  test loads every `examples/cases/*.toml` (the checks of `pyaeroflow check`)
+  and keeps the catalogue and the template names in step with the files.
 - Case templates: `pyaeroflow templates` lists 18 templates (channel, cavity,
   flat plates SA/BCM/LM, jet in crossflow, cylinder, NACA 0012 shedding, SA
   and Euler, Mach 2 ramp, and `airfoil` for an own mesh); `pyaeroflow init
