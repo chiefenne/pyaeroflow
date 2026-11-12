@@ -17,6 +17,10 @@ Pictures of complete cases are in the [Example gallery](gallery.md).
 11. [Run a refined mesh from freestream](#refined-cold-start)
 12. [Speed up the Newton phase](#speed)
 13. [Clean up the output of a case](#clean)
+14. [Estimate an airfoil in seconds, before meshing](#foil)
+15. [Start a run from the boundary-layer solution](#ibl-start)
+16. [Polar: exact slopes and a faster angle sweep](#polar-tangent)
+17. [Avoid recompiling at every start](#compile-cache)
 
 ---
 
@@ -355,5 +359,113 @@ pyaeroflow clean case.toml --all --yes        # delete everything
 ```
 
 Nothing is deleted without `--yes`.
+
+[↑ back to top](#recipes)
+
+---
+
+<a id="foil"></a>
+## 14. Estimate an airfoil in seconds, before meshing
+
+```
+pyaeroflow foil naca2412 --alpha 0 2 4 --re 1e6 --cp
+pyaeroflow foil sd7003.dat --alpha 2 4 6 --re 6e4 --ncrit 9
+```
+
+`foil` is a panel method coupled to an integral boundary layer (the
+viscous-inviscid approach of XFOIL-type codes, written from the published
+papers). It takes a NACA 4-digit name or a coordinate file (Selig or
+Lednicer) and prints CL, CD, CDf, CM and the transition positions per
+angle. `<airfoil>_Re<re>.polar.csv` holds the table and `--cp` also writes a
+wall file per angle. Use `--ncrit` for the freestream turbulence (9 is a
+quiet wind tunnel, 1 fully turbulent) and `--panels` for the resolution
+(200). Typical use: judge where the boundary layer transitions, and which
+angles have a laminar bubble, before building a mesh. It is an estimate
+for attached and mildly separated flow, not a replacement for the CFD
+solution. NACA 2412, Re 10⁶, α 2: CL 0.452, CD 0.00578. The first angle
+takes about 45 s (compilation, see [recipe 17](#compile-cache)), the next
+ones a few seconds.
+
+[↑ back to top](#recipes)
+
+---
+
+<a id="ibl-start"></a>
+## 15. Start a run from the boundary-layer solution
+
+```toml
+[initial]
+boundary_layer = "airfoil"        # the wall boundary of the airfoil (one closed contour)
+# boundary_layer_ncrit = 9        # default: 9 with transition or laminar flow, 1 for RANS only
+```
+
+The initial field is built from the same boundary-layer solution as
+`pyaeroflow foil` at the Reynolds number and angle of the case: outer flow
+with the displacement sources, a boundary-layer profile with the right
+shape factor and a wake defect, and for Spalart–Allmaras a ν̃ from the
+turbulent layers. The run starts closer to the answer; the log says if the
+boundary-layer solution did not converge and the run starts from the uniform
+state instead. NACA 0012, 100k cells, SA, Re 6·10⁶: 38 instead of 60
+iterations at α 10 and 26 instead of 45 at α 0, same CL and CD. Building the
+field takes about 60 s (mostly compilation), so it pays on large meshes
+and in repeated runs. Incompressible flow only, ignored with
+`initial.restart`, and in a polar only the first angle uses it. Not needed
+for a [refined mesh from freestream](#refined-cold-start).
+
+[↑ back to top](#recipes)
+
+---
+
+<a id="polar-tangent"></a>
+## 16. Polar: exact slopes and a faster angle sweep
+
+```
+pyaeroflow polar case.toml --alpha 0 2 4 6 8 --predictor tangent
+```
+
+At every converged angle one extra linear solve (15–17 Jacobian products,
+a few seconds on 33k cells) gives dw/dα. `<name>.sensitivity.csv` then holds
+the exact slopes dCL/dα, dCD/dα, dCM/dα per degree (NACA 0012: dCL/dα
+0.109 per degree, close to the thin-airfoil value 0.110). The next angle
+starts from w + Δα·dw/dα if that start has the lower residual; the log
+prints both residuals. Steady runs without `[refinement]` and without a
+farfield vortex only.
+
+For the speed of the sweep, the CFL restart is the stronger lever on the NACA
+0012 test (33k cells, SA, 0/4/8°; iterations at 4° and 8°):
+
+| Setting | α 4 | α 8 |
+|---|---|---|
+| default | 165 | 364 |
+| `--predictor tangent` | 49 | 400, not converged |
+| `[solver] cfl = { polar_reset = true }` | 43 | 345 |
+| both | 134 | 400, not converged |
+
+`polar_reset` restarts the CFL ramp at each angle (the Newton–Krylov switch
+stays on). Use it when a new angle moves a laminar bubble or separation; the
+predictor is for the slopes and for smooth, attached steps. Newton–Krylov
+paths vary, so compare on your case before trusting one count. Neither
+option was run on the 320k SD7003 LM case yet.
+
+[↑ back to top](#recipes)
+
+---
+
+<a id="compile-cache"></a>
+## 17. Avoid recompiling at every start
+
+Compiled kernels are cached on disk, in `~/.cache/pyaeroflow/jax`, so a new
+run, polar angle or refinement cycle with the same mesh and model does not
+compile them again (33k SA case: setup 1.1 s to 0.4 s; larger models and
+the Newton phase gain more). Nothing to switch on. Environment variables:
+
+```
+export PYAEROFLOW_CACHE_DIR=/scratch/pyaeroflow   # other place, e.g. a fast disk
+export PYAEROFLOW_JAX_CACHE=0                     # switch the cache off
+```
+
+An own `JAX_COMPILATION_CACHE_DIR` is respected. The folder grows with
+every new mesh size; delete it any time. A new JAX version starts a fresh
+cache.
 
 [↑ back to top](#recipes)
