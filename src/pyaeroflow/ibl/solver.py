@@ -58,6 +58,9 @@ class IblResult:
     cf: np.ndarray
     turbulent: np.ndarray
     history: list = field(default_factory=list)
+    state: np.ndarray = None  # Newton unknowns (N, 4); airfoil speeds signed
+    stagnation: int = 0  # stagnation-point panel: between nodes a and a + 1
+    inviscid: object = None  # the :class:`.inviscid.Inviscid` operators
 
 
 def _local(u1, u2, x1, x2, g1, g2, kind, nu, nc):
@@ -725,4 +728,7 @@ def analyse(
         cf=cf,
         turbulent=turb.copy(),
         history=history,
+        state=U.copy(),
+        stagnation=int(a),
+        inviscid=inv,
     )

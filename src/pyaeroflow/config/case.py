@@ -709,15 +709,23 @@ def _consistency(data, explicit, problems, notices, path):
                 f"initial.from_boundary = '{src}': must be a farfield or velocity "
                 "inlet boundary"
             )
-    for n in init["potential_flow"] or []:
-        if n not in boundaries:
-            problems.append(_unknown("initial.potential_flow entry", n, boundaries))
-        elif types[n] != "wall":
+    wall = init["boundary_layer"]
+    if wall is not None:
+        if wall not in boundaries:
+            problems.append(_unknown("initial.boundary_layer", wall, boundaries))
+        elif types[wall] != "wall":
             problems.append(
-                f"initial.potential_flow: '{n}' is not a wall (type {types[n]!r})"
+                f"initial.boundary_layer: '{wall}' is not a wall (type {types[wall]!r})"
             )
-    if init["potential_flow"] and init["restart"] is not None:
-        notices.append("initial.potential_flow ignored: the run starts from restart")
+        if compressible:
+            problems.append(
+                "initial.boundary_layer: only for incompressible flow (the "
+                "boundary-layer solution is incompressible)"
+            )
+        if init["restart"] is not None:
+            notices.append(
+                "initial.boundary_layer ignored: the run starts from restart"
+            )
     if init["pressure"] is None:
         init["pressure"] = 0.0
     if compressible and init["velocity"] is not None:

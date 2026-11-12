@@ -187,3 +187,25 @@ def test_naca2412_against_reference():
     assert abs(r.cd - 0.00578) < 0.0001
     assert abs(r.x_transition[0] - 0.526) < 0.005
     assert abs(r.x_transition[1] - 0.966) < 0.01
+
+
+def test_displacement_velocity_flux_equals_source_strength():
+    """The source sheet of a mass defect sends its total strength through a circle."""
+    from pyaeroflow.ibl import inviscid as inv_mod
+
+    inv = inv_mod.build(repanel(naca4("0012", 121), 80), 2.0)
+    n, nw = inv.s.size, inv.wake_s.size
+    rng = np.random.default_rng(1)
+    mass = rng.uniform(0.0, 1e-3, n + nw)
+    sigma = inv_mod._sigma_matrix(inv.s, inv.wake_s) @ mass
+    seg_a, seg_b, val_a, val_b = inv_mod._wake_segments(jnp.asarray(inv.wake), n)
+    length = np.linalg.norm(np.asarray(seg_b) - np.asarray(seg_a), axis=1)
+    total = float(np.sum(sigma[: n - 1] * np.diff(inv.s)))
+    total += float(np.sum(0.5 * (val_a @ sigma + val_b @ sigma) * length))
+    phi = np.linspace(0.0, 2.0 * np.pi, 2001)[:-1]
+    centre = np.array([1.0, 0.0])
+    radius = 20.0
+    normal = np.column_stack((np.cos(phi), np.sin(phi)))
+    v = inv_mod.displacement_velocity(inv, mass, centre + radius * normal)
+    flux = float(np.mean(np.einsum("ij,ij->i", v, normal)) * 2.0 * np.pi * radius)
+    assert flux == pytest.approx(total, rel=1e-3)

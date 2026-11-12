@@ -59,7 +59,6 @@ from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
 from pyaeroflow.physics import lm, rans, rans_sst
 from pyaeroflow.physics import spalart_allmaras as sa
-from pyaeroflow.potential import potential_state
 from pyaeroflow.reload import LIVE_STEADY, LIVE_UNSTEADY, reload_case
 from pyaeroflow.solver import DualTimeSettings, LinearSettings, PseudoTimeSettings
 from pyaeroflow.solver.convergence import CauchyCriterion, WindowedCauchyCriterion
@@ -365,7 +364,7 @@ def setup(config, mesh=None):
         nu_tilde = entry.get("nu_tilde")
         k_omega = (entry["k"], entry["omega"]) if "k" in entry else None
     w0 = problem.initial_state(velocity, pressure, nu_tilde, k_omega)
-    w0 = _potential_start(config, problem, w0, velocity)
+    w0 = _boundary_layer_start(config, problem, w0, velocity)
     if init["restart"] is not None:
         restart = config.resolve_path(init["restart"])
         w0, n_read = load_restart(restart, mesh, w0, flow=problem.flow.FLOW)
@@ -382,21 +381,64 @@ def setup(config, mesh=None):
     return problem, scaling, w0, mesh
 
 
-def _potential_start(config, problem, w0, velocity):
-    """Return the initial state with the flow of ``initial.potential_flow``."""
+def _boundary_layer_start(config, problem, w0, velocity):
+    """Return the initial state from ``initial.boundary_layer``.
+
+    The integral boundary-layer solution of the wall (:mod:`pyaeroflow.ibl`)
+    sets velocity, pressure and, for Spalart-Allmaras, nu_tilde; the uniform
+    state ``w0`` is kept on the problem as the reference of the residual drop.
+    Without a converged boundary-layer solution the run starts from ``w0``.
+    """
+    from pyaeroflow.ibl.field import mesh_ibl_field
+    from pyaeroflow.physics import incompressible as inc_
+
     init = config.data["initial"]
-    if not init["potential_flow"] or init["restart"] is not None:
+    problem.reference_state = None
+    wall = init["boundary_layer"]
+    if wall is None or init["restart"] is not None:
         return w0
-    w0, solution = potential_state(problem, w0, init["potential_flow"], velocity)
-    n_bodies = len(solution.bodies)
-    panels = sum(b.nodes.shape[0] - 1 for b in solution.bodies)
-    circulation = sum(solution.circulation(k) for k in range(n_bodies))
+    model = problem.model
+    transition = problem.turbulent and model.transition != "none"
+    ncrit = init["boundary_layer_ncrit"]
+    if ncrit is None:
+        # a CFD model without transition is turbulent from the leading edge
+        ncrit = 9.0 if transition or not problem.turbulent else 1.0
+    nu = model.viscosity / model.density
+    fully = problem.turbulent and not transition
+    field = None
+    for nc in dict.fromkeys((ncrit, min(ncrit, 1.0))):
+        try:
+            field = mesh_ibl_field(
+                problem.mesh, wall, velocity, nu, ncrit=nc, fully_turbulent=fully
+            )
+            break
+        except RuntimeError as err:
+            config.notices.append(f"initial.boundary_layer, ncrit {nc:g}: {err}")
+    if field is None:
+        config.notices.append(
+            "initial.boundary_layer: no converged boundary-layer solution, the "
+            "run starts from the uniform state"
+        )
+        return w0
+    r = field.result
+    w = np.array(w0, dtype=float)
+    w[:, inc_.P] = w[:, inc_.P] + model.density * field.dynamic
+    w[:, inc_.U] = field.velocity[:, 0]
+    w[:, inc_.V] = field.velocity[:, 1]
+    turbulence = "turbulence values uniform"
+    if problem.turbulent and model.turbulence != "sst":
+        c = problem.turbulence_column
+        w[:, c] = np.maximum(w[:, c], field.eddy_viscosity)
+        turbulence = "nu_tilde from the eddy viscosity of the layers"
+    problem.reference_state = np.asarray(w0)
+    xu, xl = r.x_transition
     config.notices.append(
-        "initial state from the potential flow around "
-        + ", ".join(f"'{n}'" for n in init["potential_flow"])
-        + f" ({panels} panels, circulation {circulation:.4f} in reference units)"
+        f"initial state from the boundary layer of '{wall}' (Re {r.reynolds:.4g}, "
+        f"ncrit {nc:g}: CL {r.cl:.4f}, CD {r.cd:.5f}, transition x/c "
+        f"{xu:.3f} upper, {xl:.3f} lower; {turbulence}); residual drop "
+        "measured from the uniform state"
     )
-    return w0
+    return w
 
 
 # Sutherland's law of air (mu_ref at T_ref, White 2006): used when a compressible
@@ -584,7 +626,6 @@ def _setup_compressible(config, mesh):
         k_omega=k_omega,
         temperature=temperature,
     )
-    w0 = _potential_start(config, problem, w0, velocity)
     if init["restart"] is not None:
         restart = config.resolve_path(init["restart"])
         w0, n_read = load_restart(restart, mesh, w0, flow=comp.FLOW)
@@ -1468,6 +1509,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
             debug=debug_log,
             transition_cfl_max=tr_cfg["cfl_max"],
             whole_cell_relaxation=solver["whole_cell_relaxation"],
+            reference_state=getattr(problem, "reference_state", None),
         )
     else:
         result = problem.solve_explicit(

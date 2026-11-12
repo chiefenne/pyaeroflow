@@ -173,6 +173,79 @@ def _check_strips(nodes):
         )
 
 
+def _wake_segments(w, n):
+    """Linear source segments of the wake and their strengths.
+
+    The distribution is piecewise linear between the wake panel midpoints
+    (value sigma_j) and the nodes (mean of the two neighbouring panels; at
+    the first wake node the sum of the two trailing-edge panel values), with
+    a constant ghost panel beyond the last node. Returns the segment ends
+    (k, 2) and the maps (k, p) from the source parameters to the strength at
+    the start and the end of every segment.
+    """
+    nw = w.shape[0]
+    p_air, p = n - 1, n - 1 + nw - 1
+    mids = 0.5 * (w[:-1] + w[1:])
+    node_val = np.zeros((nw, p))
+    for j in range(nw):
+        left, right = j - 1, j
+        if j == 0:
+            # continuity through the trailing edge: sum of the two last panels
+            node_val[j, 0] = node_val[j, n - 2] = 1.0
+        elif j == nw - 1:
+            node_val[j, p_air + left] = 1.0
+        else:
+            node_val[j, p_air + left] = node_val[j, p_air + right] = 0.5
+    mid_val = np.zeros((nw - 1, p))
+    mid_val[np.arange(nw - 1), p_air + np.arange(nw - 1)] = 1.0
+    seg_a = jnp.concatenate((w[:-1], mids, w[-1:]))
+    seg_b = jnp.concatenate((mids, w[1:], 2.0 * w[-1:] - mids[-1:]))
+    val_a = np.vstack((node_val[:-1], mid_val, node_val[-1:]))
+    val_b = np.vstack((mid_val, node_val[1:], node_val[-1:]))
+    return seg_a, seg_b, val_a, val_b
+
+
+def _sigma_matrix(s, wake_s):
+    """Map (p, n + nw) from the nodal mass defect to the source parameters."""
+    n, nw = s.size, wake_s.size
+    p_air, p = n - 1, n - 1 + nw - 1
+    gmat = np.zeros((p, n + nw))
+    for k in range(n - 1):
+        d = s[k + 1] - s[k]
+        gmat[k, k], gmat[k, k + 1] = -1.0 / d, 1.0 / d
+    for j in range(nw - 1):
+        d = wake_s[j + 1] - wake_s[j]
+        gmat[p_air + j, n + j], gmat[p_air + j, n + j + 1] = -1.0 / d, 1.0 / d
+    return gmat
+
+
+def displacement_velocity(inv, mass, points, chunk=4000):
+    """Velocity (m, 2) of the source sheet of a mass defect at field points.
+
+    ``mass`` (n + nw,) is the nodal mass defect (signed speed times delta* on
+    the airfoil, ue delta* in the wake), as in :attr:`Inviscid.dmat`. The
+    change of the airfoil vorticity it causes is not included: the caller
+    evaluates the vortex sheet of the viscous solution separately.
+    """
+    x = jnp.asarray(inv.body.nodes)
+    n = x.shape[0]
+    sigma = _sigma_matrix(inv.s, inv.wake_s) @ np.asarray(mass, dtype=float)
+    seg_a, seg_b, val_a, val_b = _wake_segments(jnp.asarray(inv.wake), n)
+    sig_air = jnp.asarray(sigma[: n - 1])
+    sa, sb = jnp.asarray(val_a @ sigma), jnp.asarray(val_b @ sigma)
+    pts = np.asarray(points, dtype=float)
+    out = np.empty_like(pts)
+    for start in range(0, pts.shape[0], chunk):
+        q = jnp.asarray(pts[start : start + chunk])
+        cv = sources.constant_velocity(q, x[:-1], x[1:])
+        v = jnp.einsum("mnk,n->mk", cv, sig_air)
+        lv = sources.linear_velocity(q, seg_a, seg_b)
+        v = v + jnp.einsum("mnk,n->mk", lv[..., 0, :], sa)
+        v = v + jnp.einsum("mnk,n->mk", lv[..., 1, :], sb)
+        out[start : start + chunk] = np.asarray(v)
+    return out
+
+
 def build(nodes, alpha_deg=0.0, wake_length=1.0, wake_count=None):
     """Prepare the inviscid operators of an airfoil contour.
 
@@ -222,23 +295,7 @@ def build(nodes, alpha_deg=0.0, wake_length=1.0, wake_count=None):
     p_air, p = n - 1, n - 1 + nw - 1
     w = jnp.asarray(wake)
     pts = jnp.asarray(x)
-    mids = 0.5 * (w[:-1] + w[1:])
-    node_val = np.zeros((nw, p))
-    for j in range(nw):
-        left, right = j - 1, j
-        if j == 0:
-            # continuity through the trailing edge: sum of the two last panels
-            node_val[j, 0] = node_val[j, n - 2] = 1.0
-        elif j == nw - 1:
-            node_val[j, p_air + left] = 1.0
-        else:
-            node_val[j, p_air + left] = node_val[j, p_air + right] = 0.5
-    mid_val = np.zeros((nw - 1, p))
-    mid_val[np.arange(nw - 1), p_air + np.arange(nw - 1)] = 1.0
-    seg_a = jnp.concatenate((w[:-1], mids, w[-1:]))
-    seg_b = jnp.concatenate((mids, w[1:], 2.0 * w[-1:] - mids[-1:]))
-    val_a = np.vstack((node_val[:-1], mid_val, node_val[-1:]))
-    val_b = np.vstack((mid_val, node_val[1:], node_val[-1:]))
+    seg_a, seg_b, val_a, val_b = _wake_segments(w, n)
     # In the airfoil boundary condition the first half panel starts from zero
     # strength (the trailing-edge panels themselves are next to it).
     val_a_psi = val_a.copy()
@@ -268,15 +325,7 @@ def build(nodes, alpha_deg=0.0, wake_length=1.0, wake_count=None):
     dw = vg @ dgamma + vsig
 
     # sigma from the nodal mass defect
-    sw = np.concatenate((s, s[-1] + 1.0 + wake_s))  # wake block is separate
-    gmat = np.zeros((p, n + nw))
-    for k in range(n - 1):
-        d = s[k + 1] - s[k]
-        gmat[k, k], gmat[k, k + 1] = -1.0 / d, 1.0 / d
-    for j in range(nw - 1):
-        d = wake_s[j + 1] - wake_s[j]
-        gmat[p_air + j, n + j], gmat[p_air + j, n + j + 1] = -1.0 / d, 1.0 / d
-    del sw
+    gmat = _sigma_matrix(s, wake_s)
     dmat = np.vstack((-dgamma, dw)) @ gmat
 
     slope_u = (x[0, 1] - x[1, 1]) / (x[0, 0] - x[1, 0]) if x[0, 0] != x[1, 0] else 0.0
