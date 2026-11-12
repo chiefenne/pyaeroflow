@@ -18,6 +18,7 @@ Case files are in `examples/cases/`, meshes in `examples/meshes/`
 | 5 | [Jet in crossflow over a flat plate](#jet-crossflow) | incompressible, steady | laminar |
 | 6 | [Oblique shock on a Mach 2 compression ramp](#ramp) | compressible, steady | Euler |
 | 7 | [Refinement band around a NACA 0012](#band) | incompressible, steady | SA-neg |
+| 8 | [Airfoil polar in minutes with the viscous panel method](#foil) | incompressible, steady | panels + integral boundary layer |
 
 ---
 
@@ -250,5 +251,46 @@ pyaeroflow plot output/naca0012_sa_a10_band/cycle_0/naca0012_sa_a10_band_cycle_0
 In ParaView colour the `.band.vtu` by `factor_u` (split factor along the
 wall) or `band_distance`; Surface With Edges shows the cells. How to set up a
 band on your own mesh: [recipe 10](recipes.md#band).
+
+[↑ back to top](#example-gallery)
+
+---
+
+<a id="foil"></a>
+## 8. Airfoil polar in minutes with the viscous panel method
+
+![E387 polar from pyaeroflow foil against NASA TM 4062, Penn State and XFOIL](figures/ibl_e387_polar.png)
+
+`pyaeroflow foil` needs no mesh. It couples a panel method to an
+integral boundary layer with e^N transition and gives a polar with the
+transition locations, at a few seconds per angle after the first one. Above:
+the Eppler 387 at Re = 2·10⁵, α −2° to 10°, against two wind tunnels and
+XFOIL. Below: C_p, C_f and the shape factor at α = 4°, where the laminar
+layer separates at x/c ≈ 0.45 and transitions at 0.60, inside the measured
+oil-flow bubble (grey).
+
+![E387 at alpha 4 deg: Cp, Cf and shape factor](figures/ibl_e387_a4_cp_cf.png)
+
+The same solution starts a CFD run (`initial.boundary_layer`): outer flow,
+boundary layers, wake defect and eddy viscosity mapped onto the mesh. Here it
+is on the NACA 0012 TMR grid, Re = 6·10⁶, α = 10°:
+
+![Boundary-layer start field around a NACA 0012](figures/ibl_naca0012_field.png)
+
+| | |
+|---|---|
+| Geometry | `examples/airfoils/e387.dat` (200 panel nodes); field: `naca0012_tmr_225x65.su2` |
+| Flow | Re = 2·10⁵, N_crit 8.15 (Tu 0.1 %); field Re = 6·10⁶, α = 10°, N_crit 9 |
+| Validation | [§18 Viscous panel method](validation.md#sec-18) |
+
+```
+pyaeroflow foil examples/airfoils/e387.dat --re 2e5 --ncrit 8.15 --alpha -2 -1 0 2 4 5 7 8 10 --cp --max-iterations 200
+python examples/ibl_validation.py        # all figures of this entry and §18, plus the field VTU
+```
+
+The first command writes `e387_Re2e+05.polar.csv` and, with `--cp`, one wall
+file per angle. The script writes everything to `examples/output/ibl/`. Open
+`naca0012_ibl_field.vtu` in ParaView and colour by `velocity` or
+`nu_t_over_nu`. Recipe: [estimate an airfoil before meshing](recipes.md#foil).
 
 [↑ back to top](#example-gallery)

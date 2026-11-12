@@ -209,3 +209,18 @@ def test_displacement_velocity_flux_equals_source_strength():
     v = inv_mod.displacement_velocity(inv, mass, centre + radius * normal)
     flux = float(np.mean(np.einsum("ij,ij->i", v, normal)) * 2.0 * np.pi * radius)
     assert flux == pytest.approx(total, rel=1e-3)
+
+
+def test_foil_cli_max_iterations_option():
+    import argparse
+
+    from pyaeroflow.ibl.cli import add_parser
+
+    sub = argparse.ArgumentParser().add_subparsers()
+    p = add_parser(sub)
+    args = p.parse_args(["naca0012", "--alpha", "-1", "2", "--re", "1e6"])
+    assert args.max_iterations == 60 and args.alpha == [-1.0, 2.0]
+    args = p.parse_args(
+        ["e387.dat", "--alpha", "6", "--re", "2e5", "--max-iterations", "200"]
+    )
+    assert args.max_iterations == 200

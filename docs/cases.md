@@ -110,3 +110,6 @@ Validation sections are in [Validation](validation.md), pictures in the
 finished runs with measurements; `make_meshes.py` and `make_plate_lm.py`
 write the library meshes next to the case files (the same meshes as
 `pyaeroflow make-mesh`).
+
+Airfoil coordinate files for `pyaeroflow foil` are in `examples/airfoils/`
+(E387, SD7003; validation §18).

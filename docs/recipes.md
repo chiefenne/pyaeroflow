@@ -385,7 +385,13 @@ angles have a laminar bubble, before building a mesh. It is an estimate
 for attached and mildly separated flow, not a replacement for the CFD
 solution. NACA 2412, Re 10⁶, α 2: CL 0.452, CD 0.00578. The first angle
 takes about 45 s (compilation, see [recipe 17](#compile-cache)), the next
-ones a few seconds.
+ones a few seconds. Checks against mfoil, the E387 wind-tunnel data and
+XFOIL: [validation §18](validation.md#sec-18); picture:
+[gallery 8](gallery.md#foil). An angle marked `NO` did not converge in the
+Newton steps allowed (`--max-iterations`, default 60), most often near a
+jump of the transition point; `--max-iterations 200` converges most of them
+(E387 α −1° and 7° need 69 and 84), otherwise change α by a fraction of a
+degree.
 
 [↑ back to top](#recipes)
 

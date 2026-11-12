@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Validation of the viscous panel method `pyaeroflow foil` (validation §18):
+  code-to-code against a corrected mfoil on the same nodes (C_L within
+  3·10⁻⁴, C_D within 0.1 %), the Eppler 387 polar at Re 2·10⁵ against NASA TM
+  4062, Penn State 2007 and XFOIL, and the SD7003 polar at Re 6·10⁴ against
+  XFOIL and the CFD polars. Gallery entry 8 shows the E387 polar, C_p, C_f and
+  H at α 4°, and the boundary-layer start field on a NACA 0012 mesh (VTU).
+  New script `examples/ibl_validation.py`, coordinates in `examples/airfoils/`.
+- `pyaeroflow foil --max-iterations N`: Newton steps per angle (default 60).
+  200 converges the E387 angles at Re 2·10⁵ where the transition point moves
+  quickly (α −1° and 7°).
+
 ## 1.7.0 – case templates, mesh library, polar predictor and compile cache (2026-11-12)
 
 - `naca0012_rans.toml` (example case and `naca0012-sa` template) converges again:

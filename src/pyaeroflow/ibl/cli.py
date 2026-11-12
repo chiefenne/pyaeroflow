@@ -21,6 +21,12 @@ def add_parser(sub):
     p.add_argument(
         "--panels", type=int, default=200, help="number of panel nodes (200)"
     )
+    p.add_argument(
+        "--max-iterations",
+        type=int,
+        default=60,
+        help="Newton steps per angle (60); 200 helps near a transition jump",
+    )
     p.add_argument("--output", help="polar CSV (default <airfoil>_Re<re>.polar.csv)")
     p.add_argument(
         "--cp", action="store_true", help="also write <output>_a<alpha>.wall.csv"
@@ -53,7 +59,13 @@ def run(args):
     )
     ok = True
     for alpha in args.alpha:
-        r = analyse(nodes, alpha, args.re, ncrit=args.ncrit)
+        r = analyse(
+            nodes,
+            alpha,
+            args.re,
+            ncrit=args.ncrit,
+            max_iterations=args.max_iterations,
+        )
         ok &= r.converged
         xu, xl = r.x_transition
         rows.append(
