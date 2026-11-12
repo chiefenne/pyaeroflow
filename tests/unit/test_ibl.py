@@ -282,3 +282,49 @@ def test_e387_alpha6_single_case_and_warm_start():
     warm = analyse(nodes, 6.0, 2e5, ncrit=8.15, initial=r5)
     assert warm.converged and warm.start == "warm"
     assert abs(warm.cl - r.cl) < 1e-6 and abs(warm.cd - r.cd) < 1e-7
+
+
+@pytest.mark.parametrize("alpha", [2.0, 8.0])
+def test_block_newton_step_equals_dense_step(alpha):
+    """Block elimination gives the Newton step of the dense 4N x 4N Jacobian."""
+    from pyaeroflow.ibl import solver
+
+    nodes = repanel(naca4("2412", 121), 100)
+    r = solver.analyse(nodes, alpha, 1e6, max_iterations=3, continuation=False)
+    system = solver._System(r.inviscid, 1e6, 9.0)
+    U, a, turb = r.state, r.stagnation, r.turbulent
+    kind, prev, sgn = system.kinds(a, turb)
+    vinv, winv = r.inviscid.speeds(alpha)
+    args = tuple(
+        jnp.asarray(t) if not isinstance(t, int) else t
+        for t in (kind, prev, sgn, a, turb, vinv, winv)
+    )
+    R = np.asarray(system._residual(jnp.asarray(U), *args))
+    J = system.jacobian(U, kind, prev, sgn, a, turb)
+    dense = np.linalg.solve(J, -R).reshape(-1, 4)
+    R2, block = system.step(jnp.asarray(U), *args)
+    assert np.abs(R2 - R).max() < 1e-14
+    assert np.abs(block - dense).max() < 1e-10 * np.abs(dense).max()
+    # the transition march as in the Python reference loop
+    xi = solver._arc_length(system, U, a)
+    for nodes_, (m, amp) in zip(
+        system.surfaces(a)[:2],
+        solver._march_sides(system, U, xi, system.surfaces(a)[:2]),
+        strict=True,
+    ):
+        ncur = 0.0
+        for k in range(1, len(nodes_)):
+            i, p = nodes_[k], nodes_[k - 1]
+            rate = solver._amplification_jit
+            r1 = float(rate(U[p, 0], U[p, 1], ncur, abs(U[p, 3]), system.nu, 9.0))
+            n2 = ncur
+            for _ in range(4):
+                r2 = float(rate(U[i, 0], U[i, 1], n2, abs(U[i, 3]), system.nu, 9.0))
+                n2 = ncur + 0.5 * (r1 + r2) * (xi[i] - xi[p])
+            if n2 > 9.0:
+                assert m == k
+                break
+            assert amp[i] == pytest.approx(n2, rel=1e-12, abs=1e-12)
+            ncur = n2
+        else:
+            assert m is None
