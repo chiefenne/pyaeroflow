@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Mesh library (`pyaeroflow.mesh.library`) and `pyaeroflow make-mesh NAME [-o
+  FILE] [--set KEY=VALUE ...]` (`--list` shows the names): channel, cavity,
+  cylinder O-grid, TMR plate, Langtry-Menter plate, ramp, NACA 0012 O-grids
+  (RANS, Euler, laminar shedding) and the jet in crossflow are built from
+  parameters, so the cases that use them run after a plain `pip install`
+  (checked with a wheel built and installed in a clean virtual environment).
+  `examples/cases/make_meshes.py` and the jet, plate and shedding scripts are
+  thin wrappers; the meshes are identical to the earlier ones.
 - Persistent XLA compilation cache: compiled kernels are kept in
   `~/.cache/pyaeroflow/jax` (`PYAEROFLOW_CACHE_DIR` moves it,
   `PYAEROFLOW_JAX_CACHE=0` switches it off, an own `JAX_COMPILATION_CACHE_DIR`

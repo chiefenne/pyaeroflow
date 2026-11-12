@@ -119,9 +119,25 @@ def main(argv=None):
     from pyaeroflow.ibl.cli import add_parser as add_foil
 
     add_foil(sub)
+    mm = sub.add_parser(
+        "make-mesh",
+        help="write a mesh of the library (no input file needed); --list shows them",
+    )
+    mm.add_argument("name", nargs="?", help="library mesh, e.g. jet-crossflow")
+    mm.add_argument("-o", "--output", help="SU2 file (default <name>.su2)")
+    mm.add_argument(
+        "--set",
+        nargs="+",
+        default=[],
+        metavar="KEY=VALUE",
+        help="builder parameters, e.g. nx_plate=200 reynolds=5e6",
+    )
+    mm.add_argument("--list", action="store_true", help="list the library meshes")
     args = parser.parse_args(argv)
 
     try:
+        if args.command == "make-mesh":
+            return _make_mesh(args)
         if args.command == "check":
             config = load_case(args.case)
             print(config.to_toml())
@@ -275,3 +291,31 @@ def _size(n):
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def _make_mesh(args):
+    """``pyaeroflow make-mesh``: write a library mesh to an SU2 file."""
+    from pyaeroflow.mesh import write_su2
+    from pyaeroflow.mesh.library import LIBRARY, build
+
+    if args.list or not args.name:
+        width = max(len(n) for n in LIBRARY)
+        for name, (_, text) in sorted(LIBRARY.items()):
+            print(f"{name:<{width}}  {text}")
+        return 0
+    parameters = {}
+    for item in args.set:
+        key, sep, value = item.partition("=")
+        if not sep:
+            raise ValueError(f"--set expects KEY=VALUE, got '{item}'")
+        for kind in (int, float, str):
+            try:
+                parameters[key] = kind(value)
+                break
+            except ValueError:
+                continue
+    mesh = build(args.name, **parameters)
+    out = args.output or f"{args.name}.su2"
+    write_su2(out, mesh)
+    print(f"{out}: {mesh.n_cells} cells, boundaries {sorted(mesh.boundary_faces)}")
+    return 0
