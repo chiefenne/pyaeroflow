@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.7.1 – foil validation, continuation, warm start and speed (2026-11-12)
 
 - Validation of the viscous panel method `pyaeroflow foil` (validation §18):
   code-to-code against a corrected mfoil on the same nodes (C_L within
