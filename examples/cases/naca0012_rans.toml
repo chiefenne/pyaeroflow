@@ -38,11 +38,11 @@ turbulence = { nu_tilde_ratio = 3.0 }
 
 [numerics]
 limiter = "venkatakrishnan"       # local threshold: stable in thin wall cells on curved walls
-limiter_freeze = { after_residual_drop = 1.5, after_iterations = 40, release = true }   # unlimited after the start-up (D54)
+limiter_freeze = { after_residual_drop = 1.5, after_iterations = 40, release = false }  # stays frozen: releasing it stalls this 33k grid at 4.5 orders
 
 [solver]
 residual_drop = 7.0
-max_iterations = 400
+max_iterations = 700
 newton_krylov = { switch_at_residual_drop = 1.5, switch_at_iteration = 40 }
 
 [output]
