@@ -1166,8 +1166,8 @@ against two wind tunnels and XFOIL, and the SD7003 polar against XFOIL and
 the CFD polars of §9 and §10.
 
 `python examples/ibl_validation.py` runs the polars and the field of
-§18.4 and draws the figures (about 10 min on 4 cores; the first angle
-compiles). Coordinates: `examples/airfoils/e387.dat` and `sd7003.dat` (the
+§18.4 and draws the figures (about 3 min on 4 cores, most of it the field of
+§18.4 and the first angle, which compiles). Coordinates: `examples/airfoils/e387.dat` and `sd7003.dat` (the
 PyAero airfoil library), repanelled to 200 nodes, sharp trailing edge. The
 script allows 200 Newton steps per angle (`pyaeroflow foil
 --max-iterations 200`; the default is 60, see the limits below).

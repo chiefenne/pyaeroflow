@@ -263,7 +263,7 @@ band on your own mesh: [recipe 10](recipes.md#band).
 
 `pyaeroflow foil` needs no mesh. It couples a panel method to an
 integral boundary layer with e^N transition and gives a polar with the
-transition locations, at a few seconds per angle after the first one. Above:
+transition locations, at about a second per angle after the first one. Above:
 the Eppler 387 at Re = 2·10⁵, α −2° to 10°, against two wind tunnels and
 XFOIL. Below: C_p, C_f and the shape factor at α = 4°, where the laminar
 layer separates at x/c ≈ 0.45 and transitions at 0.60, inside the measured

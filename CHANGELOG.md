@@ -9,6 +9,11 @@
   XFOIL and the CFD polars. Gallery entry 8 shows the E387 polar, C_p, C_f and
   H at α 4°, and the boundary-layer start field on a NACA 0012 mesh (VTU).
   New script `examples/ibl_validation.py`, coordinates in `examples/airfoils/`.
+- `pyaeroflow foil` is 4 to 6 times faster: the transition march calls a
+  compiled amplification rate (eager JAX dispatch took 80 % of the time),
+  and the panel velocity kernels compile once per airfoil instead of once
+  per angle. E387 polar, 11 angles: 178 s before, 41 s after (about 0.9 s
+  per converged angle after the first); results unchanged.
 - `pyaeroflow foil --max-iterations N`: Newton steps per angle (default 60).
   200 converges the E387 angles at Re 2·10⁵ where the transition point moves
   quickly (α −1° and 7°).

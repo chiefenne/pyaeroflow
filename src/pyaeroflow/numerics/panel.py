@@ -307,16 +307,48 @@ def stream_function(solution, points):
     return np.asarray(f(jnp.asarray(points, dtype=float)))
 
 
+_VELOCITY_KERNELS = {}
+
+
+def _velocity_kernel(bodies):
+    """Compiled grad(psi) at points for one geometry, cached across solutions.
+
+    The geometry is baked in (the base-panel factors use NumPy); gamma and the
+    freestream are arguments, so a polar compiles once per airfoil instead of
+    once per angle.
+    """
+    key = tuple(
+        (np.asarray(b.nodes).shape, np.asarray(b.nodes).tobytes(), bool(b.blunt))
+        for b in bodies
+    )
+    kernel = _VELOCITY_KERNELS.get(key)
+    if kernel is None:
+
+        def psi(p, gamma, vinf):
+            out = vinf[0] * p[1] - vinf[1] * p[0]
+            for body, g in zip(bodies, gamma, strict=True):
+                out = out + (_influence(p[None, :], body) @ g)[0]
+            return out
+
+        kernel = jax.jit(jax.vmap(jax.grad(psi), in_axes=(0, None, None)))
+        if len(_VELOCITY_KERNELS) >= 16:
+            _VELOCITY_KERNELS.clear()
+        _VELOCITY_KERNELS[key] = kernel
+    return kernel
+
+
 def velocity(solution, points, chunk=20000):
     """Velocity (u, v) at points (m, 2) outside the bodies.
 
     Evaluated in chunks of ``chunk`` points: the work is points x panels.
     """
-    grad = jax.jit(jax.vmap(jax.grad(lambda p: _stream_function(p, solution))))
+    grad = _velocity_kernel(tuple(solution.bodies))
+    gamma = tuple(jnp.asarray(g, dtype=float) for g in solution.gamma)
+    vinf = jnp.asarray(solution.velocity, dtype=float)
     pts = np.asarray(points, dtype=float)
     out = np.empty_like(pts)
     for start in range(0, pts.shape[0], chunk):
-        g = np.asarray(grad(jnp.asarray(pts[start : start + chunk])))
+        g = np.asarray(grad(jnp.asarray(pts[start : start + chunk]), gamma, vinf))
         out[start : start + chunk, 0] = g[:, 1]
         out[start : start + chunk, 1] = -g[:, 0]
     return out

@@ -124,6 +124,10 @@ def _residual(U, kind, prev, sgn, a, turbf, vinv, winv, geo):
 
 # Compiled once per process (per problem size), shared by all analyses.
 _residual_jit = jax.jit(_residual)
+# scalar closures called from the Python loops (transition march, start-up):
+# compiled once, eager JAX dispatch would cost about 1 ms per call
+_amplification_jit = jax.jit(cl.amplification_rate)
+_ctau_transition_jit = jax.jit(cl.ctau_transition)
 _unpack_jit = jax.jit(_unpack)
 _local_jac_jit = jax.jit(
     jax.vmap(
@@ -388,7 +392,7 @@ def _initial_state(system, vinv, winv):
             u2 = U[p].copy()
             u2[3] = ue[i]
             if tran:
-                u2[2] = float(cl.ctau_transition(u2[0], u2[1], u2[3], nu))
+                u2[2] = float(_ctau_transition_jit(u2[0], u2[1], u2[3], nu))
             hmax = 2.5 if kind == TURB else 3.8
             u2, ok = _solve_station(
                 system, kind, U[p], u2, xi[p], xi[i], 0.0, 0.0, hmax
@@ -407,8 +411,8 @@ def _initial_state(system, vinv, winv):
             m += 1
     # wake
     uu, ul = U[0], U[n - 1]
-    cu = uu[2] if turb[0] else float(cl.ctau_transition(uu[0], uu[1], uu[3], nu))
-    cw = ul[2] if turb[n - 1] else float(cl.ctau_transition(ul[0], ul[1], ul[3], nu))
+    cu = uu[2] if turb[0] else float(_ctau_transition_jit(uu[0], uu[1], uu[3], nu))
+    cw = ul[2] if turb[n - 1] else float(_ctau_transition_jit(ul[0], ul[1], ul[3], nu))
     U[n] = [
         uu[0] + ul[0],
         uu[1] + ul[1] + inv.gap,
@@ -441,10 +445,10 @@ def _march_amplification(system, U, xi, nodes):
         i, p = nodes[m], nodes[m - 1]
         th1, ds1, ue1 = U[p, 0], U[p, 1], abs(U[p, 3])
         th2, ds2, ue2 = U[i, 0], U[i, 1], abs(U[i, 3])
-        r1 = float(cl.amplification_rate(th1, ds1, ncur, ue1, nu, nc))
+        r1 = float(_amplification_jit(th1, ds1, ncur, ue1, nu, nc))
         n2 = ncur
         for _ in range(4):
-            r2 = float(cl.amplification_rate(th2, ds2, n2, ue2, nu, nc))
+            r2 = float(_amplification_jit(th2, ds2, n2, ue2, nu, nc))
             n2 = ncur + 0.5 * (r1 + r2) * (xi[i] - xi[p])
         if n2 > nc:
             return m, out
@@ -474,7 +478,9 @@ def _update_transition(system, U, a, turb, xi, step_limit=True):
             for m in range(new, old):
                 i = nodes[m]
                 turb[i] = True
-                U[i, 2] = float(cl.ctau_transition(U[i, 0], U[i, 1], abs(U[i, 3]), nu))
+                U[i, 2] = float(
+                    _ctau_transition_jit(U[i, 0], U[i, 1], abs(U[i, 3]), nu)
+                )
         else:
             for m in range(old, new):
                 i = nodes[m]
