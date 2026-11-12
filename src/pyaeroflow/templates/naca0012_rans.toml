@@ -1,0 +1,50 @@
+# R2: NACA 0012 at Re = 6e6 (NASA TMR 2DN00 case), alpha = 10 deg, SA-neg.
+# O-grid with a farfield at 500 chords (no vortex correction). TMR (SA, CFL3D,
+# M = 0.15, 897x257 grid): CL = 1.0909, CD = 0.012311 (CDp 0.00606, CDv 0.00620).
+# A PyAero mesh can replace the generated one: boundary faces "airfoil" and
+# "farfield".
+
+[case]
+name = "naca0012_rans"
+
+[mesh]
+file = "naca0012_ogrid_256x128.su2"   # boundary faces: airfoil, farfield
+
+[physics]
+model = "rans"
+turbulence = "sa-neg"
+
+[fluid]
+density = 1.0                     # kg/m^3
+reynolds_number = 6.0e6           # with U_ref = 1 m/s and L_ref = 1 m (chord)
+
+[reference]
+velocity = 1.0                    # m/s
+length = 1.0                      # m, chord
+moment_center = [0.25, 0.0]       # m, quarter chord
+
+[initial]
+from_boundary = "farfield"
+
+[boundary.airfoil]
+type = "wall"
+
+[boundary.farfield]
+type = "farfield"
+velocity = 1.0                    # m/s
+angle_of_attack = 10.0            # deg
+pressure = 0.0                    # Pa
+turbulence = { nu_tilde_ratio = 3.0 }
+
+[numerics]
+limiter = "venkatakrishnan"       # local threshold: stable in thin wall cells on curved walls
+limiter_freeze = { after_residual_drop = 1.5, after_iterations = 40, release = true }   # unlimited after the start-up (D54)
+
+[solver]
+residual_drop = 7.0
+max_iterations = 400
+newton_krylov = { switch_at_residual_drop = 1.5, switch_at_iteration = 40 }
+
+[output]
+directory = "output/naca0012_rans"
+force_boundaries = ["airfoil"]

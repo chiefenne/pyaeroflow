@@ -1,0 +1,52 @@
+# Impulsively started Couette flow: the upper wall starts moving at t = 0 and
+# the linear profile develops by diffusion (time scale H^2 / nu = 10 s).
+# Exact solution: u / U = y/H + (2/pi) sum_n (-1)^n / n exp(-n^2 pi^2 nu t / H^2)
+# sin(n pi y / H). Unsteady run with dual time stepping (BDF2).
+
+[case]
+name = "couette_unsteady"
+
+[mesh]
+file = "channel_quad_32x16.su2"   # boundary faces: bottom, right, top, left
+
+[physics]
+model = "laminar"
+
+[fluid]
+density = 1.0                     # kg/m^3
+viscosity = 0.1                   # Pa s
+
+[reference]
+velocity = 1.0                    # m/s, wall velocity
+length = 1.0                      # m, channel height
+
+[initial]
+velocity = [0.0, 0.0]             # fluid at rest
+pressure = 0.0
+
+[boundary.top]
+type = "wall"
+velocity = [1.0, 0.0]             # m/s, starts at t = 0
+
+[boundary.bottom]
+type = "wall"
+
+[boundary.left]
+type = "periodic"
+partner = "right"
+translation = [2.0, 0.0]          # m
+
+[numerics]
+limiter = "none"
+
+[time]
+mode = "unsteady"
+scheme = "bdf2"                   # first step BDF1
+time_step = 0.05                  # s
+end_time = 2.0                    # s
+inner_residual_drop = 3.0         # orders per time step
+inner_iterations = 50             # limit per time step
+
+[output]
+directory = "output/couette_unsteady"
+interval = 5                      # fields every 5 time steps -> .pvd series

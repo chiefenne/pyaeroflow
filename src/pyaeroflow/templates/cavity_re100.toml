@@ -1,0 +1,46 @@
+# B3: lid-driven cavity, Re = 100 (Ghia, Ghia & Shin 1982).
+# Unit square, lid velocity 1 m/s. The viscosity follows from the Reynolds
+# number with the reference velocity and length.
+
+[case]
+name = "cavity_re100"
+
+[mesh]
+file = "cavity_quad_64.su2"       # boundary faces: bottom, right, top, left
+
+[physics]
+model = "laminar"
+
+[fluid]
+density = 1.0                     # kg/m^3
+reynolds_number = 100.0           # Re = rho U_ref L_ref / mu
+
+[reference]
+velocity = 1.0                    # m/s, lid velocity
+length = 1.0                      # m, cavity size
+
+[initial]
+velocity = [0.0, 0.0]
+pressure = 0.0
+
+[boundary.top]
+type = "wall"
+velocity = [1.0, 0.0]             # m/s, the lid
+
+[boundary.bottom]
+type = "wall"
+
+[boundary.left]
+type = "wall"
+
+[boundary.right]
+type = "wall"
+
+[numerics]
+limiter = "none"                  # smooth flow: unlimited second order
+
+[solver]
+residual_drop = 9.0
+
+[output]
+directory = "output/cavity_re100"

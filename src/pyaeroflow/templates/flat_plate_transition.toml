@@ -1,0 +1,64 @@
+# Transitional flat plate with the BCM model (L3, step 1): Re = 5e5 per
+# metre, plate from x = 0 to 2 m, Tu = 3.3 % as in the ERCOFTAC T3A case.
+# Expected: laminar (Blasius) to Re_x = 1e5, transition to 2.5e5, turbulent
+# Cf downstream; T3A transitions between Re_x = 1.4e5 and 3e5. With
+# turbulence_intensity = 0.001 the plate stays laminar (Re_x < 1e6).
+# The freestream nu_tilde must be laminar (nu_tilde/nu = 0.1), see
+# docs/pyaero.md section 7.1. Summary: transition 'plate' upper x = ... m.
+
+[case]
+name = "flat_plate_transition"
+
+[mesh]
+file = "plate_transition_96x64.su2"   # boundary faces: left, right, top, symmetry, plate
+
+[physics]
+model = "rans"
+turbulence = "sa-neg"
+
+[physics.transition]
+model = "bcm"
+turbulence_intensity = 0.033      # fraction: 3.3 % (T3A); 0.001 keeps the plate laminar
+
+[fluid]
+density = 1.0                     # kg/m^3
+viscosity = 2.0e-6                # Pa s: Re = 5e5 per metre of plate (U = 1 m/s)
+
+[reference]
+velocity = 1.0                    # m/s
+length = 2.0                      # m, plate length: CD uses q L
+moment_center = [0.0, 0.0]
+
+[initial]
+from_boundary = "left"
+
+[boundary.left]
+type = "velocity-inlet"
+velocity = [1.0, 0.0]             # m/s
+turbulence = { nu_tilde_ratio = 0.1 }   # laminar freestream for the BCM model
+
+[boundary.right]
+type = "pressure-outlet"
+pressure = 0.0
+
+[boundary.top]
+type = "farfield"
+velocity = 1.0
+turbulence = { nu_tilde_ratio = 0.1 }
+
+[boundary.symmetry]
+type = "symmetry"
+
+[boundary.plate]
+type = "wall"
+
+[numerics]
+limiter = "none"                  # smooth flow; the VW limiter without release stalls
+turbulence_spatial_order = 1
+
+[solver]
+residual_drop = 8.0
+
+[output]
+directory = "output/flat_plate_transition"
+force_boundaries = ["plate"]

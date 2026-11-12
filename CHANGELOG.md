@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Case templates: `pyaeroflow templates` lists 18 templates (channel, cavity,
+  flat plates SA/BCM/LM, jet in crossflow, cylinder, NACA 0012 shedding, SA
+  and Euler, Mach 2 ramp, and `airfoil` for an own mesh); `pyaeroflow init
+  NAME [-o FOLDER] [--name CASE]` writes the case file and builds its mesh,
+  also after a plain `pip install` (the case files are packaged; a test keeps
+  them equal to `examples/cases`). `init airfoil --mesh FILE` is
+  `init-case`, which stays; both gain `--band [D ...]` (refinement band, in
+  chords) and `--boundary-layer-start` (`initial.boundary_layer`).
 - Mesh library (`pyaeroflow.mesh.library`) and `pyaeroflow make-mesh NAME [-o
   FILE] [--set KEY=VALUE ...]` (`--list` shows the names): channel, cavity,
   cylinder O-grid, TMR plate, Langtry-Menter plate, ramp, NACA 0012 O-grids

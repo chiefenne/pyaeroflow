@@ -1,0 +1,42 @@
+# V2: plane Poiseuille flow. Channel of height H = 1 m, periodic in x, driven
+# by the mean pressure gradient dp/dx = -1 Pa/m. Exact solution
+# u = G/(2 mu) y (H - y) with G = 1 Pa/m: u_max = 1.25 m/s for mu = 0.1 Pa s.
+
+[case]
+name = "poiseuille"
+
+[mesh]
+file = "channel_tri_32x16.su2"    # perturbed triangles
+
+[physics]
+model = "laminar"
+mean_pressure_gradient = [-1.0, 0.0]   # Pa/m, drives the periodic flow
+
+[fluid]
+density = 1.0                     # kg/m^3
+viscosity = 0.1                   # Pa s
+
+[reference]
+velocity = 1.0                    # m/s, order of the expected velocity
+length = 1.0                      # m, channel height
+
+[initial]
+velocity = [0.0, 0.0]
+pressure = 0.0
+
+[boundary.bottom]
+type = "wall"
+
+[boundary.top]
+type = "wall"
+
+[boundary.left]
+type = "periodic"
+partner = "right"
+translation = [2.0, 0.0]
+
+[solver]
+residual_drop = 10.0
+
+[output]
+directory = "output/poiseuille"

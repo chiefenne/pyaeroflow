@@ -1,0 +1,62 @@
+# ERCOFTAC T3B flat plate, SST-2003m-LM2009 (Langtry-Menter).
+# Mesh: python examples/cases/make_plate_lm.py (writes plate_lm_120x56.su2 next to it).
+# Results and reference: docs/validation.md section 10.
+# Re = 3.438e5 per metre (U = 1), inlet 0.1 m upstream of the leading edge.
+# Inlet Tu 4.49 %, mu_t/mu 12.2: fitted to the measured freestream decay
+# (Tu 3.04 % at x = 45 mm, 1.10 % at 1.495 m).
+[case]
+name = "lm_t3b"
+
+[mesh]
+file = "plate_lm_120x56.su2"   # boundary faces: left, right, top, symmetry, plate
+
+[physics]
+model = "rans"
+turbulence = "sst"
+
+[physics.transition]
+model = "lm"
+
+[fluid]
+density = 1.0
+viscosity = 1.5623e-6             # 1 / 6.401e5
+
+[reference]
+velocity = 1.0
+length = 1.0
+moment_center = [0.0, 0.0]
+
+[initial]
+from_boundary = "left"
+
+[boundary.left]
+type = "velocity-inlet"
+velocity = [1.0, 0.0]
+turbulence = { intensity = 0.0741, turbulent_viscosity_ratio = 100.5 }
+
+[boundary.right]
+type = "pressure-outlet"
+pressure = 0.0
+
+[boundary.top]
+type = "farfield"
+velocity = 1.0
+turbulence = { intensity = 0.0741, turbulent_viscosity_ratio = 100.5 }
+
+[boundary.symmetry]
+type = "symmetry"
+
+[boundary.plate]
+type = "wall"
+
+[numerics]
+limiter = "none"
+turbulence_spatial_order = 1
+
+[solver]
+residual_drop = 8.0
+max_iterations = 800
+
+[output]
+directory = "output/lm_t3b"
+force_boundaries = ["plate"]

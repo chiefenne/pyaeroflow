@@ -1,0 +1,64 @@
+# Laminar NACA 0012, Re = 1000 (chord, U = 1 m/s), alpha = 20 deg: periodic
+# vortex shedding. Phase 1 (spin-up): impulsive start from the freestream,
+# run until the time-averaged CL has settled (windowed Cauchy test), with a
+# wake probe for the shedding frequency. Phase 2 (naca0012_re1000_a20_video.toml)
+# restarts from the final backup and writes the frames for ParaView.
+# Mesh: python examples/meshes/make_naca0012_shedding_mesh.py examples/cases/naca0012_shedding.su2
+# (O-grid, 108k cells, farfield 30 chords, 0.025 c cells out to 5 chords).
+# Time unit: c/U = 1 s.
+
+[case]
+name = "naca0012_re1000_a20"
+
+[mesh]
+file = "naca0012_shedding.su2"    # boundary faces: airfoil, farfield
+
+[physics]
+model = "laminar"
+
+[fluid]
+density = 1.0                     # kg/m^3
+reynolds_number = 1000.0          # with U_ref = 1 m/s and L_ref = 1 m (chord)
+
+[reference]
+velocity = 1.0                    # m/s
+length = 1.0                      # m, chord
+moment_center = [0.25, 0.0]       # m, quarter chord
+
+[initial]
+from_boundary = "farfield"        # impulsive start
+
+[boundary.airfoil]
+type = "wall"
+
+[boundary.farfield]
+type = "farfield"
+velocity = 1.0                    # m/s
+angle_of_attack = 20.0            # deg
+pressure = 0.0                    # Pa
+
+[numerics]
+limiter = "none"                  # smooth laminar flow, unlimited second order
+
+[time]
+mode = "unsteady"
+scheme = "bdf2"
+time_step = 0.02                  # s = 0.02 c/U
+end_time = 80.0                   # s: 4000 steps at most (safety limit)
+inner_iterations = 30
+inner_residual_drop = 3.0
+# Stop once the Hann-windowed mean CL from t = 30 on has settled
+# (about 5 shedding periods after the window opens).
+convergence = { fields = ["cl"], window_start_step = 1500, start_step = 250, cauchy_elements = 250, cauchy_eps = 1e-4, window_function = "hann" }
+
+[solver]
+linear_solver = { type = "pardiso" }
+
+[output]
+directory = "output/naca0012_re1000_a20"
+force_boundaries = ["airfoil"]
+fields = ["pressure", "velocity", "velocity_magnitude", "vorticity", "q_criterion"]
+fields_interval = 250             # coarse look at the transient (16 files at most)
+restart_interval = 50
+restart_backup_interval = 500
+probes = [[2.0, -0.4], [3.0, -0.6]] # in the wake, below the line from the TE along the freestream

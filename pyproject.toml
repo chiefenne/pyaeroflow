@@ -32,7 +32,7 @@ pyaeroflow = "pyaeroflow.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-pyaeroflow = ["cases/data/*.csv", "plotting/reference/*"]
+pyaeroflow = ["cases/data/*.csv", "plotting/reference/*", "templates/*.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
