@@ -15,6 +15,7 @@ of the stagnation point without any sign switch.
 
 from typing import NamedTuple
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -107,31 +108,58 @@ def _wake_spacing(first, length, count):
     return first * r ** np.arange(steps)
 
 
+_TRACERS = {}
+
+
+def _tracer(bodies):
+    """Compiled streamline march for one geometry (gamma and freestream are inputs)."""
+    grad = panel._velocity_kernel(tuple(bodies))
+    tracer = _TRACERS.get(grad)
+    if tracer is None:
+
+        def velocity(p, gamma, vinf):
+            g = grad(p[None, :], gamma, vinf)[0]
+            return jnp.stack((g[1], -g[0]))
+
+        def unit(v):
+            return v / jnp.linalg.norm(v)
+
+        def march(start, steps, gamma, vinf):
+            def step(p, ds):
+                half = p + 0.5 * ds * unit(velocity(p, gamma, vinf))
+                q = p + ds * unit(velocity(half, gamma, vinf))
+                return q, q
+
+            return jax.lax.scan(step, start, steps)[1]
+
+        tracer = _TRACERS[grad] = jax.jit(march)
+        if len(_TRACERS) > 16:
+            _TRACERS.clear()
+            _TRACERS[grad] = tracer
+    return tracer
+
+
 def trace_wake(solution, count, length):
-    """Wake nodes along the inviscid streamline leaving the trailing edge."""
+    """Wake nodes along the inviscid streamline leaving the trailing edge.
+
+    Midpoint rule along the local velocity direction, the first step along
+    the trailing-edge bisector; compiled once per geometry.
+    """
     body = solution.bodies[0]
     mid, bisector, _ = _trailing_edge(body)
     chord = float(np.max(np.linalg.norm(body.nodes - mid, axis=1)))
     x = body.nodes
     first = 0.5 * (np.linalg.norm(x[1] - x[0]) + np.linalg.norm(x[-1] - x[-2]))
     steps = _wake_spacing(first, length * chord, count)
-
-    def velocity(p):
-        return panel.velocity(solution, np.asarray(p)[None, :])[0]
-
-    pts = [mid + 1e-5 * chord * bisector]
-    direction = bisector
-    for k, ds in enumerate(steps):
-        p = pts[-1]
-        if k == 0:
-            pts.append(p + ds * direction)
-            continue
-        v = velocity(p)
-        half = p + 0.5 * ds * _unit(v)
-        v = velocity(half)
-        direction = _unit(v)
-        pts.append(p + ds * direction)
-    return np.array(pts)
+    p0 = mid + 1e-5 * chord * bisector
+    p1 = p0 + steps[0] * bisector
+    rest = _tracer(solution.bodies)(
+        jnp.asarray(p1),
+        jnp.asarray(steps[1:]),
+        tuple(jnp.asarray(g, dtype=float) for g in solution.gamma),
+        jnp.asarray(solution.velocity, dtype=float),
+    )
+    return np.vstack((p0, p1, np.asarray(rest)))
 
 
 def _tangents(pts, first):
@@ -238,8 +266,111 @@ def displacement_velocity(inv, mass, points, chunk=4000):
     return out
 
 
+def _wake_influences(w, body):
+    """Influences of the airfoil and wake singularities that involve the wake.
+
+    Returns the source stream function at the airfoil nodes per wake segment
+    end value, and at the wake nodes the velocities of the airfoil sources,
+    the wake sources and the airfoil vortex sheet.
+    """
+    x = jnp.asarray(body.nodes)
+    seg_a, seg_b, _, _ = _wake_segments(w, x.shape[0])
+    return (
+        sources.linear_psi(x, seg_a, seg_b),
+        sources.constant_velocity(w, x[:-1], x[1:]),
+        sources.linear_velocity(w, seg_a, seg_b),
+        sources.vortex_velocity(w, body),
+    )
+
+
+class _Airfoil(NamedTuple):
+    """Operators of an airfoil that do not depend on the angle of attack."""
+
+    body: panel.Body
+    s: np.ndarray
+    bisector: np.ndarray
+    gap: float
+    chord: float
+    leading_edge: np.ndarray
+    sol0: panel.PanelSolution
+    sol90: panel.PanelSolution
+    lu: tuple  # LU factors of the panel matrix
+    smat_air: np.ndarray  # (n + 1, n - 1) stream function of the airfoil sources
+    slope: float  # trailing-edge wedge slope, upper minus lower
+    wake_kernels: object  # compiled source and vortex influences at wake nodes
+
+
+_AIRFOILS = {}
+
+
+def _airfoil(pts):
+    """Per-airfoil part of :func:`build`, kept for the airfoils of a polar.
+
+    The airfoil solution at any angle is the superposition cos(alpha) sol0 +
+    sin(alpha) sol90; the panel matrix is factored once.
+    """
+    key = (pts.shape, pts.tobytes())
+    hit = _AIRFOILS.get(key)
+    if hit is not None:
+        return hit
+    import scipy.linalg
+
+    body = panel.contour_body(pts)
+    x = body.nodes
+    n = x.shape[0]
+    mid, bisector, gap = _trailing_edge(body)
+    le = x[np.argmax(np.linalg.norm(x - mid, axis=1))]
+    chord = float(np.linalg.norm(le - mid))
+    _check_strips(x)
+    s = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(x, axis=0), axis=1))))
+    matrix, _, _ = panel.assemble((body,), (1.0, 0.0))
+    xj = jnp.asarray(x)
+    smat_air = np.zeros((n + 1, n - 1))
+    smat_air[:n] = np.asarray(sources.constant_psi(xj, xj[:-1], xj[1:]))
+    slope_u = (x[0, 1] - x[1, 1]) / (x[0, 0] - x[1, 0]) if x[0, 0] != x[1, 0] else 0.0
+    slope_l = (
+        (x[-1, 1] - x[-2, 1]) / (x[-1, 0] - x[-2, 0]) if x[-1, 0] != x[-2, 0] else 0.0
+    )
+    foil = _Airfoil(
+        body=body,
+        s=s,
+        bisector=bisector,
+        gap=gap,
+        chord=chord,
+        leading_edge=le,
+        sol0=panel.solve(body, (1.0, 0.0)),
+        sol90=panel.solve(body, (0.0, 1.0)),
+        lu=scipy.linalg.lu_factor(matrix),
+        smat_air=smat_air,
+        slope=slope_u - slope_l,
+        wake_kernels=jax.jit(lambda w: _wake_influences(w, body)),
+    )
+    if len(_AIRFOILS) >= 8:
+        _AIRFOILS.clear()
+    _AIRFOILS[key] = foil
+    return foil
+
+
+def _superpose(foil, alpha_deg):
+    """Panel solution at alpha from the 0 and 90 degree solutions."""
+    a = np.radians(alpha_deg)
+    ca, sa = np.cos(a), np.sin(a)
+    s0, s90 = foil.sol0, foil.sol90
+    return panel.PanelSolution(
+        s0.bodies,
+        tuple(ca * g0 + sa * g9 for g0, g9 in zip(s0.gamma, s90.gamma, strict=True)),
+        ca * s0.psi0 + sa * s90.psi0,
+        np.array([ca, sa]),
+    )
+
+
 def build(nodes, alpha_deg=0.0, wake_length=1.0, wake_count=None):
     """Prepare the inviscid operators of an airfoil contour.
+
+    The airfoil part (panel matrix and its factors, the 0 and 90 degree
+    solutions, the source stream function of the airfoil panels) is computed
+    once per contour; only the wake, which follows the trailing streamline
+    at alpha, and its couplings are built per call.
 
     Parameters
     ----------
@@ -253,27 +384,23 @@ def build(nodes, alpha_deg=0.0, wake_length=1.0, wake_count=None):
     wake_count : int, optional
         Number of wake nodes (default n/10 + 10 per chord of wake).
     """
+    import scipy.linalg
+
     pts = np.asarray(nodes, dtype=float)
     if np.linalg.norm(pts[0] - pts[-1]) < 1e-12:  # repeated sharp trailing edge
         pts = pts[:-1]
-    body = panel.contour_body(pts)
+    foil = _airfoil(pts)
+    body = foil.body
     x = body.nodes
     n = x.shape[0]
-    mid, bisector, gap = _trailing_edge(body)
-    le = x[np.argmax(np.linalg.norm(x - mid, axis=1))]
-    chord = float(np.linalg.norm(le - mid))
-    _check_strips(x)
-
-    sol0 = panel.solve(body, (1.0, 0.0))
-    sol90 = panel.solve(body, (0.0, 1.0))
+    sol0, sol90 = foil.sol0, foil.sol90
     nw = wake_count or int(np.ceil(n / 10 + 10 * wake_length))
-    a = np.radians(alpha_deg)
-    wake = trace_wake(panel.solve(body, (np.cos(a), np.sin(a))), nw, wake_length)
+    wake = trace_wake(_superpose(foil, alpha_deg), nw, wake_length)
     wake_s = np.concatenate(
         ([0.0], np.cumsum(np.linalg.norm(np.diff(wake, axis=0), axis=1)))
     )
-    wake_t = _tangents(wake, bisector)
-    s = np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(x, axis=0), axis=1))))
+    wake_t = _tangents(wake, foil.bisector)
+    s = foil.s
 
     def wake_speed(sol):
         return np.einsum("ij,ij->i", panel.velocity(sol, wake), wake_t)
@@ -294,25 +421,20 @@ def build(nodes, alpha_deg=0.0, wake_length=1.0, wake_count=None):
     val_a_psi[0] = 0.0
 
     # Stream function of the sources at the airfoil nodes.
-    matrix, _, _ = panel.assemble((body,), (1.0, 0.0))
     smat = np.zeros((n + 1, p))
-    smat[:n, :p_air] = np.asarray(sources.constant_psi(pts, pts[:-1], pts[1:]))
-    lin = np.asarray(sources.linear_psi(pts, seg_a, seg_b))
+    smat[:, :p_air] = foil.smat_air
+    lin, cv, lv, vv = (np.asarray(t) for t in foil.wake_kernels(w))
     smat[:n] += lin[..., 0] @ val_a_psi + lin[..., 1] @ val_b
     if not body.blunt:
         smat[n - 1, :] = 0.0  # trailing-edge extrapolation row
-    dgamma = -np.linalg.solve(matrix, smat)[:n]  # (n, p)
+    dgamma = -scipy.linalg.lu_solve(foil.lu, smat)[:n]  # (n, p)
 
     # Wake velocities.
     t = wake_t
-    vg = np.einsum("mnk,mk->mn", np.asarray(sources.vortex_velocity(w, body)), t)
+    vg = np.einsum("mnk,mk->mn", vv, t)
     vsig = np.zeros((nw, p))
-    vsig[:, :p_air] = np.einsum(
-        "mnk,mk->mn", np.asarray(sources.constant_velocity(w, pts[:-1], pts[1:])), t
-    )
-    lv = np.einsum(
-        "mnjk,mk->mnj", np.asarray(sources.linear_velocity(w, seg_a, seg_b)), t
-    )
+    vsig[:, :p_air] = np.einsum("mnk,mk->mn", cv, t)
+    lv = np.einsum("mnjk,mk->mnj", lv, t)
     vsig += lv[..., 0] @ val_a + lv[..., 1] @ val_b
     dw = vg @ dgamma + vsig
 
@@ -320,11 +442,7 @@ def build(nodes, alpha_deg=0.0, wake_length=1.0, wake_count=None):
     gmat = _sigma_matrix(s, wake_s)
     dmat = np.vstack((-dgamma, dw)) @ gmat
 
-    slope_u = (x[0, 1] - x[1, 1]) / (x[0, 0] - x[1, 0]) if x[0, 0] != x[1, 0] else 0.0
-    slope_l = (
-        (x[-1, 1] - x[-2, 1]) / (x[-1, 0] - x[-2, 0]) if x[-1, 0] != x[-2, 0] else 0.0
-    )
-    wake_gap = _gap_profile(gap, wake_s, slope_u - slope_l)
+    wake_gap = _gap_profile(foil.gap, wake_s, foil.slope)
 
     return Inviscid(
         body=body,
@@ -337,8 +455,8 @@ def build(nodes, alpha_deg=0.0, wake_length=1.0, wake_count=None):
         w0=wake_speed(sol0),
         w90=wake_speed(sol90),
         dmat=dmat,
-        gap=gap,
+        gap=foil.gap,
         wake_gap=wake_gap,
-        chord=chord,
-        leading_edge=le,
+        chord=foil.chord,
+        leading_edge=foil.leading_edge,
     )

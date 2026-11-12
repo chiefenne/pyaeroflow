@@ -85,6 +85,20 @@ def _local(u1, u2, x1, x2, g1, g2, kind, nu, nc):
     )
 
 
+def _local_plain(u1, u2, x1, x2, g1, g2, kind, nu, nc):
+    """:func:`_local` without the transition branch (zero at TRAN nodes)."""
+    r_lam = res.interval(u1, u2, x1, x2, g1, g2, nu, False, False, nc)
+    r_turb = res.interval(u1, u2, x1, x2, g1, g2, nu, True, False, nc)
+    r_wake = res.interval(u1, u2, x1, x2, g1, g2, nu, True, True, nc)
+    x1s = jnp.where(kind == SIMI, x1, x2 * 2.0 + 1e-6)
+    r_simi = res.stagnation(u2, x2, u1, x1s, nu)
+    return jnp.select(
+        [kind == LAM, kind == TURB, kind == WAKE, kind == SIMI],
+        [r_lam, r_turb, r_wake, r_simi],
+        jnp.zeros(3),
+    )
+
+
 def _unpack(U, sgn, a, s, wake_s):
     n = s.shape[0]
     th, ds, sa, q = U[:, 0], U[:, 1], U[:, 2], U[:, 3]
@@ -124,6 +138,115 @@ def _residual(U, kind, prev, sgn, a, turbf, vinv, winv, geo):
     return jnp.concatenate((r, r_ue[:, None]), axis=1).ravel()
 
 
+def _newton_step(U, kind, prev, sgn, a, turbf, vinv, winv, order, source, tran, geo):
+    """Residual and Newton step by block elimination (no 4N x 4N matrix).
+
+    The boundary-layer rows of a node couple its (theta, delta*, s) to those
+    of its upstream neighbour (two neighbours at the trailing-edge merge) and
+    to a few edge speeds q: its own, the neighbour's and the two that locate
+    the stagnation point. Marching downstream from the stagnation point
+    (the two similarity stations of a side form one 6 x 6 block) gives every
+    node's step as a linear function of all edge-speed steps,
+
+        d(theta, delta*, s)_i = Y_i[:, :N] dq + Y_i[:, N],
+
+    and the edge-speed rows q = q_inv + D (q delta*) then reduce to one dense
+    N x N system for dq. ``order`` lists the nodes after the four
+    similarity-pair nodes in marching order; ``tran`` (fixed size) holds the
+    transition nodes, padded with the last wake node.
+    """
+    s, wake_s, gap, dmat, hte, nu, nc = geo
+    n, N = s.shape[0], U.shape[0]
+    R = _residual(U, kind, prev, sgn, a, turbf, vinv, winv, geo).reshape(N, 4)
+    th, ds, sa, q, ue, xi = _unpack(U, sgn, a, s, wake_s)
+    st = jnp.stack((th, ds, sa, ue), axis=1)
+    # local Jacobians; the transition interval (an inner Newton iteration,
+    # three quarters of the cost when evaluated everywhere) only at ``tran``
+    jac = jax.vmap(
+        jax.jacfwd(_local_plain, argnums=(0, 1, 2, 3)),
+        in_axes=(0, 0, 0, 0, 0, 0, 0, None, None),
+    )(st[prev], st, xi[prev], xi, gap[prev], gap, kind, nu, nc)
+    jt = jax.vmap(
+        jax.jacfwd(
+            lambda u1, u2, x1, x2: res.transition_interval(u1, u2, x1, x2, nu, nc)[0],
+            argnums=(0, 1, 2, 3),
+        )
+    )(st[prev[tran]], st[tran], xi[prev[tran]], xi[tran])
+    use = kind[tran] == TRAN
+    j1, j2, jx1, jx2 = (
+        j.at[tran].set(jnp.where(use.reshape((-1,) + (1,) * (j.ndim - 1)), t, j[tran]))
+        for j, t in zip(jac, jt, strict=True)
+    )
+    c = jnp.concatenate((sgn, jnp.ones(N - n)))  # d ue / d q
+    # dependence on the stagnation point through xi
+    dxi = jnp.concatenate((-sgn, -jnp.ones(N - n)))
+    dr = jx1 * dxi[prev][:, None] + jx2 * dxi[:, None]
+    va, vb = q[a], q[a + 1]
+    dsa = s[a + 1] - s[a]
+    da, db = -dsa * vb / (vb - va) ** 2, dsa * va / (vb - va) ** 2
+    idx = jnp.arange(N)
+    a2, a1 = j2[:, :, :3], j1[:, :, :3]
+    a1b = jnp.zeros_like(a1)
+    zero = jnp.zeros_like(idx)
+    qcol = jnp.stack((idx, prev, zero + a, zero + a + 1), axis=1)
+    qval = jnp.stack(
+        (j2[:, :, 3] * c[:, None], j1[:, :, 3] * c[prev][:, None], dr * da, dr * db),
+        axis=1,
+    )  # (N, 4, 3)
+    # trailing-edge merge: node n from the last nodes of both sides
+    ju, jl, jw = jax.jacfwd(_te, argnums=(0, 1, 2))(
+        st[0], st[n - 1], st[n], turbf[0], turbf[n - 1], hte, nu
+    )
+    a2, a1, a1b = (
+        a2.at[n].set(jw[:, :3]),
+        a1.at[n].set(ju[:, :3]),
+        a1b.at[n].set(jl[:, :3]),
+    )
+    qcol = qcol.at[n].set(jnp.array([0, 0, 0, 0]) + jnp.stack((n, 0, n - 1, n)))
+    qval = qval.at[n].set(
+        jnp.stack((jw[:, 3] * c[n], ju[:, 3] * c[0], jl[:, 3] * c[n - 1], jnp.zeros(3)))
+    )
+
+    def known(i):  # (3, N + 1): edge-speed columns and the residual
+        m = jnp.zeros((3, N + 1)).at[:, qcol[i]].add(qval[i].T)
+        return m.at[:, N].add(R[i, :3])
+
+    pair = []
+    for i, k in ((a, a - 1), (a + 1, a + 2)):  # similarity pairs
+        block = jnp.block([[a2[i], a1[i]], [a1[k], a2[k]]])
+        yy = -jnp.linalg.solve(block, jnp.concatenate((known(i), known(k))))
+        pair += [yy[:3], yy[3:]]
+    y_up, y_lo = pair[1], pair[3]  # first nodes of the two marches
+    inv2 = -jnp.linalg.inv(a2)  # batched: no small LAPACK calls in the march
+
+    # The carry holds only the last node and the upper trailing-edge node;
+    # ``source`` says where the upstream rows of a node are: 0 the last
+    # node, 1 / 2 the similarity pair of the upper / lower side, 3 node 0.
+    def march(carry, inp):
+        last, end_up = carry
+        i, s1, s2 = inp
+        cand = jnp.stack((last, y_up, y_lo, end_up))
+        yi = inv2[i] @ (a1[i] @ cand[s1] + a1b[i] @ cand[s2] + known(i))
+        return (yi, jnp.where(i == 0, yi, end_up)), yi
+
+    _, rows = jax.lax.scan(march, (y_up, y_up), (order, source[:, 0], source[:, 1]))
+    Y = (
+        jnp.zeros((N, 3, N + 1))
+        .at[order]
+        .set(rows)
+        .at[jnp.stack((a, a - 1, a + 1, a + 2))]
+        .set(jnp.stack(pair))
+    )
+    yds = Y[:, 1, :]
+    M = jnp.eye(N) - dmat * ds[None, :] - dmat @ (q[:, None] * yds[:, :N])
+    rhs = -R[:, 3] + dmat @ (q * yds[:, N])
+    M = M.at[n].set(jnp.zeros(N).at[n].set(1.0).at[n - 1].set(-0.5).at[0].set(0.5))
+    rhs = rhs.at[n].set(-R[n, 3])
+    dq = jnp.linalg.solve(M, rhs)
+    dy = jnp.einsum("ikj,j->ik", Y[:, :, :N], dq) + Y[:, :, N]
+    return R.ravel(), jnp.concatenate((dy, dq[:, None]), axis=1)
+
+
 # Compiled once per problem size and kept on disk (see cache.py).
 _residual_jit = cached_jit("residual", _residual)
 # scalar closures called from the Python loops (transition march, start-up):
@@ -139,6 +262,17 @@ _local_jac_jit = cached_jit(
     ),
 )
 _te_jac_jit = cached_jit("te_jacobian", jax.jacfwd(_te, argnums=(0, 1, 2)))
+_newton_step_jit = cached_jit("newton_step", _newton_step)
+_TRAN_SLOTS = 4  # transition intervals the block step handles; more: dense step
+# post-processing of a converged state (forces, transition location)
+_skin_friction_jit = cached_jit(
+    "skin_friction",
+    jax.vmap(
+        lambda th, ds, ue, nu, turb: cl.skin_friction(th, ds, ue, nu, turb, False),
+        in_axes=(0, 0, 0, None, 0),
+    ),
+)
+_transition_location_jit = cached_jit("transition_location", res.transition_location)
 
 
 def _station(kind):
@@ -184,6 +318,46 @@ class _System:
 
     def _residual(self, U, kind, prev, sgn, a, turbf, vinv, winv):
         return _residual_jit(U, kind, prev, sgn, a, turbf, vinv, winv, self.geo)
+
+    def step(self, U, kind, prev, sgn, a, turbf, vinv, winv):
+        """Residual (4N,) and Newton step (N, 4) by block elimination."""
+        n = self.n
+        order = np.concatenate(
+            (
+                np.arange(a - 2, -1, -1),
+                np.arange(a + 3, n),
+                np.arange(n, self.N),
+            )
+        ).astype(np.int32)
+        # where the upstream rows of every marched node come from (see
+        # _newton_step): the previous node in ``order`` unless it starts a
+        # march (pair node a - 1 or a + 2) or is the trailing-edge merge
+        prev_np = np.asarray(prev)
+        source = np.zeros((order.size, 2), dtype=np.int32)
+        p1 = np.where(order == n, 0, prev_np[order])
+        source[:, 0] = np.select([p1 == a - 1, p1 == a + 2, order == n], [1, 2, 3], 0)
+        source[order == n, 1] = 2 if a + 2 == n - 1 else 0
+        tran = np.flatnonzero(np.asarray(kind) == TRAN)
+        if tran.size > _TRAN_SLOTS or a < 1 or a + 2 > n - 1:
+            return None
+        tran = np.concatenate(
+            (tran, np.full(_TRAN_SLOTS - tran.size, self.N - 1))
+        ).astype(np.int32)
+        R, dU = _newton_step_jit(
+            U,
+            kind,
+            prev,
+            sgn,
+            a,
+            turbf,
+            vinv,
+            winv,
+            jnp.asarray(order),
+            jnp.asarray(source),
+            jnp.asarray(tran),
+            self.geo,
+        )
+        return np.asarray(R), np.asarray(dU)
 
     def _unpack(self, U, sgn, a):
         return _unpack_jit(U, sgn, a, self.geo[0], self.geo[1])
@@ -442,33 +616,85 @@ def _initial_state(system, vinv, winv):
     return U, a, turb
 
 
-def _march_amplification(system, U, xi, nodes):
-    """N along one side on the current state; index of the first node above n_crit."""
-    nu, nc = system.nu, system.ncrit
-    ncur = 0.0
-    out = {nodes[0]: 0.0}
-    for m in range(1, len(nodes)):
-        i, p = nodes[m], nodes[m - 1]
-        th1, ds1, ue1 = U[p, 0], U[p, 1], abs(U[p, 3])
-        th2, ds2, ue2 = U[i, 0], U[i, 1], abs(U[i, 3])
-        r1 = float(_amplification_jit(th1, ds1, ncur, ue1, nu, nc))
+def _amplification_march(th, ds, ue, x, length, nu, nc):
+    """Compiled march of the amplification equation along one side.
+
+    The inputs are the node values in marching order, padded to a fixed size
+    (one compiled program per panelling); ``length`` is the number of real
+    nodes. At every interval n2 = n1 + (rate(1) + rate(2)) / 2 dxi, four
+    fixed-point passes for rate(2). Returns the position of the first node
+    whose n exceeds n_crit (``th.size`` if none) and n at the nodes before it
+    (n_crit at and after it).
+    """
+    size = th.shape[0]
+
+    def step(carry, m):
+        ncur, hit = carry
+        r1 = cl.amplification_rate(th[m - 1], ds[m - 1], ncur, ue[m - 1], nu, nc)
         n2 = ncur
         for _ in range(4):
-            r2 = float(_amplification_jit(th2, ds2, n2, ue2, nu, nc))
-            n2 = ncur + 0.5 * (r1 + r2) * (xi[i] - xi[p])
-        if n2 > nc:
-            return m, out
-        out[i] = n2
-        ncur = n2
-    return None, out
+            r2 = cl.amplification_rate(th[m], ds[m], n2, ue[m], nu, nc)
+            n2 = ncur + 0.5 * (r1 + r2) * (x[m] - x[m - 1])
+        active = (hit == size) & (m < length)
+        above = active & (n2 > nc)
+        below = active & ~above
+        hit = jnp.where(above, m, hit)
+        return (jnp.where(below, n2, ncur), hit), jnp.where(below, n2, nc)
+
+    (_, hit), amp = jax.lax.scan(
+        step, (jnp.zeros(()), jnp.asarray(size)), jnp.arange(1, size)
+    )
+    return hit, jnp.concatenate((jnp.zeros(1), amp))
+
+
+_amplification_march_jit = cached_jit(
+    "amplification_march",
+    jax.vmap(_amplification_march, in_axes=(0, 0, 0, 0, 0, None, None)),
+)
+
+
+def _march_sides(system, U, xi, sides):
+    """Transition march of both airfoil sides in one compiled call.
+
+    Returns, per side, (index of the first node above n_crit or None,
+    {node: n}) as the Python march did.
+    """
+    n = system.n
+    order = np.empty((2, n), dtype=np.int32)
+    length = np.empty(2, dtype=np.int32)
+    for k, nodes in enumerate(sides):
+        order[k, : len(nodes)] = nodes
+        order[k, len(nodes) :] = nodes[-1]
+        length[k] = len(nodes)
+    hit, amp = _amplification_march_jit(
+        U[order, 0],
+        U[order, 1],
+        np.abs(U[order, 3]),
+        xi[order],
+        length,
+        system.nu,
+        system.ncrit,
+    )
+    hit, amp = np.asarray(hit), np.asarray(amp)
+    out = []
+    for k, nodes in enumerate(sides):
+        m = int(hit[k])
+        stop = m if m < n else len(nodes)
+        found = m if m < n else None
+        out.append(
+            (found, dict(zip(nodes[:stop], amp[k, :stop].tolist(), strict=True)))
+        )
+    return out
 
 
 def _update_transition(system, U, a, turb, xi, step_limit=True):
     changed = False
     nu = system.nu
-    for nodes in system.surfaces(a)[:2]:
+    sides = system.surfaces(a)[:2]
+    for nodes, (m_new, amp) in zip(
+        sides, _march_sides(system, U, xi, sides), strict=True
+    ):
         first_turb = next((m for m, i in enumerate(nodes) if turb[i]), None)
-        m_new, amp = _march_amplification(system, U, xi, nodes)
         if m_new == first_turb:
             continue
         changed = True
@@ -575,10 +801,9 @@ def _forces(inv, U, alpha_deg, system, a, turb):
         )
     )
     cf = np.zeros(system.N)
-    for i in range(n):
-        cf[i] = float(
-            cl.skin_friction(th_[i], ds_[i], ue_all[i], system.nu, turb[i], False)
-        )
+    cf[:n] = np.asarray(
+        _skin_friction_jit(th_[:n], ds_[:n], ue_all[:n], system.nu, turb[:n])
+    )
     sst = inv.s[a] + (inv.s[a + 1] - inv.s[a]) * (-v[a]) / (v[a + 1] - v[a])
     w = (sst - inv.s[a]) / (inv.s[a + 1] - inv.s[a])
     xst = (1 - w) * x[a] + w * x[a + 1]
@@ -607,9 +832,7 @@ def _transition_x(system, U, a, turb, xi):
         u2 = U[i].copy()
         u1[3], u2[3] = abs(u1[3]), abs(u2[3])
         xt = float(
-            res.transition_location(
-                jnp.asarray(u1), jnp.asarray(u2), xi[p], xi[i], system.nu, system.ncrit
-            )
+            _transition_location_jit(u1, u2, xi[p], xi[i], system.nu, system.ncrit)
         )
         w = (xt - xi[p]) / (xi[i] - xi[p])
         xx = (1 - w) * x[p] + w * x[i]
@@ -664,7 +887,11 @@ def _newton(system, alpha, U, a, turb, max_iterations, tolerance, verbose):
             jv,
             jw,
         )
-        R = np.asarray(system._residual(jnp.asarray(U), *args))
+        blocked = system.step(jnp.asarray(U), *args)
+        if blocked is not None:
+            R, dU = blocked
+        else:
+            R, dU = np.asarray(system._residual(jnp.asarray(U), *args)), None
         rnorm = float(np.linalg.norm(R))
         history.append(rnorm)
         if verbose:
@@ -683,11 +910,14 @@ def _newton(system, alpha, U, a, turb, max_iterations, tolerance, verbose):
             if verbose:
                 print("      stalled")
             break
-        J = system.jacobian(U, kind, prev, sgn, a, turb)
-        try:
-            dU = np.linalg.solve(J, -R).reshape(system.N, 4)
-        except np.linalg.LinAlgError:
-            break
+        if dU is None or not np.all(np.isfinite(dU)):
+            # dense 4N x 4N step: more than _TRAN_SLOTS transition intervals,
+            # a stagnation point next to the trailing edge or a singular block
+            J = system.jacobian(U, kind, prev, sgn, a, turb)
+            try:
+                dU = np.linalg.solve(J, -R).reshape(system.N, 4)
+            except np.linalg.LinAlgError:
+                break
         omega, why = _limit(system, U, dU, turb)
         steps.append(omega)
         if verbose:
