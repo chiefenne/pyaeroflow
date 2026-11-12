@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.7.0 – case templates, mesh library, polar predictor and compile cache (2026-11-12)
 
 - `naca0012_rans.toml` (example case and `naca0012-sa` template) converges again:
   the limiter stays frozen after the start-up (`release = false`) and
