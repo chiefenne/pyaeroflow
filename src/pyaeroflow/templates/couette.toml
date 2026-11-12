@@ -1,0 +1,43 @@
+# V1: plane Couette flow. Channel of height 1 m, periodic in x, top wall
+# moving with 1 m/s. Exact solution u = y, p = const. The flow is wall-driven,
+# so the reference velocity must be given explicitly.
+
+[case]
+name = "couette"
+description = "Plane Couette flow, periodic channel"
+
+[mesh]
+file = "channel_quad_32x16.su2"   # boundary faces: bottom, right, top, left
+
+[physics]
+model = "laminar"                 # "euler" | "laminar"
+
+[fluid]
+density = 1.0                     # kg/m^3
+viscosity = 0.1                   # Pa s
+
+[reference]
+velocity = 1.0                    # m/s, wall velocity (no farfield to take it from)
+length = 1.0                      # m, channel height
+
+[initial]                         # fluid at rest
+velocity = [0.0, 0.0]             # m/s
+pressure = 0.0                    # Pa, gauge
+
+[boundary.bottom]
+type = "wall"
+
+[boundary.top]
+type = "wall"
+velocity = [1.0, 0.0]             # m/s, moving wall
+
+[boundary.left]                   # periodic pair; "right" gets no entry
+type = "periodic"
+partner = "right"
+translation = [2.0, 0.0]          # m, from left to right
+
+[solver]
+residual_drop = 10.0
+
+[output]
+directory = "output/couette"

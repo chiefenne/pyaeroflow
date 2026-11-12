@@ -21,6 +21,7 @@ Pictures of complete cases are in the [Example gallery](gallery.md).
 15. [Start a run from the boundary-layer solution](#ibl-start)
 16. [Polar: exact slopes and a faster angle sweep](#polar-tangent)
 17. [Avoid recompiling at every start](#compile-cache)
+18. [Start a case from a template](#templates)
 
 ---
 
@@ -467,5 +468,43 @@ export PYAEROFLOW_JAX_CACHE=0                     # switch the cache off
 An own `JAX_COMPILATION_CACHE_DIR` is respected. The folder grows with
 every new mesh size; delete it any time. A new JAX version starts a fresh
 cache.
+
+[↑ back to top](#recipes)
+
+---
+
+<a id="templates"></a>
+## 18. Start a case from a template
+
+```
+pyaeroflow templates                          # list them (pyaeroflow templates plate: one group)
+pyaeroflow init plate-sa -o my_plate          # case file and mesh in my_plate/
+pyaeroflow run my_plate/flat_plate_rans.toml
+pyaeroflow init jet-crossflow --name my_jet   # own case name and output folder
+pyaeroflow make-mesh --list                   # the meshes alone
+```
+
+A template is one of the validated example cases (channel, cavity, flat
+plates with SA, BCM and Langtry–Menter, jet in crossflow, cylinder, NACA 0012
+shedding, SA and Euler, Mach 2 ramp) together with the mesh it runs on. `init`
+writes the case file and builds the mesh next to it, so it works after a
+plain `pip install`, without the repository. Edit the case file from there;
+every key is in [Case configuration](configuration.md).
+
+For your own airfoil mesh use the `airfoil` template, the same as
+`pyaeroflow init-case`:
+
+```
+pyaeroflow init airfoil --mesh my_foil.su2 --model sa --re 1e6 --alpha 4
+pyaeroflow init airfoil --mesh my_foil.su2 --model sa --re 1e6 --band --boundary-layer-start
+```
+
+`--model` is one of sa, sst, bcm, aft, lm, laminar, euler. `--band` adds a
+[refinement band](#band) (bare: 0.05, 0.02, 0.008 chords; or give the
+distances) with the limiter of the validated band case for SA.
+`--boundary-layer-start` starts from the [boundary-layer
+solution](#ibl-start). The case files of `init airfoil` use the farfield
+vortex correction, so `polar --predictor tangent` falls back to the plain
+chain there; use `cfl = { polar_reset = true }` for the polar instead.
 
 [↑ back to top](#recipes)

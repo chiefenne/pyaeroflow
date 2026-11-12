@@ -1,0 +1,45 @@
+# V4: inviscid flow around a circular cylinder (Euler equations).
+# O-grid between the cylinder (diameter 1 m) and a circular farfield at
+# 20 radii. Potential flow gives Cp = 1 - 4 sin^2(theta) on the cylinder and
+# zero drag and lift; the second-order scheme approaches this under mesh
+# refinement. The cylinder wall is a slip wall (no viscosity).
+
+[case]
+name = "cylinder_euler"
+
+[mesh]
+file = "cylinder_ogrid_128x48.su2"   # boundary faces: cylinder, farfield
+
+[physics]
+model = "euler"                   # fluid.viscosity is not needed
+
+[fluid]
+density = 1.0                     # kg/m^3
+
+[reference]
+length = 1.0                      # m, diameter: CL, CD and CM use q L
+moment_center = [0.0, 0.0]        # m, cylinder centre
+
+[initial]
+from_boundary = "farfield"        # uniform freestream
+
+[boundary.cylinder]
+type = "slip-wall"
+
+[boundary.farfield]
+type = "farfield"
+velocity = 1.0                    # m/s
+angle_of_attack = 0.0             # deg
+pressure = 0.0                    # Pa
+
+[numerics]
+limiter = "venkatakrishnan-wang"
+limiter_freeze = { after_residual_drop = 4.0 }   # freeze for deep convergence
+
+[solver]
+residual_drop = 8.0
+max_iterations = 400
+
+[output]
+directory = "output/cylinder_euler"
+force_boundaries = ["cylinder"]   # CL, CD, CM and the wall CSV of the cylinder

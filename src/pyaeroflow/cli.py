@@ -38,26 +38,32 @@ def main(argv=None):
     )
     init = sub.add_parser(
         "init-case",
-        help="write a case file for an airfoil mesh (.su2 from PyAero, or .msh)",
+        help="write a case file for an airfoil mesh (.su2 from PyAero, or .msh); "
+        "same as 'init airfoil'",
     )
     init.add_argument("mesh", help="mesh file (.su2 or .msh)")
-    init.add_argument(
-        "--model",
-        default="sa",
-        choices=list(_models()),
-        help="sa (default), sst, bcm, aft, lm, laminar or euler",
-    )
-    init.add_argument("--re", type=float, help="chord Reynolds number")
-    init.add_argument("--alpha", type=float, default=0.0, help="deg (default 0)")
-    init.add_argument("--chord", type=float, help="m; default from the mesh")
-    init.add_argument("--wall", help="airfoil boundary (default 'airfoil')")
-    init.add_argument(
-        "--tu", type=float, default=0.001, help="freestream Tu, fraction (0.001)"
-    )
-    init.add_argument("--scale", type=float, default=1.0, help="mesh.scale")
+    _airfoil_arguments(init)
     init.add_argument("--name", help="case name (default <mesh>_<model>)")
     init.add_argument("-o", "--output", help="case file (default next to the mesh)")
     init.add_argument("--force", action="store_true", help="overwrite the case file")
+    tpl = sub.add_parser("templates", help="list the case templates of 'init'")
+    tpl.add_argument("group", nargs="?", help="only this group (channel, plate, ...)")
+    ini = sub.add_parser(
+        "init",
+        help="write a ready-to-run case from a template (case file and mesh); "
+        "'pyaeroflow templates' lists them",
+    )
+    ini.add_argument("template", help="template name, e.g. plate-sa or airfoil")
+    ini.add_argument(
+        "-o",
+        "--directory",
+        help="folder for the case and mesh (default: current folder; airfoil: "
+        "the folder of the mesh)",
+    )
+    ini.add_argument("--name", help="case name (file name and output folder)")
+    ini.add_argument("--force", action="store_true", help="overwrite existing files")
+    ini.add_argument("--mesh", help="airfoil template: the airfoil mesh (.su2, .msh)")
+    _airfoil_arguments(ini)
     cmesh = sub.add_parser(
         "check-mesh", help="check an airfoil mesh: y+, surface points, farfield"
     )
@@ -156,6 +162,10 @@ def main(argv=None):
             return 0
         if args.command == "init-case":
             return _init_case(args)
+        if args.command == "templates":
+            return _list_templates(args)
+        if args.command == "init":
+            return _init(args)
         if args.command == "check-mesh":
             return _check_mesh(args)
         if args.command == "restart-info":
@@ -229,6 +239,8 @@ def _init_case(args):
         turbulence_intensity=args.tu,
         scale=args.scale,
         name=name,
+        band=DEFAULT_BAND if args.band == [] else args.band,
+        boundary_layer_start=args.boundary_layer_start,
     )
     path.write_text(text)
     print(f"wrote {path}  ({_models()[model]})")
@@ -238,8 +250,120 @@ def _init_case(args):
     for note in config.notices:
         print(f"  notice: {note}")
     print("next:")
+    if args.band:
+        print(f"  pyaeroflow refine {path}      # band mesh as VTU, to check it")
     print(f"  pyaeroflow run {path}")
     print(f"  pyaeroflow polar {path} --alpha 0 2 4 6 8")
+    return 0
+
+
+DEFAULT_BAND = [0.05, 0.02, 0.008]  # chords: the validated NACA 0012 band case
+
+
+def _airfoil_arguments(p):
+    """Options of the airfoil case file (init-case and init airfoil)."""
+    p.add_argument(
+        "--model",
+        default="sa",
+        choices=list(_models()),
+        help="sa (default), sst, bcm, aft, lm, laminar or euler",
+    )
+    p.add_argument("--re", type=float, help="chord Reynolds number")
+    p.add_argument("--alpha", type=float, default=0.0, help="deg (default 0)")
+    p.add_argument("--chord", type=float, help="m; default from the mesh")
+    p.add_argument("--wall", help="airfoil boundary (default 'airfoil')")
+    p.add_argument(
+        "--tu", type=float, default=0.001, help="freestream Tu, fraction (0.001)"
+    )
+    p.add_argument("--scale", type=float, default=1.0, help="mesh.scale")
+    p.add_argument(
+        "--band",
+        nargs="*",
+        type=float,
+        metavar="D",
+        help="refinement band around the wall, distances in chords "
+        "(no values: 0.05 0.02 0.008)",
+    )
+    p.add_argument(
+        "--boundary-layer-start",
+        action="store_true",
+        help="start from the integral boundary-layer solution (initial.boundary_layer)",
+    )
+
+
+def _list_templates(args):
+    """``pyaeroflow templates``: the templates of ``init``, grouped."""
+    from pyaeroflow.templates import TEMPLATES, description
+
+    groups = {}
+    for name, t in TEMPLATES.items():
+        groups.setdefault(t.group, []).append(name)
+    if args.group and args.group not in groups:
+        print(f"error: no group '{args.group}' ({', '.join(groups)})", file=sys.stderr)
+        return 1
+    width = max(len(n) for n in TEMPLATES)
+    for group, names in groups.items():
+        if args.group and group != args.group:
+            continue
+        print(f"{group}:")
+        for name in names:
+            print(f"  {name:<{width}}  {description(name)}")
+    print("write one: pyaeroflow init NAME [-o FOLDER]")
+    return 0
+
+
+def _init(args):
+    """``pyaeroflow init``: case file and mesh from a template."""
+    from pathlib import Path
+
+    from pyaeroflow.templates import TEMPLATES, write_template
+
+    if args.template not in TEMPLATES:
+        names = ", ".join(sorted(TEMPLATES))
+        print(f"error: unknown template '{args.template}' ({names})", file=sys.stderr)
+        return 1
+    if args.template == "airfoil":
+        if not args.mesh:
+            print("error: the airfoil template needs --mesh FILE", file=sys.stderr)
+            return 1
+        mesh = Path(args.mesh)
+        name = args.name or f"{mesh.stem}_{args.model}"
+        folder = Path(args.directory) if args.directory else mesh.parent
+        folder.mkdir(parents=True, exist_ok=True)
+        args.output = str(folder / f"{name}.toml")
+        args.name = name
+        return _init_case(args)
+    airfoil_only = [
+        flag
+        for flag, value in (
+            ("--mesh", args.mesh),
+            ("--re", args.re),
+            ("--band", args.band is not None),
+            ("--boundary-layer-start", args.boundary_layer_start),
+        )
+        if value
+    ]
+    if airfoil_only:
+        print(
+            f"error: {', '.join(airfoil_only)} only with the airfoil template; "
+            "edit the case file of this template instead",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        case, mesh, written = write_template(
+            args.template, args.directory or ".", case=args.name, force=args.force
+        )
+    except FileExistsError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"wrote {case}")
+    print(f"{'wrote' if written else 'kept '} {mesh}")
+    config = load_case(case)  # validates the file just written
+    for note in config.notices:
+        print(f"  notice: {note}")
+    print("next:")
+    print(f"  pyaeroflow run {case}")
     return 0
 
 

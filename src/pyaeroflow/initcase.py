@@ -41,6 +41,8 @@ def make_case(
     turbulence_intensity=0.001,
     scale=1.0,
     name=None,
+    band=None,
+    boundary_layer_start=False,
 ):
     """Return the text of a case file for a PyAero (or Gmsh) airfoil mesh.
 
@@ -67,6 +69,13 @@ def make_case(
         Mesh scale factor (``mesh.scale``).
     name : str, optional
         Case name; default ``<mesh stem>_<model>``.
+    band : list of float, optional
+        Refinement band around the wall (``[refinement.band] distances``) in
+        chords, e.g. ``[0.05, 0.02, 0.008]``; with SA the limiter of the
+        validated band case (Wang, never frozen) is used.
+    boundary_layer_start : bool
+        Start from the integral boundary-layer solution of the wall
+        (``initial.boundary_layer``); not for ``euler``.
 
     Returns
     -------
@@ -102,6 +111,22 @@ def make_case(
         if model != "euler" or "--re" not in text
     ]
     notes.insert(0, f"chord {chord:.6g} m taken from the mesh, moment center at 25 %")
+    if boundary_layer_start and model == "euler":
+        raise ValueError("the boundary-layer start needs a viscous model")
+    if band:
+        band = sorted((float(d) for d in band), reverse=True)
+        if band[-1] <= 0.0:
+            raise ValueError("band distances must be positive")
+        notes.append(
+            "refinement band: distances "
+            + ", ".join(f"{d:g}" for d in band)
+            + " chords; check it with 'pyaeroflow refine CASE' (writes a VTU)"
+        )
+        if model != "sa":
+            notes.append(
+                f"the freestream start on a band mesh is validated for SA only, "
+                f"not for '{model}'"
+            )
     name = name or f"{mesh_file.stem}_{model}"
     rel = os.path.relpath(mesh_file.resolve(), case_file.resolve().parent)
     rho, velocity = 1.0, 1.0
@@ -122,6 +147,8 @@ def make_case(
         tu=turbulence_intensity,
         rho=rho,
         velocity=velocity,
+        band=[d * chord for d in band] if band else None,
+        boundary_layer=boundary_layer_start,
     ), notes
 
 
@@ -176,6 +203,13 @@ def _text(**k):
         "",
         "[initial]",
         f'from_boundary = "{k["initial"]}"',
+    ]
+    if k["boundary_layer"]:
+        out.append(
+            f'boundary_layer = "{k["wall"]}"   # start from the boundary-layer '
+            "solution of the wall"
+        )
+    out += [
         "",
         f"[boundary.{_key(k['wall'])}]",
         f'type = "{"slip-wall" if model == "euler" else "wall"}"',
@@ -212,12 +246,23 @@ def _text(**k):
             'cfl = { control = "ser" }',
         ]
     else:
+        if k["band"] and model == "sa":
+            out += [
+                "[numerics]",
+                "# active Wang limiter, never frozen (the validated band case)",
+                'limiter = "venkatakrishnan-wang"',
+                "limiter_threshold = 0.2",
+                "",
+            ]
+        else:
+            out += [
+                "[numerics]",
+                'limiter = "venkatakrishnan"       # local threshold for the start-up',
+                "limiter_freeze = { after_residual_drop = 1.5, after_iterations = 40, "
+                "release = true }",
+                "",
+            ]
         out += [
-            "[numerics]",
-            'limiter = "venkatakrishnan"       # local threshold for the start-up',
-            "limiter_freeze = { after_residual_drop = 1.5, after_iterations = 40, "
-            "release = true }",
-            "",
             "[solver]",
             "residual_drop = 7.0",
             "max_iterations = 2000",
@@ -237,6 +282,15 @@ def _text(**k):
         f"# wall CSV: {k['name']}.wall_{k['wall']}.csv",
         "",
     ]
+    if k["band"]:
+        out += [
+            "[refinement.band]",
+            "distances = ["
+            + ", ".join(f"{d:.6g}" for d in k["band"])
+            + "]   # m: cells closer to the wall are split",
+            f'boundaries = ["{k["wall"]}"]',
+            "",
+        ]
     return "\n".join(out)
 
 

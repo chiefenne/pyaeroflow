@@ -89,6 +89,13 @@ package is not on PyPI.
 
 ## Running a case
 
+A ready-to-run case with its mesh (`pyaeroflow templates` lists them):
+
+```
+pyaeroflow init plate-sa -o my_plate
+pyaeroflow run my_plate/flat_plate_rans.toml
+```
+
 From a PyAero (or Gmsh) airfoil mesh to a case file:
 
 ```

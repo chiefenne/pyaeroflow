@@ -1,0 +1,58 @@
+# R1: turbulent flat plate on the NASA TMR domain (SA-neg), Re = 5e6 per
+# metre; plate from x = 0 to 2 m, inflow at x = -1/3 m, top at y = 1 m.
+# Reference (TMR, SA, finest grid, mean of CFL3D and FUN3D): Cf(x = 0.97) =
+# 0.0027055, CD = 0.0028562 over the plate (q L with L = 2 m); TMR runs at
+# M = 0.2, the incompressible result lies about 1 % above.
+
+[case]
+name = "flat_plate_rans"
+
+[mesh]
+file = "plate_rans_96x64.su2"     # boundary faces: left, right, top, symmetry, plate
+
+[physics]
+model = "rans"
+turbulence = "sa-neg"
+
+[fluid]
+density = 1.0                     # kg/m^3
+viscosity = 2.0e-7                # Pa s: Re = 5e6 per metre of plate (U = 1 m/s)
+
+[reference]
+velocity = 1.0                    # m/s
+length = 2.0                      # m, plate length: CD uses q L
+moment_center = [0.0, 0.0]
+
+[initial]
+from_boundary = "left"            # uniform inflow state, nu_tilde/nu = 3
+
+[boundary.left]
+type = "velocity-inlet"
+velocity = [1.0, 0.0]             # m/s
+turbulence = { nu_tilde_ratio = 3.0 }   # NASA TMR value (form c)
+
+[boundary.right]
+type = "pressure-outlet"
+pressure = 0.0
+
+[boundary.top]
+type = "farfield"
+velocity = 1.0
+turbulence = { turbulent_viscosity_ratio = 0.2104 }   # same as nu_tilde/nu = 3 (form b)
+
+[boundary.symmetry]
+type = "symmetry"
+
+[boundary.plate]
+type = "wall"
+
+[numerics]
+turbulence_spatial_order = 1      # upwind SA convection (first order, default)
+
+[solver]
+residual_drop = 8.0
+turbulence_coupling = "segregated"
+
+[output]
+directory = "output/flat_plate_rans"
+force_boundaries = ["plate"]
