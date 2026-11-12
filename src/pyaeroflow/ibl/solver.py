@@ -139,6 +139,15 @@ _local_jac_jit = cached_jit(
     ),
 )
 _te_jac_jit = cached_jit("te_jacobian", jax.jacfwd(_te, argnums=(0, 1, 2)))
+# post-processing of a converged state (forces, transition location)
+_skin_friction_jit = cached_jit(
+    "skin_friction",
+    jax.vmap(
+        lambda th, ds, ue, nu, turb: cl.skin_friction(th, ds, ue, nu, turb, False),
+        in_axes=(0, 0, 0, None, 0),
+    ),
+)
+_transition_location_jit = cached_jit("transition_location", res.transition_location)
 
 
 def _station(kind):
@@ -627,10 +636,9 @@ def _forces(inv, U, alpha_deg, system, a, turb):
         )
     )
     cf = np.zeros(system.N)
-    for i in range(n):
-        cf[i] = float(
-            cl.skin_friction(th_[i], ds_[i], ue_all[i], system.nu, turb[i], False)
-        )
+    cf[:n] = np.asarray(
+        _skin_friction_jit(th_[:n], ds_[:n], ue_all[:n], system.nu, turb[:n])
+    )
     sst = inv.s[a] + (inv.s[a + 1] - inv.s[a]) * (-v[a]) / (v[a + 1] - v[a])
     w = (sst - inv.s[a]) / (inv.s[a + 1] - inv.s[a])
     xst = (1 - w) * x[a] + w * x[a + 1]
@@ -659,9 +667,7 @@ def _transition_x(system, U, a, turb, xi):
         u2 = U[i].copy()
         u1[3], u2[3] = abs(u1[3]), abs(u2[3])
         xt = float(
-            res.transition_location(
-                jnp.asarray(u1), jnp.asarray(u2), xi[p], xi[i], system.nu, system.ncrit
-            )
+            _transition_location_jit(u1, u2, xi[p], xi[i], system.nu, system.ncrit)
         )
         w = (xt - xi[p]) / (xi[i] - xi[p])
         xx = (1 - w) * x[p] + w * x[i]
