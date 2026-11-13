@@ -92,35 +92,62 @@ scheme_parameters = vd.scheme_parameters
 # -- shared pieces of the variable-density RANS modules (also used by SST) ---------
 
 
-def t_column(w):
-    """Column of T: the last one (static, from the shape)."""
-    return w.shape[-1] - 1
+def n_species(model):
+    """Return the number of transported species of a model (or StaticThermo)."""
+    return len(model.thermo.species)
 
 
-def mean_state(w):
-    """(p, u, v, T) of full states (..., n_var), the variable-density flow state."""
-    return jnp.concatenate((w[..., :3], w[..., -1:]), axis=-1)
+def bc_species(bc):
+    """Return the number of species of boundary data (static, from the shapes)."""
+    return 0 if bc.species_flux is None else bc.species_flux.shape[-1]
+
+
+def t_column(w, ns=0):
+    """Column of T: in front of the ``ns`` mass fractions (static, from the shape)."""
+    return w.shape[-1] - 1 - ns
+
+
+def thermal_state(w, ns=0):
+    """(T, Y) of full states (..., n_var); Y is None without species."""
+    tc = t_column(w, ns)
+    return w[..., tc], (w[..., tc + 1 :] if ns else None)
+
+
+def mean_state(w, ns=0):
+    """(p, u, v, T[, Y]) of full states (..., n_var), the variable-density state."""
+    return jnp.concatenate((w[..., :3], w[..., t_column(w, ns) :]), axis=-1)
 
 
 def assemble(mean, turb):
-    """Full rows (..., n_var) from the (p, u, v, T) part and the turbulence part."""
+    """Full rows (..., n_var) of the (p, u, v, T[, Y]) and the turbulence parts."""
     return jnp.concatenate((mean[..., :3], turb, mean[..., 3:]), axis=-1)
 
 
-def mean_index(n_var):
-    """Columns of (p, u, v, T) in a state of ``n_var`` columns."""
-    return jnp.array([0, 1, 2, n_var - 1])
+def mean_index(n_var, ns=0):
+    """Columns of (p, u, v, T[, Y]) in a state of ``n_var`` columns."""
+    return jnp.array([0, 1, 2] + list(range(n_var - 1 - ns, n_var)))
 
 
-def cell_properties(model, t):
-    """Density rho and nu = mu / rho at temperatures ``t`` (any shape)."""
-    rho = th.density(model.thermo, t)
+def cell_properties(model, t, y=None):
+    """Density rho and nu = mu / rho at temperatures ``t`` (mass fractions ``y``)."""
+    rho = th.density(model.thermo, t, y)
     return rho, th.viscosity(model.thermo, t) / rho
 
 
+def state_properties(model, w, ns=0):
+    """Density rho and nu = mu / rho of full states (..., n_var)."""
+    return cell_properties(model, *thermal_state(w, ns))
+
+
+def mean_density(model, m):
+    """Density of mean states (..., 4 + n_s) = (p, u, v, T[, Y])."""
+    y = m[..., 4:] if n_species(model) else None
+    return th.density(model.thermo, m[..., 3], y)
+
+
 def mean_boundary_state(bc, normal, w_in):
-    """(p, u, v, T) on boundary faces (variable-density boundary rules)."""
-    return vd.boundary_state(bc, normal, mean_state(w_in))
+    """(p, u, v, T[, Y]) on boundary faces (variable-density boundary rules)."""
+    return vd.boundary_state(bc, normal, mean_state(w_in, bc_species(bc)))
 
 
 def inflow_mask(bc, normal, w_b4):
@@ -134,30 +161,78 @@ def inflow_mask(bc, normal, w_b4):
     )
 
 
-def energy_viscous_flux(model, grad_v, grad_t, t_f, mu_t, distance, normal, heat=True):
-    """-(0, tau.n, k_eff grad T.n) with the eddy viscosity ``mu_t`` (dynamic).
+def _effective_conductivity(model, t_f, y_f, mu_t, distance):
+    tm = model.thermo
+    return th.effective_conductivity(
+        tm, model.turbulent_prandtl, t_f, th.density(tm, t_f, y_f), mu_t, distance
+    )
+
+
+def _turbulent_diffusion(model, t_f, y_f, mu_t, distance):
+    """mu_t / Sc_t,k at the faces (species)."""
+    return th.turbulent_schmidt_coefficients(
+        model.thermo, model.turbulent_schmidt, t_f, y_f, mu_t, distance
+    )
+
+
+def energy_viscous_flux(
+    model,
+    grad_v,
+    grad_t,
+    t_f,
+    mu_t,
+    distance,
+    normal,
+    heat=True,
+    grad_y=None,
+    y_f=None,
+):
+    """-(0, tau.n, k_eff grad T.n[, J.n]) with the eddy viscosity ``mu_t`` (dynamic).
 
     ``grad_v`` (n, 2, 2) and ``grad_t`` (n, 2) are face gradients, ``t_f``
     the face temperature, ``distance`` the face wall distance (an input of
-    the Pr_t law). ``heat`` False drops the conduction (bool or array).
+    the Pr_t and Sc_t laws). ``heat`` False drops the conduction (bool or
+    array). Species: ``grad_y`` (n, n_s, 2) and the face mass fractions
+    ``y_f``; the diffusion fluxes with rho D_k + mu_t / Sc_t,k and their
+    enthalpy flux are appended.
     """
     tm = model.thermo
     mu = th.viscosity(tm, t_f) + mu_t
     flow = inc.viscous_flux(model, grad_v, normal, mu)
-    k = th.effective_conductivity(
-        tm, model.turbulent_prandtl, t_f, th.density(tm, t_f), mu_t, distance
-    )
+    k = _effective_conductivity(model, t_f, y_f, mu_t, distance)
     q = k * (grad_t[:, 0] * normal[:, 0] + grad_t[:, 1] * normal[:, 1])
     q = jnp.where(heat, q, 0.0)
-    return jnp.concatenate((flow, -q[:, None]), axis=1)
+    flux = jnp.concatenate((flow, -q[:, None]), axis=1)
+    if y_f is None:
+        return flux
+    grad_n = jnp.einsum("nsk,nk->ns", grad_y, normal)
+    turbulent = _turbulent_diffusion(model, t_f, y_f, mu_t, distance)
+    j = th.diffusion_flux(tm, t_f, y_f, grad_n, turbulent)
+    return vd._with_species(model, flux, j, t_f)
 
 
-def boundary_energy_viscous_flux(model, bc, grad_v, grad_t, t_b, mu_t, d_b, normal):
-    """-F_v.n through boundary faces (n_bfaces, 4), thermal rules of V1.
+def boundary_energy_viscous_flux(
+    model,
+    bc,
+    grad_v,
+    grad_t,
+    t_b,
+    mu_t,
+    d_b,
+    normal,
+    grad_y=None,
+    y_b=None,
+    details=False,
+):
+    """-F_v.n through boundary faces (n_bfaces, 4[ + n_s]), thermal rules of V1.
 
     Conduction (with the eddy conductivity of ``mu_t``) at isothermal walls,
     inlets, farfields and outlets, the prescribed heat flux at heat-flux
-    walls, nothing at adiabatic walls and symmetry faces.
+    walls, nothing at adiabatic walls and symmetry faces. Species: the
+    boundary rules of
+    :func:`pyaeroflow.physics.variable_density.boundary_species_flux` with
+    rho D_k + mu_t / Sc_t,k and the effective conductivity (``details``: also
+    its dict).
     """
     k = bc.kind
     wall = k == WALL
@@ -166,7 +241,21 @@ def boundary_energy_viscous_flux(model, bc, grad_v, grad_t, t_b, mu_t, d_b, norm
         model, grad_v, grad_t, t_b, mu_t, d_b, normal, heat=conduct
     )
     prescribed = wall & (bc.thermal == vd.HEAT_FLUX)
-    return flux.at[:, 3].set(jnp.where(prescribed, -bc.heat_flux, flux[:, 3]))
+    flux = flux.at[:, 3].set(jnp.where(prescribed, -bc.heat_flux, flux[:, 3]))
+    if y_b is None:
+        return (flux, {"conduction": -flux[:, 3]}) if details else flux
+    return vd.boundary_species_flux(
+        model,
+        bc,
+        flux,
+        grad_y,
+        t_b,
+        y_b,
+        normal,
+        turbulent=_turbulent_diffusion(model, t_b, y_b, mu_t, d_b),
+        conductivity=_effective_conductivity(model, t_b, y_b, mu_t, d_b),
+        details=details,
+    )
 
 
 def boundary_distance(geom, bc):
@@ -186,33 +275,41 @@ def mean_time_blocks(model, geom, w, beta2):
     ``model`` is the static model (closed domains: p_th of ``w`` is applied
     here).
     """
-    m = mean_state(w)
+    m = mean_state(w, n_species(model))
     return (
         vd.preconditioner(vd.closed_model(model, geom, m), m, beta2),
         vd.spectral_radius(model, geom, m, beta2),
     )
 
 
-def mean_segregated_mask(n_var, first):
-    """Segregated block mask: (p, u, v, T) apart from columns first..n_var-2."""
-    idx = mean_index(n_var)
+def mean_segregated_mask(n_var, first, ns=0):
+    """Segregated block mask: (p, u, v, T, Y) apart from the turbulence columns."""
+    idx = mean_index(n_var, ns)
     mask = jnp.zeros((n_var, n_var))
     mask = mask.at[idx[:, None], idx[None, :]].set(1.0)
-    return mask.at[first : n_var - 1, first : n_var - 1].set(1.0)
+    last = n_var - 1 - ns
+    return mask.at[first:last, first:last].set(1.0)
 
 
 def buoyancy_blocks(model, geom, w, blocks):
-    """Add d(-area (rho - rho_op) g)/dT to the (u, v; T) entries of ``blocks``."""
-    tc = t_column(w)
-    rho_t = th.density_derivative(model.thermo, w[:, tc])
+    """Add d(-area (rho - rho_op) g)/d(T, Y) to the (u, v; T, Y) blocks."""
+    ns = n_species(model)
+    tc = t_column(w, ns)
+    t, y = thermal_state(w, ns)
+    rho_t = th.density_derivative(model.thermo, t, y)
     g = jnp.asarray(model.gravity, dtype=w.dtype)
     blocks = blocks.at[:, U, tc].add(-geom.area * rho_t * g[0])
-    return blocks.at[:, V, tc].add(-geom.area * rho_t * g[1])
+    blocks = blocks.at[:, V, tc].add(-geom.area * rho_t * g[1])
+    if y is None:
+        return blocks
+    rho_y = th.density_species_derivative(model.thermo, t, y)
+    blocks = blocks.at[:, U, tc + 1 :].add(-geom.area[:, None] * rho_y * g[0])
+    return blocks.at[:, V, tc + 1 :].add(-geom.area[:, None] * rho_y * g[1])
 
 
 def wall_traction(model, grad, w_b, normal):
     """tau.n on boundary faces (n, 2) with mu of the boundary temperature."""
-    mu = th.viscosity(model.thermo, w_b[:, -1])
+    mu = th.viscosity(model.thermo, w_b[:, t_column(w_b, n_species(model))])
     return -inc.viscous_flux(model, grad[:, U : V + 1], normal, mu)[:, 1:]
 
 
@@ -220,13 +317,14 @@ def wall_traction(model, grad, w_b, normal):
 
 
 def boundary_state(bc, normal, w_in):
-    """Boundary-face state (p, u, v, nu_tilde[, gamma_tilde, n], T)."""
+    """Boundary-face state (p, u, v, nu_tilde[, gamma_tilde, n], T[, Y])."""
     w_b4 = mean_boundary_state(bc, normal, w_in)
+    tc = t_column(w_in, bc_species(bc))
     nt = rans.boundary_nu_tilde(bc, normal, w_b4[:, :3], w_in[:, NT])
     cols = [nt[:, None]]
-    if w_in.shape[1] > NT + 2:  # SA-AFT
+    if tc > NT + 1:  # SA-AFT
         inflow = inflow_mask(bc, normal, w_b4)
-        cols.append(jnp.where(inflow[:, None], 0.0, w_in[:, NT + 1 : -1]))
+        cols.append(jnp.where(inflow[:, None], 0.0, w_in[:, NT + 1 : tc]))
     return assemble(w_b4, jnp.concatenate(cols, axis=1))
 
 
@@ -257,15 +355,21 @@ def _cell_sources(model, geom, w, w_b, grad, gamma=None):
 
     rho times the kinematic sources, plus SA's density-gradient correction.
     """
-    tc = t_column(w)
-    t = w[:, tc]
-    rho, nu = cell_properties(model, t)
+    ns = n_species(model)
+    tc = t_column(w, ns)
+    t, y = thermal_state(w, ns)
+    rho, nu = cell_properties(model, t, y)
     grad_v, grad_sq, switch, h_l = rans._source_inputs(model, geom, w, w_b, grad, nu)
     src = rans._turbulence_sources(
         model, w[:, NT:tc], grad_v, geom.wall_distance, grad_sq, switch, h_l, gamma, nu
     )
-    rho_t = th.density_derivative(model.thermo, t)
+    rho_t = th.density_derivative(model.thermo, t, y)
     cross = rho_t * jnp.sum(grad[:, tc, :] * grad[:, NT, :], axis=1)
+    if y is not None:  # grad rho = rho_T grad T + sum rho_Y grad Y
+        rho_y = th.density_species_derivative(model.thermo, t, y)
+        cross = cross + jnp.einsum(
+            "ns,nsk,nk->n", rho_y, grad[:, tc + 1 :, :], grad[:, NT, :]
+        )
     src = rho[:, None] * src
     return src.at[:, 0].add(-sa.diffusion_coefficient(w[:, NT], nu) * cross)
 
@@ -286,7 +390,8 @@ def residual(model, geom, bc, w, order, beta2, psi=None, gamma=None):
     """
     model = vd.closed_model(model, geom, w)
     o, n, b = geom.f_owner, geom.f_neigh, geom.b_owner
-    tc = t_column(w)
+    ns = n_species(model)
+    tc = t_column(w, ns)
     w_b = boundary_state(bc, geom.b_normal, w[b])
     grad = lsq_gradient(geom, w, w_b)
     sa_order = model.turbulence_spatial_order
@@ -295,27 +400,25 @@ def residual(model, geom, bc, w, order, beta2, psi=None, gamma=None):
             psi = inc._limiter(model, geom, w, w_b, grad)
         w_l, w_r, w_in = reconstruct(geom, w, grad, psi)
     m_l, m_r, m_in = (
-        (mean_state(w_l), mean_state(w_r), mean_state(w_in))
+        (mean_state(w_l, ns), mean_state(w_r, ns), mean_state(w_in, ns))
         if order == 2
-        else (mean_state(w[o]), mean_state(w[n]), mean_state(w[b]))
+        else (mean_state(w[o], ns), mean_state(w[n], ns), mean_state(w[b], ns))
     )
     s_l, s_r, s_in = (
         (w_l[:, NT:tc], w_r[:, NT:tc], w_in[:, NT:tc])
         if sa_order == 2
         else (w[o, NT:tc], w[n, NT:tc], w[b, NT:tc])
     )
-    tm = model.thermo
-
     f_flux = vd.fds_flux(model, m_l, m_r, geom.f_normal, beta2)
     b_flux = vd.boundary_convective_flux(model, bc, geom.b_normal, m_in, beta2)
     vn_f = _dot_n(0.5 * (m_l[:, 1:3] + m_r[:, 1:3]), geom.f_normal)
-    mass_f = 0.5 * (th.density(tm, m_l[:, 3]) + th.density(tm, m_r[:, 3])) * vn_f
-    mass_b = th.density(tm, w_b[:, tc]) * _dot_n(w_b[:, 1:3], geom.b_normal)
+    mass_f = 0.5 * (mean_density(model, m_l) + mean_density(model, m_r)) * vn_f
+    mass_b = state_properties(model, w_b, ns)[0] * _dot_n(w_b[:, 1:3], geom.b_normal)
     sa_f = upwind_scalar_flux(mass_f[:, None], s_l, s_r)
     sa_b = upwind_scalar_flux(mass_b[:, None], s_in, w_b[:, NT:tc])
 
-    rho_c, nu_c = cell_properties(model, w[:, tc])
-    rho_bs, nu_bs = cell_properties(model, w_b[:, tc])
+    rho_c, nu_c = state_properties(model, w, ns)
+    rho_bs, nu_bs = state_properties(model, w_b, ns)
     g_f = interior_face_gradient(geom, w, grad, model.viscous_gradient, model.alpha)
     g_b = boundary_face_gradient(geom, w, w_b, grad, model.viscous_gradient)
     mu_tf, dc_f = face_coefficients(
@@ -325,8 +428,17 @@ def residual(model, geom, bc, w, order, beta2, psi=None, gamma=None):
         model, w[b, NT:tc], w_b[:, NT:tc], rho_c[b], rho_bs, nu_c[b], nu_bs
     )
     t_f = 0.5 * (w[o, tc] + w[n, tc])
+    y_f = 0.5 * (w[o, tc + 1 :] + w[n, tc + 1 :]) if ns else None
     f_flux = f_flux + energy_viscous_flux(
-        model, g_f[:, 1:3], g_f[:, tc], t_f, mu_tf, face_distance(geom), geom.f_normal
+        model,
+        g_f[:, 1:3],
+        g_f[:, tc],
+        t_f,
+        mu_tf,
+        face_distance(geom),
+        geom.f_normal,
+        grad_y=g_f[:, tc + 1 :],
+        y_f=y_f,
     )
     b_flux = b_flux + boundary_energy_viscous_flux(
         model,
@@ -337,6 +449,8 @@ def residual(model, geom, bc, w, order, beta2, psi=None, gamma=None):
         mu_tb,
         boundary_distance(geom, bc),
         geom.b_normal,
+        grad_y=g_b[:, tc + 1 :],
+        y_b=w_b[:, tc + 1 :] if ns else None,
     )
     sa_f = sa_f - dc_f * _dot_n_cols(g_f[:, NT:tc], geom.f_normal)
     sa_b = sa_b - dc_b * _dot_n_cols(g_b[:, NT:tc], geom.b_normal)
@@ -344,7 +458,7 @@ def residual(model, geom, bc, w, order, beta2, psi=None, gamma=None):
     r = divergence(geom, assemble(f_flux, sa_f), assemble(b_flux, sa_b))
     src = _cell_sources(model, geom, w, w_b, grad, gamma)
     r = r.at[:, NT:tc].add(-geom.area[:, None] * src)
-    r = r.at[:, U : V + 1].add(-vd.cell_sources(model, geom, mean_state(w)))
+    r = r.at[:, U : V + 1].add(-vd.cell_sources(model, geom, mean_state(w, ns)))
     if model.pin is not None:
         cell, p0 = model.pin
         r = r.at[cell, inc.P].set(w[cell, inc.P] - p0)
@@ -376,8 +490,11 @@ def residual_linearize(model, geom, bc, w, order, beta2, psi=None, gamma=None):
 
 def jacobian_arguments(model, geom, bc, w):
     """Per-face arguments (f_args, b_args) of the compact fluxes."""
-    b_args = vd.jacobian_boundary_args(bc) + (bc.nu_tilde, boundary_distance(geom, bc))
-    return (face_distance(geom),), b_args
+    b_args = vd.jacobian_boundary_args(bc)[:5] + (
+        bc.nu_tilde,
+        boundary_distance(geom, bc),
+    )
+    return (face_distance(geom),), b_args + vd.species_boundary_args(bc)
 
 
 def _compact_flux(model, conv, w_o, w_x, g, coeff, distance, normal, boundary=None):
@@ -387,14 +504,16 @@ def _compact_flux(model, conv, w_o, w_x, g, coeff, distance, normal, boundary=No
     gradient, ``coeff`` the factor of the turbulence jump, ``boundary`` the
     one-face BoundaryData (None for an interior face).
     """
-    tc = t_column(w_o)
-    rho_o, nu_o = cell_properties(model, w_o[tc])
-    rho_x, nu_x = cell_properties(model, w_x[tc])
+    ns = n_species(model)
+    tc = t_column(w_o, ns)
+    rho_o, nu_o = state_properties(model, w_o, ns)
+    rho_x, nu_x = state_properties(model, w_x, ns)
     mu_t, dc = face_coefficients(
         model, w_o[NT:tc], w_x[NT:tc], rho_o, rho_x, nu_o, nu_x
     )
     if boundary is None:
         t_f = 0.5 * (w_o[tc] + w_x[tc])
+        y_f = 0.5 * (w_o[tc + 1 :] + w_x[tc + 1 :])[None] if ns else None
         visc = energy_viscous_flux(
             model,
             g[None, 1:3],
@@ -403,6 +522,8 @@ def _compact_flux(model, conv, w_o, w_x, g, coeff, distance, normal, boundary=No
             mu_t[None],
             distance[None],
             normal[None],
+            grad_y=g[None, tc + 1 :],
+            y_f=y_f,
         )[0]
         mass = 0.5 * (rho_o + rho_x) * 0.5 * jnp.dot(w_o[1:3] + w_x[1:3], normal)
     else:
@@ -415,6 +536,8 @@ def _compact_flux(model, conv, w_o, w_x, g, coeff, distance, normal, boundary=No
             mu_t[None],
             distance[None],
             normal[None],
+            grad_y=g[None, tc + 1 :],
+            y_b=w_x[tc + 1 :][None] if ns else None,
         )[0]
         mass = rho_x * jnp.dot(w_x[1:3], normal)
     flux = upwind_scalar_flux(mass, w_o[NT:tc], w_x[NT:tc]) - dc * coeff * (
@@ -425,8 +548,13 @@ def _compact_flux(model, conv, w_o, w_x, g, coeff, distance, normal, boundary=No
 
 def interior_flux(model, beta2, w_o, w_n, distance, normal, delta):
     """Compact first-order flux through an interior face (for the Jacobian)."""
+    ns = n_species(model)
     conv = vd.fds_flux(
-        model, mean_state(w_o)[None], mean_state(w_n)[None], normal[None], beta2
+        model,
+        mean_state(w_o, ns)[None],
+        mean_state(w_n, ns)[None],
+        normal[None],
+        beta2,
     )[0]
     dn = jnp.dot(delta, normal)
     if model.viscous_gradient == "alpha-damping":
@@ -448,10 +576,14 @@ def boundary_flux(
     bc_rho,
     bc_nt,
     distance,
-    normal,
-    delta,
+    *args,
 ):
-    """Compact first-order flux through a boundary face (for the Jacobian)."""
+    """Compact first-order flux through a boundary face (for the Jacobian).
+
+    ``args``: the species arrays of the face (with species only), the face
+    normal and the vector from the cell centre to the face.
+    """
+    *species, normal, delta = args
     bc = vd.BoundaryData(
         bc_kind[None],
         bc_value[None],
@@ -461,9 +593,10 @@ def boundary_flux(
         model.density,
         bc_nt[None],
     )
+    bc = vd.with_species_arguments(bc, tuple(species))
     w_b = boundary_state(bc, normal[None], w_o[None])[0]
     conv = vd.boundary_convective_flux(
-        model, bc, normal[None], mean_state(w_o)[None], beta2
+        model, bc, normal[None], mean_state(w_o, n_species(model))[None], beta2
     )[0]
     dn = jnp.dot(delta, normal)
     g = ((w_b - w_o) / dn)[:, None] * normal[None, :]
@@ -472,10 +605,11 @@ def boundary_flux(
 
 def _source_parts(model, geom, bc, w):
     """Frozen stencil inputs and the local nu, rho of the source Jacobians."""
-    tc = t_column(w)
+    ns = n_species(model)
+    tc = t_column(w, ns)
     w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
     grad = lsq_gradient(geom, w, w_b)
-    rho, nu = cell_properties(model, w[:, tc])
+    rho, nu = state_properties(model, w, ns)
     grad_v, grad_sq, switch, h_l = rans._source_inputs(model, geom, w, w_b, grad, nu)
 
     def cell_source(t, gv, d, gs, sw, hl, nu_c):
@@ -507,7 +641,7 @@ def source_blocks(model, geom, bc, w):
     derivative of the buoyancy.
     """
     model = vd.closed_model(model, geom, w)
-    tc = t_column(w)
+    tc = t_column(w, n_species(model))
     d_src = jnp.diagonal(_source_parts(model, geom, bc, w), axis1=1, axis2=2)
     n_var = w.shape[1]
     blocks = jnp.zeros((w.shape[0], n_var, n_var))
@@ -518,34 +652,36 @@ def source_blocks(model, geom, bc, w):
 
 @partial(jax.jit, static_argnums=0)
 def source_jacobian(model, geom, bc, w):
-    """Cell-local d(-area src)/d(turbulence columns, T), (n, n_t + 1, n_t + 1).
+    """Cell-local d(-area src)/d(turbulence columns, T, Y), (n, n - 3, n - 3).
 
-    Production included, stencil inputs frozen; the T row and column are
-    zero (the energy equation has no source). For the source-term
-    time-step limit of the driver.
+    Production included, stencil inputs frozen; the T and Y rows and
+    columns are zero (no sources). For the source-term time-step limit of
+    the driver.
     """
     model = vd.closed_model(model, geom, w)
     jac = -geom.area[:, None, None] * _source_parts(model, geom, bc, w)
-    return jnp.pad(jac, ((0, 0), (0, 1), (0, 1)))
+    pad = 1 + n_species(model)
+    return jnp.pad(jac, ((0, 0), (0, pad), (0, pad)))
 
 
 @partial(jax.jit, static_argnums=0)
 def time_term_blocks(model, geom, w, beta2, cfl):
-    """Pseudo-time blocks: Gamma on (p, u, v, T), rho on the turbulence rows."""
+    """Pseudo-time blocks: Gamma on (p, u, v, T, Y), rho on the turbulence rows."""
     n_var = w.shape[1]
+    ns = n_species(model)
     gamma, lam = mean_time_blocks(model, geom, w, beta2)
-    idx = mean_index(n_var)
+    idx = mean_index(n_var, ns)
     g = jnp.zeros((w.shape[0], n_var, n_var))
     g = g.at[:, idx[:, None], idx[None, :]].set(gamma)
-    k = jnp.arange(NT, n_var - 1)
-    rho = th.density(vd.closed_model(model, geom, w).thermo, w[:, -1])
+    k = jnp.arange(NT, t_column(w, ns))
+    rho = state_properties(vd.closed_model(model, geom, w), w, ns)[0]
     g = g.at[:, k, k].set(rho[:, None])
     return g * (lam / cfl)[:, None, None]
 
 
-def segregated_mask(n_var):
-    """Block mask of the segregated coupling: (p, u, v, T) and turbulence apart."""
-    return mean_segregated_mask(n_var, NT)
+def segregated_mask(n_var, ns=0):
+    """Block mask of the segregated coupling: (p, u, v, T, Y) and turbulence apart."""
+    return mean_segregated_mask(n_var, NT, ns)
 
 
 # -- output ------------------------------------------------------------------------
@@ -557,7 +693,7 @@ def eddy_viscosity(model, w):
     Closed domains: ``model`` must carry p_th of ``w``
     (:func:`pyaeroflow.physics.variable_density.at_pressure`).
     """
-    _, nu = cell_properties(model, w[:, -1])
+    _, nu = state_properties(model, w, n_species(model))
     return sa.eddy_viscosity(w[:, NT], nu)
 
 
@@ -569,7 +705,7 @@ def intermittency_field(model, geom, bc, w):
     model = vd.closed_model(model, geom, w)
     w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
     vort = rans.vorticity(lsq_gradient(geom, w, w_b))
-    _, nu = cell_properties(model, w[:, -1])
+    _, nu = state_properties(model, w, n_species(model))
     gamma = rans.intermittency(model, w[:, NT], vort, geom.wall_distance, nu)
     return jnp.broadcast_to(jnp.asarray(gamma, dtype=float), w[:, NT].shape)
 
@@ -582,35 +718,42 @@ def _boundary_heat(model, geom, bc, w, coefficients):
     """
     model = vd.closed_model(model, geom, w)
     bc = vd.closed_boundary(model, bc)
-    tc = t_column(w)
+    ns = n_species(model)
+    tc = t_column(w, ns)
     w_b = coefficients.boundary_state(bc, geom.b_normal, w[geom.b_owner])
     grad = lsq_gradient(geom, w, w_b)
     g_b = boundary_face_gradient(geom, w, w_b, grad, model.viscous_gradient)
     mu_t = coefficients.boundary_eddy_viscosity(model, geom, bc, w, w_b, grad)
     d_b = boundary_distance(geom, bc)
-    q = -boundary_energy_viscous_flux(
-        model, bc, g_b[:, 1:3], g_b[:, tc], w_b[:, tc], mu_t, d_b, geom.b_normal
-    )[:, 3]
-    t_c = w[geom.b_owner, tc]
-    k = th.effective_conductivity(
-        model.thermo,
-        model.turbulent_prandtl,
-        t_c,
-        th.density(model.thermo, t_c),
+    y_b = w_b[:, tc + 1 :] if ns else None
+    flux, details = boundary_energy_viscous_flux(
+        model,
+        bc,
+        g_b[:, 1:3],
+        g_b[:, tc],
+        w_b[:, tc],
         mu_t,
         d_b,
+        geom.b_normal,
+        grad_y=g_b[:, tc + 1 :],
+        y_b=y_b,
+        details=True,
     )
-    return q, k, w_b[:, tc]
+    # T_b is the cell value at adiabatic and heat-flux walls (the same
+    # effective conductivity as the evaporating-wall balance).
+    k = _effective_conductivity(model, w_b[:, tc], y_b, mu_t, d_b)
+    return details["conduction"], k, w_b[:, tc], flux, details, mu_t, d_b
 
 
 def heat_flux_and_temperature(model, geom, bc, w, coefficients):
     """(q_w, T_w) per boundary face with the eddy conductivity of the faces.
 
-    T_w: the prescribed value at isothermal walls and fixed-T boundaries,
-    elsewhere T_cell + q_w (d.n) / k_eff.
+    q_w is the heat conducted into the fluid. T_w: the prescribed value at
+    isothermal walls and fixed-T boundaries, elsewhere T_cell + q_w (d.n) /
+    k_eff (at evaporating walls the surface temperature of the balance).
     """
-    q, k, t_b = _boundary_heat(model, geom, bc, w, coefficients)
-    t_c = w[geom.b_owner, t_column(w)]
+    q, k, t_b, *_ = _boundary_heat(model, geom, bc, w, coefficients)
+    t_c = w[geom.b_owner, t_column(w, n_species(model))]
     dn = jnp.einsum("fk,fk->f", geom.b_delta, geom.b_normal)
     walls = (bc.kind == WALL) & (bc.thermal != vd.ISOTHERMAL)
     return q, jnp.where(walls, t_c + q * dn / k, t_b)
@@ -624,9 +767,10 @@ class _SA:
     @staticmethod
     def boundary_eddy_viscosity(model, geom, bc, w, w_b, grad):
         b = geom.b_owner
-        tc = t_column(w)
-        rho_c, nu_c = cell_properties(model, w[b, tc])
-        rho_b, nu_b = cell_properties(model, w_b[:, tc])
+        ns = n_species(model)
+        tc = t_column(w, ns)
+        rho_c, nu_c = state_properties(model, w[b], ns)
+        rho_b, nu_b = state_properties(model, w_b, ns)
         return face_coefficients(
             model, w[b, NT:tc], w_b[:, NT:tc], rho_c, rho_b, nu_c, nu_b
         )[0]
@@ -642,3 +786,34 @@ def wall_heat_flux(model, geom, bc, w):
 def wall_temperature(model, geom, bc, w):
     """Temperature per boundary face (n_bfaces,)."""
     return heat_flux_and_temperature(model, geom, bc, w, _SA)[1]
+
+
+def species_wall_values(model, geom, bc, w, coefficients):
+    """Species walls (RANS): (j, m, Y_w) per boundary face.
+
+    The species fluxes and the net mass flux into the fluid, and the wall
+    mass fractions.
+    """
+    *_, flux, details, mu_t, d_b = _boundary_heat(model, geom, bc, w, coefficients)
+    model = vd.closed_model(model, geom, w)
+    ns = n_species(model)
+    j = -flux[:, 4:]
+    w_c = w[geom.b_owner]
+    t_c, y_c = thermal_state(w_c, ns)
+    turbulent = _turbulent_diffusion(model, t_c, y_c, mu_t, d_b)
+    # wall_fractions reads T and Y from the last columns of ``w``.
+    y_w = vd.wall_fractions(model, geom, bc, w, j, details, turbulent)
+    return j, details["mass_flux"], y_w
+
+
+@partial(jax.jit, static_argnums=0)
+def wall_species_flux(model, geom, bc, w):
+    """Species mass fluxes and the net mass flux into the fluid per boundary face."""
+    j, m, _ = species_wall_values(model, geom, bc, w, _SA)
+    return j, m
+
+
+@partial(jax.jit, static_argnums=0)
+def wall_mass_fraction(model, geom, bc, w):
+    """Mass fractions per boundary face, (n_bfaces, n_species)."""
+    return species_wall_values(model, geom, bc, w, _SA)[2]

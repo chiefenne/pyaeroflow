@@ -23,6 +23,7 @@ import numpy as np
 
 from pyaeroflow import __version__
 from pyaeroflow.config import Resolved, load_case, resolve
+from pyaeroflow.config.case import UNIVERSAL_GAS_CONSTANT
 from pyaeroflow.control import ControlFiles, check_no_stop_file
 from pyaeroflow.driver import (
     GAMMA_DIAGNOSTICS,
@@ -368,12 +369,19 @@ def setup(config, mesh=None):
     nd_mesh = _scaled_mesh(mesh, 1.0 / scaling.length)
     init = cfg["initial"]
     temperature = 1.0
+    mass_fraction = None
     if energy:
         if init["temperature"] is not None:
             temperature = init["temperature"] / scaling.temperature
         elif init["from_boundary"] is not None:
             temperature = conditions[init["from_boundary"]].get("temperature", 1.0)
-        model = _closed_domain(cfg, model, conditions, nd_mesh, temperature)
+        if init["mass_fraction"] is not None:
+            mass_fraction = tuple(init["mass_fraction"])
+        elif init["from_boundary"] is not None:
+            mass_fraction = conditions[init["from_boundary"]].get("mass_fraction")
+        model = _closed_domain(
+            cfg, model, conditions, nd_mesh, temperature, mass_fraction
+        )
     point = ref["pressure_point"]
     problem = FlowProblem(
         nd_mesh,
@@ -409,7 +417,12 @@ def setup(config, mesh=None):
         nu_tilde = entry.get("nu_tilde")
         k_omega = (entry["k"], entry["omega"]) if "k" in entry else None
     w0 = problem.initial_state(
-        velocity, pressure, nu_tilde, k_omega, temperature=temperature
+        velocity,
+        pressure,
+        nu_tilde,
+        k_omega,
+        temperature=temperature,
+        mass_fraction=mass_fraction,
     )
     w0 = _boundary_layer_start(config, problem, w0, velocity)
     if init["restart"] is not None:
@@ -471,9 +484,89 @@ def _thermal_conditions(cfg, conditions, scaling):
         elif kind == "total-pressure-inlet":
             t = b.get("total_temperature")
             entry["temperature"] = 1.0 if t is None else t / scaling.temperature
+        if cfg["fluid"]["species"]:
+            # Species: mass fractions as given, fluxes by rho_ref U_ref.
+            if b.get("mass_fraction") is not None:
+                entry["mass_fraction"] = tuple(b["mass_fraction"])
+                entry["stefan_flow"] = bool(b.get("stefan_flow"))
+            elif b.get("species_flux") is not None:
+                mass_flux = scaling.density * scaling.velocity
+                entry["species_flux"] = tuple(j / mass_flux for j in b["species_flux"])
+            if b.get("evaporation"):
+                entry["evaporation"] = True
 
 
-def _closed_domain(cfg, model, conditions, mesh, temperature):
+def _species(cfg, scaling):
+    """Non-dimensional :class:`~pyaeroflow.physics.thermo.Species` of fluid.species.
+
+    Diffusivities by U_ref L_ref, c_p by the reference c_p of the fluid,
+    formation enthalpies by c_p,ref T_ref, molar masses by that of the fluid.
+    """
+    fluid = cfg["fluid"]
+    out = []
+    for sp in fluid["species"] or []:
+        if sp.get("schmidt") is not None:
+            diffusivity = th.PropertyLaw("schmidt", float(sp["schmidt"]))
+        else:
+            d = sp["diffusivity"] / (scaling.velocity * scaling.length)
+            n = sp.get("diffusivity_exponent")
+            diffusivity = (
+                th.PropertyLaw("constant", d)
+                if n is None
+                else th.PropertyLaw("power-law", d, (float(n),))
+            )
+        cp = sp.get("specific_heat")
+        out.append(
+            th.Species(
+                name=sp["name"],
+                molar_mass=sp["molar_mass"] / fluid["molar_mass"],
+                diffusivity=diffusivity,
+                specific_heat=(
+                    None
+                    if cp is None
+                    else th.PropertyLaw("constant", cp / scaling.specific_heat)
+                ),
+                formation_enthalpy=(sp.get("formation_enthalpy") or 0.0)
+                / (scaling.specific_heat * scaling.temperature),
+                expansion=float(sp.get("expansion") or 0.0),
+                latent_heat=(sp.get("latent_heat") or 0.0)
+                / (scaling.specific_heat * scaling.temperature),
+                saturation=_saturation(sp, fluid, scaling),
+            )
+        )
+    return tuple(out)
+
+
+def _saturation(sp, fluid, scaling):
+    """Non-dimensional saturation law of a species (see thermo.Species).
+
+    The mole fraction X = p_sat / p_op of the non-dimensional temperature:
+    Antoine log10(p_sat / bar) = A - B / (T + C) becomes a = A + log10(1e5 /
+    p_op), b = B / T_ref, c = C / T_ref; Clausius-Clapeyron p_sat = p_0
+    exp(-(L W / R_u)(1 / T - 1 / T_0)) becomes ln X_0 = ln(p_0 / p_op),
+    theta = L W / (R_u T_ref), 1 / T_0 -> T_ref / T_0.
+    """
+    law = sp.get("saturation_model")
+    if law is None:
+        return None
+    p_op, t_ref = fluid["operating_pressure"], scaling.temperature
+    if law == "antoine":
+        return (
+            "antoine",
+            float(sp["antoine_a"] + np.log10(1.0e5 / p_op)),
+            float(sp["antoine_b"] / t_ref),
+            float(sp["antoine_c"] / t_ref),
+        )
+    theta = sp["latent_heat"] * sp["molar_mass"] / UNIVERSAL_GAS_CONSTANT
+    return (
+        "clausius-clapeyron",
+        float(np.log(sp["saturation_pressure"] / p_op)),
+        float(theta / t_ref),
+        float(t_ref / sp["saturation_temperature"]),
+    )
+
+
+def _closed_domain(cfg, model, conditions, mesh, temperature, mass_fraction=None):
     """Set the closed-domain mass of an ideal gas (fluid.thermodynamic_pressure).
 
     ``closed`` (or ``auto`` without a boundary that exchanges mass): the
@@ -486,7 +579,11 @@ def _closed_domain(cfg, model, conditions, mesh, temperature):
         return model
     if mode == "auto" and not vd.is_closed_domain(conditions):
         return model
-    rho0 = float(th.density(model.thermo, np.array(float(temperature))))
+    y0 = None
+    if model.n_species:
+        y0 = np.zeros(model.n_species) if mass_fraction is None else mass_fraction
+        y0 = np.asarray(y0, dtype=float)
+    rho0 = float(th.density(model.thermo, np.array(float(temperature)), y0))
     return model._replace(closed_mass=rho0 * float(np.sum(mesh.cell_area)))
 
 
@@ -529,12 +626,18 @@ def _energy_model(cfg, base, mu_nd, scaling):
             scaling,
             scaling.conductivity,
         )
-    thermo = th.Thermo(dens, viscosity, conductivity, specific_heat)
+    thermo = th.Thermo(
+        dens, viscosity, conductivity, specific_heat, _species(cfg, scaling)
+    )
     g = physics["gravity"] or (0.0, 0.0)
     gravity = tuple(gi * scaling.length / scaling.velocity**2 for gi in g)
     prt_params = dict(fluid["prandtl_turbulent_parameters"] or {})
     if fluid["prandtl_turbulent_model"] == "constant":
         prt_params.setdefault("value", fluid["prandtl_turbulent"])
+    sct_params = dict(fluid.get("schmidt_turbulent_parameters") or {})
+    sct_model = fluid.get("schmidt_turbulent_model") or "constant"
+    if sct_model == "constant":
+        sct_params.setdefault("value", fluid.get("schmidt_turbulent", 0.7))
     pressure_work = (
         fluid["gas_constant"] / scaling.specific_heat if kind == "ideal_gas" else 0.0
     )
@@ -545,6 +648,9 @@ def _energy_model(cfg, base, mu_nd, scaling):
         gravity=gravity,
         turbulent_prandtl=th.TurbulentPrandtl(
             fluid["prandtl_turbulent_model"], tuple(sorted(prt_params.items()))
+        ),
+        turbulent_schmidt=th.TurbulentPrandtl(
+            sct_model, tuple(sorted(sct_params.items()))
         ),
         beta_factor=base.beta_factor,
         spatial_order=base.spatial_order,
@@ -1470,6 +1576,9 @@ def _pseudo_time_settings(cfg):
 def _residual_names(problem):
     """Names of the residual columns in the log and history."""
     names = problem.flow.RESIDUAL_NAMES
+    thermal = getattr(problem, "thermal", False)
+    if thermal:  # (p, u, v, [turbulence], T, Y1..): T after the turbulence
+        names = names[:3]
     if problem.model.turbulence == "sst":
         names += ("k", "om")
     elif problem.turbulent:
@@ -1478,6 +1587,8 @@ def _residual_names(problem):
         names += ("gam", "n")
     elif problem.model.transition == "lm":
         names += ("gam", "ret")
+    if thermal:
+        names += ("T",) + tuple(f"Y{i + 1}" for i in range(problem.model.n_species))
     return names
 
 
@@ -1846,10 +1957,15 @@ def _heat_rows(monitor, problem, w, boundaries):
     """Summary rows: heat into the fluid and mean Nu per wall (physics.energy)."""
     if not getattr(problem, "thermal", False):
         return []
-    return [
+    rows = [
         (f"heat '{b}'", f"Q = {q:.6g} W/m into the fluid, mean Nu = {nu:.6g}")
         for b, (q, nu) in monitor.heat_summary(w, boundaries).items()
     ]
+    if problem.model.n_species:
+        for b, flows in monitor.mass_summary(w, boundaries).items():
+            text = ", ".join(f"{n} {v:.6g}" for n, v in flows.items())
+            rows.append((f"species '{b}'", f"{text} kg/(s m) into the fluid"))
+    return rows
 
 
 def _pressure_rows(cfg, problem, w):
@@ -2391,6 +2507,7 @@ class Monitor:
             )
         if getattr(self.problem, "thermal", False):
             columns.update(self.heat_transfer(w, faces))
+            columns.update(self.mass_transfer(w, faces))
         if self.problem.turbulent:
             # y+ of the first cell centre: d sqrt(|tau_w| / rho) / nu (non-dim.).
             tau_w = np.hypot(d["tau_x"], d["tau_y"])
@@ -2436,6 +2553,50 @@ class Monitor:
             "nu": nu,
             "st": st,
         }
+
+    def mass_transfer(self, w, faces):
+        """Wall mass fractions and species fluxes per face (fluid.species), SI.
+
+        ``Y_<name>``: mass fraction at the wall; ``j_<name>``: mass flux of
+        the species into the fluid (diffusion plus the Stefan flow) in
+        kg/(m^2 s); ``m_w``: net mass flux into the fluid (Stefan-flow walls).
+        """
+        model = self.problem.model
+        if not model.n_species:
+            return {}
+        s = self.scaling
+        mass_flux = s.density * s.velocity
+        y_w = self.problem.wall_mass_fraction(w)[faces]
+        j, m = self.problem.wall_species_flux(w)
+        columns = {}
+        for i, sp in enumerate(model.thermo.species):
+            columns[f"Y_{sp.name}"] = y_w[:, i]
+            columns[f"j_{sp.name}"] = j[faces, i] * mass_flux
+        columns["m_w"] = m[faces] * mass_flux
+        if any(sp.latent_heat for sp in model.thermo.species):
+            # Evaporating walls: latent heat taken from the surface, W/m^2.
+            latent = model.thermo.species[0].latent_heat
+            evaporating = np.asarray(self.problem.bc.species)[faces] == vd.EVAPORATING
+            columns["q_latent"] = np.where(
+                evaporating, m[faces] * latent * s.heat_flux, 0.0
+            )
+        return columns
+
+    def mass_summary(self, w, boundaries):
+        """Per boundary and species: mass flow into the fluid in kg/(s m)."""
+        model = self.problem.model
+        s = self.scaling
+        j, _ = self.problem.wall_species_flux(w)
+        out = {}
+        for name in boundaries:
+            faces = self.problem.boundary_faces([name])
+            length = np.asarray(self.problem.geom.b_length)[faces]
+            total = np.sum(j[faces] * length[:, None], axis=0)
+            out[name] = {
+                sp.name: float(total[i]) * s.density * s.velocity * s.length
+                for i, sp in enumerate(model.thermo.species)
+            }
+        return out
 
     def heat_summary(self, w, boundaries):
         """Per boundary: heat into the fluid (W/m) and mean Nu (physics.energy).
@@ -2939,6 +3100,27 @@ def _energy_rows(cfg, problem, scaling):
             "at T_ref)",
         ),
     ]
+    for sp, nd in zip(fluid["species"] or [], m.thermo.species, strict=True):
+        diffusion = (
+            f"Sc {sp['schmidt']:g}"
+            if sp.get("schmidt") is not None
+            else f"D {sp['diffusivity']:g} m^2/s"
+            + (
+                f" T^{sp['diffusivity_exponent']:g}"
+                if sp.get("diffusivity_exponent") is not None
+                else ""
+            )
+        )
+        rows.append(
+            (
+                f"species '{sp['name']}'",
+                f"W {sp['molar_mass']:g} kg/kmol (fluid {fluid['molar_mass']:g}), "
+                f"{diffusion}"
+                + (
+                    "" if nd.specific_heat is None else f", c_p {sp['specific_heat']:g}"
+                ),
+            )
+        )
     if any(m.gravity):
         rows.append(("gravity", f"{tuple(cfg['physics']['gravity'])} m/s^2"))
     return rows

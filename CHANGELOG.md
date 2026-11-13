@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased – species: mixtures and mass transfer (stages S1, S1b)
+
+Stage S1b (turbulence and evaporation):
+
+- Species with every RANS model (SA, SA-BCM, SA-AFT, SST, SST-LM): eddy
+  diffusivity μ_t/Sc_t, `fluid.schmidt_turbulent` (default 0.7) or a
+  registered law (`schmidt_turbulent_model`, `schmidt_turbulent_parameters`,
+  `thermo.register_turbulent_schmidt`). State p, u, v, [turbulence], T, Y.
+- Evaporating walls, `evaporation = true`: saturation mass fraction from
+  the surface temperature (per species `latent_heat` and `saturation_model`
+  = `antoine` in the NIST form, or `clausius-clapeyron`), Stefan flow, and
+  the latent heat in the surface energy balance (isothermal, heat-flux or
+  adiabatic surface; the surface temperature is solved per face inside the
+  residual). Wall CSV column `q_latent`. One transported species.
+- β² of species cases includes the diffusion velocity max D_k/L_ref; slow
+  Stefan flows from rest stalled before (the velocity never developed).
+- Fix: β² of RANS energy cases with gravity took the buoyancy velocity from
+  the first turbulence column instead of T.
+- Fix: the log residual names of RANS energy cases were in the wrong order
+  (T is after the turbulence columns).
+- Validation §20: wet-bulb temperature exact to round-off (tube, turbulent
+  plates), evaporating tube mass flux −2·10⁻⁶, turbulent Sherwood number
+  −1…+8 % (SA) and 0…+5 % (SST) of Kays & Crawford.
+
+Stage S1:
+
+- `[[fluid.species]]`: transported species in the incompressible energy
+  equation (laminar, steady and unsteady, any number of species). The fluid
+  of the case is the bulk species. State p, u, v, T, Y_1 … Y_n; mixture
+  density of the ideal gas (molar masses) or Boussinesq with a solutal
+  expansion; c_p and enthalpy of the mixture; Fick diffusion with a
+  correction velocity (exact for a binary mixture), `diffusivity` (with
+  `diffusivity_exponent`) or `schmidt` per species; enthalpy diffusion in
+  the energy equation. The preconditioner and the upwinding are extended by
+  the species columns. Without species the solver is unchanged to the bit.
+- Boundary conditions: walls with zero flux, `mass_fraction`, `species_flux`
+  or `mass_fraction` with `stefan_flow = true` (net mass flux of a surface
+  that the fluid does not cross); `mass_fraction` at inlets and farfields;
+  `initial.mass_fraction`.
+- Output: fields `mass_fraction_1` … `mass_fraction_4`, wall CSV columns
+  `Y_<name>`, `j_<name>`, `m_w`, log Summary rows `species '<boundary>'`.
+- Fix: the `temperature` field of RANS cases with the energy equation wrote
+  the first turbulence column (T is the last column there).
+- Validation §20: Stefan tube (evaporation rate +0.004 %), thermosolutal
+  cavity (Sh = Nu = 4.521, de Vahl Davis 4.519), laminar plate with mass
+  transfer (Sh_x within 0.3–1.5 % of the similarity solution).
+
 ## Unreleased – closed domains and unsteady flow with the energy equation (stage V3)
 
 - Closed domains: `fluid.thermodynamic_pressure = "auto" | "constant" |

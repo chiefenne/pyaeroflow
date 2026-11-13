@@ -251,6 +251,8 @@ file (either byte order). Formats 1 and 3 are rejected; export the mesh as
 | `operating_pressure` | float | `101325` | `density_model = "ideal_gas"`: thermodynamic pressure p_th in Pa (constant, or the fill pressure of a closed domain) | |
 | `thermodynamic_pressure` | `"auto"` \| `"constant"` \| `"closed"` | `"auto"` | `density_model = "ideal_gas"`: `"constant"` keeps p_th = `operating_pressure`; `"closed"`: closed domain, p_th follows from the total mass of the gas filled at `operating_pressure` and `initial.temperature` (default `reference.temperature`), so that the mass is conserved (stage V3); `"auto"`: `"closed"` when no boundary exchanges mass (walls, slip walls, symmetry, periodic, transpiration walls at zero velocity), else `"constant"` | |
 | `thermal_expansion` | float | 1/`reference.temperature` | `density_model = "boussinesq"`: β in 1/K | |
+| `species` | array of tables | – | Energy equation, laminar: transported species of a mixture, one `[[fluid.species]]` table each; the fluid of the case is the bulk species. Keys: `name`; `molar_mass` (kg/kmol, default that of the fluid); `diffusivity` (m²/s in the fluid at the reference temperature and operating pressure) with the optional `diffusivity_exponent` n (D ∝ Tⁿ), or `schmidt` (ρD = μ/Sc); optional `specific_heat` (J/(kg K), default that of the fluid), `formation_enthalpy` (J/kg, relative to the fluid) and `expansion` (`boussinesq`: β_Y = −(1/ρ) ∂ρ/∂Y). See [Species](#species-mixtures-and-mass-transfer) | S1 |
+| `molar_mass` | float | 8314.46/`gas_constant` | Molar mass of the fluid (the bulk species) in kg/kmol | S1 |
 | `viscosity_model` | string | `"sutherland"` (compressible), `"constant"` | μ(T). Compressible flow: `"sutherland"` or `"constant"`. Energy equation also `"power-law"`, `"polynomial"`, `"table"`; parameters in `viscosity_parameters` | |
 | `viscosity_parameters` | table | – | `sutherland`: `{ temperature = S }` (K, default `sutherland_temperature`); `power-law`: `{ exponent = n }`, μ = μ_ref (T/T_ref)^n; `polynomial`: `{ coefficients = [a0, a1, …] }`, μ = Σ a_i T^i with T in K (μ_ref follows, `viscosity` must not be set); `table`: `{ temperature = […], value = […] }`, linear in between, constant outside | |
 | `specific_heat` | float | γ R/(γ − 1) | Energy equation: c_p at the reference temperature in J/(kg K) | |
@@ -274,6 +276,7 @@ Either explicit values or `from_boundary`, not both.
 | `velocity` | [float, float] | – | (u, v) in m/s | D16 |
 | `pressure` | float | – | Gauge pressure in Pa | D16 |
 | `temperature` | float | of `from_boundary`, else `reference.temperature` | `physics.energy`: initial temperature in K | |
+| `mass_fraction` | [float, …] | of `from_boundary`, else 0 | `fluid.species`: initial mass fractions, one per species | S1 |
 | `turbulence` | table | ν̃/ν = 3 | See [Turbulence values](#turbulence-values) | D16, D33 |
 | `from_boundary` | string | name of the farfield boundary, if exactly one exists | Uniform field equal to the state of this boundary | D28 |
 | `boundary_layer` | string | – | Airfoil wall (one closed contour): the initial field comes from the integral boundary-layer solution of that airfoil (the solver of `pyaeroflow foil`, at the freestream and Reynolds number of the case). Outer flow: the viscous vortex sheet plus the displacement sources of the boundary layer and wake; inside the layer a power-law profile with the solution's shape factor at the mesh wall distance; behind the airfoil a wake defect with the wake's δ* and θ; pressure from Bernoulli of the outer flow. Spalart–Allmaras: ν̃ from the eddy viscosity of the turbulent layers (κ u_τ y near the wall, Clauser 0.0168 u_e δ* outside; the whole layer for a model without transition); SST keeps uniform turbulence values. The residual drop (`solver.residual_drop`, Newton–Krylov switch, limiter freeze) is measured from the residual of the uniform state, as for a uniform start. Without a converged boundary-layer solution (also after a retry with ncrit 1) the run starts from the uniform state; the log says which. Incompressible flow only; ignored with `restart`; in a polar only the first angle uses it. NACA 0012, 100k cells, SA, Re 6e6: 38 instead of 60 iterations at α 10, 26 instead of 45 at α 0, same CL and CD; building the field takes about 60 s (most of it the first compilation) | |
@@ -297,15 +300,15 @@ dependence: P7). Types marked "inflow" take a `turbulence` table
 
 | `type` | Parameters |
 |--------|-----------------------|
-| `"wall"` | No-slip wall. Optional `velocity = [u, v]` for a moving wall (e.g. cavity lid). Compressible laminar flow: adiabatic, or isothermal with `temperature` (K); a slip wall with `model = "euler"`. `physics.energy`: adiabatic (default), isothermal with `temperature` (K) or a prescribed heat flux into the fluid with `heat_flux` (W/m²) |
+| `"wall"` | No-slip wall. Optional `velocity = [u, v]` for a moving wall (e.g. cavity lid). Compressible laminar flow: adiabatic, or isothermal with `temperature` (K); a slip wall with `model = "euler"`. `physics.energy`: adiabatic (default), isothermal with `temperature` (K) or a prescribed heat flux into the fluid with `heat_flux` (W/m²). `fluid.species`: zero flux (default), `mass_fraction = [...]` (fixed), `species_flux = [...]` (kg/(m² s) into the fluid), or `mass_fraction` with `stefan_flow = true` (net mass flux of a surface the fluid does not cross) |
 | `"slip-wall"` | Identical to `"symmetry"`: zero normal velocity, no shear stress |
 | `"symmetry"` | Symmetry plane: zero normal velocity, no shear stress |
-| `"farfield"` | `velocity` (magnitude, m/s), `angle_of_attack` (deg, default 0), `pressure` (Pa, default 0); inflow: `turbulence`. `physics.energy`: `temperature` (K, default `reference.temperature`). Compressible flow: `mach` instead of `velocity` (required), `pressure` absolute (default 101325 Pa), `temperature` (K, default 288.15); the Roe flux between the interior and the freestream state picks the incoming characteristics, so the same type serves sub- and supersonic in- and outflow. Several farfield boundaries with the same values (e.g. PyAero's `inlet`, `outlet`, `top`, `bottom`) count as one freestream for the defaults of `reference.velocity`, `reference.angle_of_attack`, `initial.from_boundary` and the Cp reference pressure |
-| `"velocity-inlet"` | `velocity = [u, v]` in m/s; inflow: `turbulence`. `physics.energy`: `temperature` (K, default `reference.temperature`). Compressible flow: also `temperature` (K, required); the pressure comes from the interior |
+| `"farfield"` | `velocity` (magnitude, m/s), `angle_of_attack` (deg, default 0), `pressure` (Pa, default 0); inflow: `turbulence`. `physics.energy`: `temperature` (K, default `reference.temperature`). Compressible flow: `mach` instead of `velocity` (required), `pressure` absolute (default 101325 Pa), `temperature` (K, default 288.15); the Roe flux between the interior and the freestream state picks the incoming characteristics, so the same type serves sub- and supersonic in- and outflow. Several farfield boundaries with the same values (e.g. PyAero's `inlet`, `outlet`, `top`, `bottom`) count as one freestream for the defaults of `reference.velocity`, `reference.angle_of_attack`, `initial.from_boundary` and the Cp reference pressure. `fluid.species`: `mass_fraction = [...]` (default 0) |
+| `"velocity-inlet"` | `velocity = [u, v]` in m/s; inflow: `turbulence`. `physics.energy`: `temperature` (K, default `reference.temperature`). Compressible flow: also `temperature` (K, required); the pressure comes from the interior. `fluid.species`: `mass_fraction = [...]` (default 0) |
 | `"total-pressure-inlet"` | `total_pressure` (Pa, gauge), `flow_direction = [d_x, d_y]` (normalised internally); the velocity magnitude follows from p_total − p = ½ρ|v|² with the interior pressure; inflow: `turbulence`. Compressible flow: `total_pressure` absolute and `total_temperature` (K, required); p from the interior, M from p₀/p, T = T₀/(1 + (γ−1)M²/2) |
 | `"pressure-outlet"` | `pressure` (Pa, default 0). Compressible flow: absolute, required; the temperature follows the interior isentrope, a supersonic outflow takes the interior state |
 | `"periodic"` | `partner` (name of the matching boundary faces; gets no entry of its own), `translation = [dx, dy]` (m); driving force: `physics.mean_pressure_gradient` |
-| `"transpiration-wall"` | `normal_velocity` (m/s; + blowing into the domain, − suction), zero tangential velocity (a jet normal to the wall); time dependence: P7 (D18); inflow (blowing): `turbulence`. Incompressible flow only; `physics.energy`: `temperature` (isothermal, also the temperature of the blown fluid) or `heat_flux` as for walls. A slot on an airfoil needs its own marker: `examples/meshes/split_marker.py`; example cases `naca0012_slot_{base,suction,blowing}.toml` |
+| `"transpiration-wall"` | `normal_velocity` (m/s; + blowing into the domain, − suction), zero tangential velocity (a jet normal to the wall); time dependence: P7 (D18); inflow (blowing): `turbulence`. Incompressible flow only; `physics.energy`: `temperature` (isothermal, also the temperature of the blown fluid) or `heat_flux` as for walls. A slot on an airfoil needs its own marker: `examples/meshes/split_marker.py`; example cases `naca0012_slot_{base,suction,blowing}.toml`. `fluid.species`: `mass_fraction`, `species_flux`, `stefan_flow` as for walls |
 
 #### k-ω SST
 
@@ -509,6 +512,7 @@ equations are solved together by the Newton solver.
   2uⁿ − uⁿ⁻¹ of a step is scaled per cell to change T by at most 10 %
   (a sudden wall temperature would otherwise start the second step below
   zero next to a cold wall).
+- Species: see [Species](#species-mixtures-and-mass-transfer).
 - Not yet: compressible keys. Forced convection at M ≥ 0.05 also works
   with `physics.flow = "compressible"`.
 
@@ -541,6 +545,115 @@ temperature = 301.5               # isothermal
 [boundary.top]
 type = "wall"
 heat_flux = 50.0                  # W/m^2 into the fluid
+```
+
+### Species: mixtures and mass transfer
+
+`[[fluid.species]]` tables add transported species to the energy equation
+(stages S1 and S1b: laminar or RANS with every turbulence and transition
+model, steady or unsteady, any number of species). The
+fluid of the case is the bulk species (the carrier); it is not transported
+and has the mass fraction 1 − Σ Y_k.
+
+- Unknowns per cell: p, u, v, [turbulence], T, Y_1 … Y_n (mass fractions, in
+  the order of the tables); log residual columns `Y1`, `Y2`, … (in the
+  column order, also for RANS energy cases); restart files store the
+  columns by name, so an energy restart starts a species case.
+- Equations: ∇·(ρ v Y_k + J_k) = 0 per species, and the energy equation gets
+  the enthalpy that the diffusion fluxes carry, ∇·(ρ v h − k∇T + Σ (h_k −
+  h_bulk) J_k) = 0 with h = h_bulk + Σ Y_k (h_k − h_bulk). That term is zero
+  for species with the c_p of the fluid.
+- Density: `ideal_gas` ρ = p_th W/(R T) with 1/W = Σ Y_k/W_k (R is the gas
+  constant of the fluid); `boussinesq` ρ₀(1 − β(T − T_ref) − Σ β_Y,k Y_k);
+  `constant`: passive species. μ and k are those of the fluid (mixture rules
+  are stage S2).
+- Diffusion: Fick's law with a correction velocity, J_k = −ρ D_k ∇Y_k +
+  Y_k Σ_j ρ D_j ∇Y_j (sum over all species with the bulk), so that the fluxes
+  sum to zero. With one species this is Fick's law of a binary mixture,
+  which is exact. RANS adds the eddy diffusivity μ_t/Sc_t to every ρD_k:
+  `fluid.schmidt_turbulent` (default 0.7), or a law of your own with
+  `schmidt_turbulent_model` / `schmidt_turbulent_parameters`, registered
+  with `pyaeroflow.physics.thermo.register_turbulent_schmidt` (the
+  interface of the Pr_t laws; the inputs' `prandtl` holds the molecular
+  Schmidt number of the species). `diffusivity` is D_k at the reference temperature and the
+  operating pressure (ρD_k does not depend on the pressure of a closed
+  domain); `schmidt` gives ρD_k = μ(T)/Sc_k.
+- The preconditioner Γ gets the columns ∂U/∂Y_k; the mass fractions are
+  upwinded with |v_n| like the temperature. The buoyancy velocity of β²
+  includes the density differences of the prescribed mass fractions and,
+  so that a Stefan flow can start from rest, the diffusion velocity
+  max D_k/L_ref.
+- Boundary conditions. Walls: zero flux (default), `mass_fraction = [...]`
+  (fixed values) or `species_flux = [...]` (diffusion flux into the fluid,
+  kg/(m² s)). `stefan_flow = true` with `mass_fraction`: the fluid does not
+  cross the wall (a liquid or solid surface that releases or takes up the
+  species), so the diffusion fluxes drive the net mass flux m = Σ J_k/(1 −
+  Σ Y_k) through the wall, which carries mass, momentum, enthalpy and
+  species (evaporation, sublimation, condensation at a given surface
+  mass fraction). `evaporation = true` (one species with `latent_heat` and
+  a saturation law): an evaporating or condensing liquid surface, see
+  below. Inlets and farfields: `mass_fraction` (default 0); a
+  farfield also fixes the mass fractions for the diffusion when the flow
+  leaves through it (open end). Pressure outlets take the interior values.
+- Closed domains: p_th follows from the total mass of the mixture; a wall
+  with `stefan_flow` or `evaporation` makes the domain open.
+- Evaporating walls: the surface holds the saturation mass fraction
+  Y_s = X W_k/(X W_k + (1 − X) W) with X = p_sat(T_s)/p_th, the fluid does not
+  cross it (Stefan flow m = j/(1 − Y_s)), and its energy balance takes the
+  latent heat: the heat conducted into the gas is q_w − m L. With
+  `temperature` T_s is the given surface temperature; with `heat_flux` (heat
+  from the liquid side) or neither (adiabatic: the wet-bulb surface) T_s
+  follows from the balance, solved per face inside the residual. Species
+  keys: `latent_heat` (J/kg) and `saturation_model = "antoine"` with
+  `antoine_a`, `antoine_b`, `antoine_c` in the NIST WebBook form
+  log10(p_sat/bar) = A − B/(T + C), T in K, or `"clausius-clapeyron"`
+  with `saturation_pressure` (Pa) at `saturation_temperature` (K) and the
+  latent heat and molar mass of the species. The saturation mole fraction is
+  limited to 0.99.
+- Output: fields `mass_fraction_1` … `mass_fraction_4` (default); wall CSV
+  columns `Y_<name>`, `j_<name>` (mass flux of the species into the fluid,
+  kg/(m² s)), `m_w` (net mass flux) and, with evaporating walls, `q_latent`
+  (m L, W/m²); at an evaporating wall `T` is the surface temperature and
+  `q_w` the heat conducted into the gas; the log Summary gives the mass flow
+  of every species into the fluid per force boundary in kg/(s m).
+- Not yet (stage S2 and later): mixture rules for μ and k, mole-fraction
+  driven multicomponent diffusion, evaporation of several species at one
+  surface, chemistry. The mass fractions are not clipped to [0, 1].
+
+Validation (`docs/validation.md` §20): Stefan tube evaporation rate within
+0.004 % of the exact value, thermosolutal cavity Sh = Nu = 4.521 (de Vahl
+Davis 4.519), laminar plate Sherwood number within 0.3–1.5 % of the
+similarity solution; evaporating surfaces (S1b, Lewis number 1): the
+wet-bulb temperature exact to round-off in the Stefan tube and on turbulent
+plates (SA, SST), the tube's mass flux within 2·10⁻⁶ and the turbulent
+Sherwood number within −1…+8 % (SA) and 0…+5 % (SST) of Kays and Crawford.
+
+```toml
+[physics]
+model = "laminar"
+energy = true
+
+[fluid]
+density_model = "ideal_gas"
+viscosity = 1.846e-5
+
+[[fluid.species]]
+name = "vapour"
+molar_mass = 18.015               # kg/kmol
+schmidt = 0.6                     # rho D = mu / Sc
+
+[boundary.surface]
+type = "wall"
+temperature = 300.0
+mass_fraction = [0.02]            # at the wet surface
+stefan_flow = true                # the air does not cross it
+# or, from the saturation pressure at the surface temperature:
+# evaporation = true              # with latent_heat and saturation_model
+
+[boundary.inlet]
+type = "velocity-inlet"
+velocity = [1.0, 0.0]
+mass_fraction = [0.0]
 ```
 
 ### Compressible flow
@@ -839,6 +952,10 @@ The table is generated from the field registry (`pyaeroflow.io.fields`); a colum
 | `velocity_magnitude` | m/s | Speed | always | x | x | x | x | x | x | x | x | x | x | x | x |
 | `density` | kg/m^3 | Density p / (R T) (incompressible energy equation: rho(T) of fluid.density_model) | compressible or physics.energy |  | x |  | x | x |  | x |  |  |  | x |  |
 | `temperature` | K | Static temperature | compressible or physics.energy |  | x |  | x | x |  | x |  |  |  | x |  |
+| `mass_fraction_1` | 1 | Mass fraction of species 1 of fluid.species | fluid.species (1 or more) |  |  |  |  | x |  |  |  |  |  |  |  |
+| `mass_fraction_2` | 1 | Mass fraction of species 2 of fluid.species | fluid.species (2 or more) |  |  |  |  | x |  |  |  |  |  |  |  |
+| `mass_fraction_3` | 1 | Mass fraction of species 3 of fluid.species | fluid.species (3 or more) |  |  |  |  | x |  |  |  |  |  |  |  |
+| `mass_fraction_4` | 1 | Mass fraction of species 4 of fluid.species | fluid.species (4 or more) |  |  |  |  | x |  |  |  |  |  |  |  |
 | `mach` | 1 | Mach number |v| / c | compressible |  | x |  | x |  |  | x |  |  |  | x |  |
 | `cp` | 1 | Pressure coefficient (p - p_inf) / q_inf, freestream of the farfield | always | x | x | x | x | x | x | x | x | x | x | x | x |
 | `total_pressure` | Pa | p + rho |v|^2 / 2 (compressible: isentropic p (1 + (gamma-1)/2 M^2)^(gamma/(gamma-1))) | always | x | x | x | x | x | x | x | x | x | x | x | x |
