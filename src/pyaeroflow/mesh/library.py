@@ -190,6 +190,30 @@ def _cavity_clustered(n=64, beta=1.5):
     )
 
 
+def _rayleigh_benard(nx=64, ny=32, beta=1.5, perturb=0.3, seed=3):
+    """Periodic Rayleigh-Benard box: one critical wavelength 2 pi / 3.117 = 2.016.
+
+    Unit plate distance, x from 0 to 2.016, cells clustered at the plates
+    (tanh, ``beta``). Markers: ``bottom``, ``top`` (plates), ``left`` and
+    ``right`` (periodic pair, translation 2.016 plate distances). The
+    interior nodes are moved randomly by ``perturb`` of the local cell size
+    (fixed ``seed``) so that the conduction state is not exact and the rolls
+    start from the discretisation error. The conduction state (Nu = 1) is a
+    steady solution too and the solver would stay on it from a regular mesh.
+    """
+    return rectangle(
+        nx,
+        ny,
+        x=(0.0, 2.0 * np.pi / 3.117),
+        y=(0.0, 1.0),
+        cell_type="quad",
+        cluster_y="both",
+        beta=beta,
+        perturb=perturb,
+        seed=seed,
+    )
+
+
 def heated_plate_mesh(nx_plate=96, ny=48, length=1.0, height=0.3, upstream=0.25):
     """Laminar flat plate (heated-plate validation): quads, plate at y = 0.
 
@@ -260,6 +284,10 @@ LIBRARY = {
     "cavity-clustered": (
         _cavity_clustered,
         "unit square, quads clustered at all walls (natural convection)",
+    ),
+    "rayleigh-benard": (
+        _rayleigh_benard,
+        "periodic box of one roll pair, plates clustered (Rayleigh-Benard)",
     ),
     "plate-heated": (
         heated_plate_mesh,

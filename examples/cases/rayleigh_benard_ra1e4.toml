@@ -1,0 +1,61 @@
+# Rayleigh-Benard convection at Ra = 1e4, Pr = 0.71 (validation section 19).
+# Air as an ideal gas at 300 K between two plates a distance h = 32.82 mm
+# apart, bottom plate 1.5 K above and top plate 1.5 K below 300 K (Delta T /
+# T = 1 %: the Boussinesq limit). The box is one critical wavelength wide,
+# lambda = 2 pi / 3.117 = 2.016 h, periodic left and right, so it holds one
+# pair of rolls. The perturbed mesh seeds the rolls: the conduction state
+# (Nu = 1) is a steady solution too, a regular mesh stays on it.
+# Reference: Nu = 2.652 (Clever and Busse 1974, Pr 0.71, lambda = 2.016 h).
+# Mesh: library `rayleigh-benard` (64 x 32).
+
+[case]
+name = "rayleigh_benard_ra1e4"
+
+[mesh]
+file = "rayleigh_benard_64x32.su2"
+scale = 0.032816697748                 # m, h from Ra = g beta dT h^3 / (nu alpha)
+
+[physics]
+model = "laminar"
+energy = true
+gravity = [0.0, -9.81]
+
+[fluid]
+density_model = "ideal_gas"
+operating_pressure = 101325.0
+gas_constant = 287.058
+viscosity = 1.846e-5
+specific_heat = 1006.43
+prandtl = 0.71
+
+[reference]
+temperature = 300.0
+temperature_difference = 3.0      # Nu = q h / (k dT)
+length = 0.032816697748
+velocity = 0.056739034615               # m/s, buoyancy velocity sqrt(g beta dT h)
+
+[initial]
+velocity = [0.0, 0.0]
+
+[boundary.bottom]
+type = "wall"
+temperature = 301.5
+
+[boundary.top]
+type = "wall"
+temperature = 298.5
+
+[boundary.left]
+type = "periodic"
+partner = "right"
+translation = [0.066151232954, 0.0]    # m, 2.016 h
+
+[numerics]
+limiter = "none"
+
+[solver]
+residual_drop = 9.0
+max_iterations = 1000
+
+[output]
+directory = "output/rayleigh_benard_ra1e4"

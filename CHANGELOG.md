@@ -30,6 +30,12 @@
 - Validation §19: Le Quéré et al. (2005) non-Boussinesq cavity (Ra 10⁶,
   ε = 0.6), T1 constant properties and T2 Sutherland, on 64² and 128²;
   heated closed box energy balance (`tests/unit/test_closed_domain.py`).
+- Examples: Rayleigh–Bénard convection in a periodic box, library mesh
+  `rayleigh-benard`, `rayleigh_benard_ra1e5.toml` (template
+  `rayleigh-benard`, gallery 10, with `plot_rayleigh_benard.py`) and
+  `rayleigh_benard_ra1e4.toml`; validation §19: Nu against Clever and Busse
+  (1974) at Ra 5·10³ and 10⁴ within 0.45 % (64 × 32) and 0.15 % (128 × 64);
+  case catalogue 50 cases.
 
 ## Unreleased – RANS with the incompressible energy equation (stage V2)
 

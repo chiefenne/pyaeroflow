@@ -1350,6 +1350,7 @@ the SA plate and the cylinder Re 40 are in `examples/cases/`
 | [heated laminar plate, T_w/T_∞ = 1.5 and 2](#sec-19-plate-hot) | V1, variable properties | Howarth–Levy–Lees similarity | Nu_x within 1 % for x ≤ 0.5 |
 | [heated cylinder](#sec-19-cylinder), Re 20 and 40 | V1 | Lange et al. 1998 | Nu +1.4 % / −0.8 % |
 | [heated channel, uniform wall heat flux](#sec-19-channel) | V1, heat-flux walls | Shah & London | developed Nu −0.15 % |
+| [Rayleigh–Bénard rolls](#sec-19-rayleigh-benard), Ra 5·10³ and 10⁴ | V1, periodic box | Clever and Busse 1974 | Nu −0.44 / −0.24 % (64 × 32), −0.14 / −0.006 % (128 × 64) |
 | [turbulent heated plate](#sec-19-turbulent), SA and SST | V2 | Kays & Crawford | St −4 to +6 % |
 | [turbulent heated plate, T_w/T_∞ = 2](#sec-19-turbulent) | V2, variable properties | Kays & Crawford property ratio | plausibility only |
 | [non-Boussinesq cavity, Ra 10⁶, ε = 0.6](#sec-19-lequere) | V3, closed domain | Le Quéré et al. 2005 | Nu +0.09 / +0.15 %, p_th −0.03 / −0.04 % (128²) |
@@ -1441,6 +1442,40 @@ developed flow (Shah & London): −0.15 %. It tests the heat-flux wall
 condition, the enthalpy transport and the thermal entrance. 13
 iterations, 10 s. The last cells before the outlet show the outlet effect
 (8.35) and are left out of the test.
+
+<a id="sec-19-rayleigh-benard"></a>
+
+**Rayleigh–Bénard convection** (periodic box). Air as an ideal gas at 300 K
+between two no-slip plates 3 K apart (ΔT/T = 1 %), Pr = 0.71, the box one
+critical wavelength wide (λ = 2π/3.117 = 2.016 plate distances h), periodic
+left and right: one roll pair. Meshes of 64 × 32 and 128 × 64 quadrilaterals
+clustered at the plates (tanh β = 1.5) with the interior nodes moved by 30 %
+of the cell size (`make-mesh rayleigh-benard`; a regular mesh stays on the
+conduction state, Nu = 1, which is a steady solution too). Start from rest,
+start-up CFL 1000. Mean Nusselt number of the hot plate (the cold plate agrees
+to 10⁻⁶, the energy balance); the reference values are those of Clever and
+Busse (1974, J. Fluid Mech. 65, 625, Table 1) as quoted by the Nektar++
+tutorial for λ = 2.016 (Ra 5000: 2.112; Ra 10⁴: 2.65179):
+
+| Ra | mesh | Nu | reference | iterations |
+|----|------|----|-----------|------------|
+| 5·10³ | 64 × 32 | 2.1027 (−0.44 %) | 2.112 | 812 |
+| 5·10³ | 128 × 64 | 2.1091 (−0.14 %) | 2.112 | 1514 |
+| 10⁴ | 64 × 32 | 2.6456 (−0.24 %) | 2.65179 | 838 |
+| 10⁴ | 128 × 64 | 2.6516 (−0.006 %) | 2.65179 | 1383 |
+
+The rolls grow from the discretisation error of the mesh (the growth rate
+falls with Ra → Ra_c = 1707.76), which is why the iteration counts are in
+the hundreds; the 64 × 32 run of Ra 10⁴ takes about 50 s, the 128 × 64 run
+5 min. At Ra = 10⁵ the same box holds two roll pairs (the plumes are
+narrower than the critical wavelength) and no reference value for that state
+was found: Nu 5.136 on 64 × 32 and 4.987 on 128 × 64, 619 and 473 iterations
+(the 64 × 32 case file is gallery 10). The case files are
+`rayleigh_benard_ra1e4.toml` (library mesh `rayleigh-benard`; for Ra 5·10³
+set `scale`, `reference.length` and `translation` to the plate distance
+0.026046630263 m, 0.052504268 m) and `rayleigh_benard_ra1e5.toml`
+(template `rayleigh-benard`); test
+`test_rayleigh_benard_clever_busse` (slow, Ra 10⁴ on 64 × 32).
 
 <a id="sec-19-turbulent"></a>
 
