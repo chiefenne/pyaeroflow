@@ -40,6 +40,7 @@ Click a case to jump to its section; each section ends with a link back here.
 | L1 C4 | [Compressible SST: TMR flat plate M 0.2, NACA 0012 M 0.15](#sec-15) | verification/validation | NASA TMR SST (CFL3D) | `pyaeroflow run examples/cases/naca0012_sst_m015.toml` |
 | IBL (1.7) | [Viscous panel method `pyaeroflow foil`: mfoil, E387, SD7003](#sec-18) | verification/validation | mfoil (corrected copy), NASA TM 4062, Penn State 2007, XFOIL | `python examples/ibl_validation.py` |
 | V1 / V2 / V3 (1.8) | [Incompressible energy equation: cavity, heated plates (laminar, variable properties, turbulent), cylinder, channel, non-Boussinesq closed cavity](#sec-19) | verification/validation | de Vahl Davis 1983, Pohlhausen and Howarth–Levy–Lees similarity, Lange et al. 1998, Shah & London, Kays & Crawford, Le Quéré et al. 2005 | `pyaeroflow.cases.heat_transfer`, `tests/verification/test_heat_transfer.py`, `tests/unit/test_closed_domain.py` (case files: `examples/cases/` and the project folder `cases/variable_density_v1/`, `variable_density_v2/`, `closed_domain_v3/`) |
+| S1 | [Species in the energy solver: Stefan tube, thermosolutal cavity, mass-transfer plate](#sec-20) | verification/validation | exact solution of the Stefan tube, de Vahl Davis 1983 (Lewis number 1), Pohlhausen similarity with Sc | `pyaeroflow.cases.mass_transfer`, `tests/verification/test_mass_transfer.py`, `tests/unit/test_species.py` (case files: project folder `cases/species_s1/`) |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
 the scripts write) is not tracked.
@@ -1564,6 +1565,58 @@ The closed-domain residual, pseudo-time term, first-order Jacobian, wall
 heat flux and eddy viscosity equal those of an open domain at the same
 p_th for all models, and the Newton product matches a central difference
 including the global p_th coupling (`tests/unit/test_closed_domain.py`).
+
+[↑ back to table](#stage-table)
+
+<a id="sec-20"></a>
+
+## 20. Species: mixtures and mass transfer (stage S1)
+
+`[[fluid.species]]` (configuration: [Species](configuration.md#species-mixtures-and-mass-transfer)).
+Script: `pyaeroflow.cases.mass_transfer`; tests
+`tests/verification/test_mass_transfer.py` (the Ra 1e5 cavity is `slow`)
+and `tests/unit/test_species.py`; case files in the project folder
+`cases/species_s1/` with the checking script `sherwood_check.py`.
+
+| case | what it checks | reference | result |
+|---|---|---|---|
+| Stefan tube | Stefan flow of a wall, density of the mixture, binary diffusion | exact | evaporation rate +0.004 % (32²) |
+| thermosolutal cavity, Le = 1, N = 1 | solutal buoyancy, coupling of T and Y | de Vahl Davis 1983 at Ra 10⁵ | Sh = Nu = 4.521 (4.519) |
+| laminar plate with mass transfer, Sc = 0.6 | fixed-Y wall, convection and diffusion | Pohlhausen similarity with Sc | Sh_x +0.3 to +1.5 % |
+
+**Stefan tube.** A species evaporates from a surface at the bottom of a
+tube (Y₀ = 0.5, `stefan_flow = true`: the gas does not cross the surface)
+and diffuses through the stagnant gas to the open end (Y_L = 0, a farfield
+at rest). With constant ρD the net mass flux is m = (ρD/L) ln((1 − Y_L)/(1 −
+Y₀)) and 1 − Y varies exponentially along the tube, for any ratio of the
+molar masses. Water vapour in air (W 18.015 and 28.96 kg/kmol, Sc = 0.6,
+L = 1 m) on 32 × 32 cells: 2.07952·10⁻⁵ kg/(s m) against 2.07944·10⁻⁵
+(+0.004 %), 28 iterations. The density varies by 23 % along the tube.
+
+**Thermosolutal cavity.** The cavity of de Vahl Davis with a second, solutal
+buoyancy of the same sign: Boussinesq density ρ₀(1 − β(T − T_ref) − β_Y Y),
+hot wall at Y = 0.005 and cold wall at Y = 0 with β_Y ΔY = β ΔT (buoyancy
+ratio N = 1), Sc = Pr = 0.71 (Lewis number 1). The mass fraction is then a
+copy of the temperature and the flow is that of the thermal cavity at
+Ra_T + Ra_S = 10⁵. On the clustered 64 × 64 mesh: mean Nu = 4.5211 and mean
+Sh = 4.5211 (equal to five digits; de Vahl Davis 4.519), 40 iterations.
+
+**Laminar flat plate with mass transfer.** The heated-plate domain (§19) at
+Re_L = 5·10⁴, isothermal, the plate at Y = 0.001 of water vapour (low
+mass-transfer rate, no Stefan flow), Sc = 0.6. The similarity solution of
+the heated plate with Sc in place of Pr gives Sh_x = 0.2770 Re_x^0.5.
+
+| x | 0.1 | 0.2 | 0.3 | 0.5 | 0.7 | 0.9 |
+|---|---|---|---|---|---|---|
+| Sh_x / reference | 1.003 | 1.004 | 1.005 | 1.008 | 1.011 | 1.015 |
+
+The growth towards the trailing edge is that of the heated plate (§19, the
+outlet acts on the boundary layer).
+
+Not validated yet: more than one transported species in a flow (the unit
+tests check the fluxes and the Jacobian), species with different c_p
+(enthalpy diffusion), unsteady mass transfer (a closed helium–air cavity
+runs; no reference compared).
 
 [↑ back to table](#stage-table)
 

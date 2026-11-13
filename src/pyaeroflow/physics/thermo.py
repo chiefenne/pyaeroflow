@@ -27,6 +27,24 @@ with the same residual code:
     boussinesq    rho = rho_0 (1 - beta (T - T_0))
     ideal_gas     rho = p_th / (R T)       (non-dimensional: rho = c / T)
 
+Species (stage S1, :class:`Species`): the fluid of the case is the bulk
+species (the carrier, not transported), ``thermo.species`` are the
+transported ones with the mass fractions Y_k; the bulk has 1 - sum Y_k. All
+functions take the mass fractions as the optional last argument ``y``
+(shape (..., n_species)); without it they are those of the bulk fluid.
+
+    molar mass    1 / W = 1 + sum_k Y_k (1 / W_k - 1)            (W_k / W_bulk)
+    ideal_gas     rho = p_th W / T
+    boussinesq    rho = rho_0 (1 - beta (T - T_0) - sum_k beta_k Y_k)
+    c_p, h        c_p = c_p,bulk + sum_k Y_k (c_p,k - c_p,bulk), h likewise
+    mu, k         those of the bulk fluid (mixture rules: stage S2)
+    diffusion     J_k = -rho D_k grad Y_k + Y_k V_c  (Fick's law with a
+                  correction velocity, so that the fluxes of all species sum
+                  to zero; exact for a binary mixture)
+
+D_k(T) is a property law at the operating pressure (rho D_k does not depend
+on the thermodynamic pressure) or ``schmidt``: rho D_k = mu / Sc_k.
+
 Turbulent Prandtl number: one interface, :func:`turbulent_prandtl`, a JAX
 function of the local state (:class:`TurbulentPrandtlInputs`); built in is
 ``constant`` (0.9). Further correlations are registered with
@@ -95,13 +113,48 @@ class DensityModel(NamedTuple):
     pressure: float = 1.0
 
 
+class Species(NamedTuple):
+    """A transported species of the mixture, non-dimensional (hashable).
+
+    Attributes
+    ----------
+    name : str
+    molar_mass : float
+        W_k / W_bulk.
+    diffusivity : PropertyLaw
+        D_k(T) at the operating pressure, or ``schmidt`` (value Sc_k):
+        rho D_k = mu(T) / Sc_k.
+    specific_heat : PropertyLaw or None
+        c_p,k(T); None: that of the bulk fluid.
+    formation_enthalpy : float
+        h_k - h_bulk at the reference temperature (zero for inert mixing;
+        the hook of the heat release of chemistry).
+    expansion : float
+        boussinesq: beta_k = -(1 / rho_0) d(rho)/dY_k.
+    """
+
+    name: str = "Y1"
+    molar_mass: float = 1.0
+    diffusivity: PropertyLaw = PropertyLaw("schmidt", 1.0)
+    specific_heat: PropertyLaw = None
+    formation_enthalpy: float = 0.0
+    expansion: float = 0.0
+
+
 class Thermo(NamedTuple):
-    """Density model and property laws of one fluid (hashable)."""
+    """Density model and property laws of one fluid (hashable).
+
+    ``species`` are the transported species of a mixture (the fluid is then
+    the bulk species); ``pressure_ratio`` is p_th / p_op of a closed domain
+    with species (D_k is given at the operating pressure).
+    """
 
     density: DensityModel = DensityModel()
     viscosity: PropertyLaw = PropertyLaw("constant", 1.0e-3)
     conductivity: PropertyLaw = PropertyLaw("prandtl", 0.72)
     specific_heat: PropertyLaw = PropertyLaw("constant", 1.0)
+    species: tuple = ()
+    pressure_ratio: float = 1.0
 
 
 @jax.tree_util.register_static
@@ -237,21 +290,36 @@ def _table_integral(law, t):
 # -- fluid properties ---------------------------------------------------------------
 
 
-def density(thermo, t):
-    """rho(T) of the density model (constant thermodynamic pressure)."""
+def _species_array(thermo, attribute):
+    return jnp.asarray([getattr(s, attribute) for s in thermo.species])
+
+
+def inverse_molar_mass(thermo, y):
+    """W_bulk / W of the mixture: 1 + sum_k Y_k (1 / W_k - 1), shape y[..., 0]."""
+    c = jnp.asarray([1.0 / s.molar_mass - 1.0 for s in thermo.species])
+    return jnp.maximum(1.0 + jnp.sum(jnp.asarray(y) * c, axis=-1), 1e-12)
+
+
+def density(thermo, t, y=None):
+    """rho(T, Y) of the density model (constant thermodynamic pressure)."""
     d = thermo.density
     t = jnp.asarray(t)
     if d.kind == "constant":
         return d.density * jnp.ones_like(t)
     if d.kind == "boussinesq":
-        return d.density * (1.0 - d.expansion * (t - d.temperature))
+        rho = d.density * (1.0 - d.expansion * (t - d.temperature))
+        if y is not None:
+            beta = _species_array(thermo, "expansion")
+            rho = rho - d.density * jnp.sum(jnp.asarray(y) * beta, axis=-1)
+        return rho
     if d.kind == "ideal_gas":
-        return d.pressure / jnp.maximum(t, 1e-12)
+        rho = d.pressure / jnp.maximum(t, 1e-12)
+        return rho if y is None else rho / inverse_molar_mass(thermo, y)
     raise ValueError(f"unknown density model '{d.kind}'")
 
 
-def density_derivative(thermo, t):
-    """d(rho)/dT at constant thermodynamic pressure."""
+def density_derivative(thermo, t, y=None):
+    """d(rho)/dT at constant thermodynamic pressure and composition."""
     d = thermo.density
     t = jnp.asarray(t)
     if d.kind == "constant":
@@ -259,7 +327,23 @@ def density_derivative(thermo, t):
     if d.kind == "boussinesq":
         return -d.density * d.expansion * jnp.ones_like(t)
     if d.kind == "ideal_gas":
-        return -d.pressure / jnp.maximum(t, 1e-12) ** 2
+        rho_t = -d.pressure / jnp.maximum(t, 1e-12) ** 2
+        return rho_t if y is None else rho_t / inverse_molar_mass(thermo, y)
+    raise ValueError(f"unknown density model '{d.kind}'")
+
+
+def density_species_derivative(thermo, t, y):
+    """d(rho)/dY_k at constant T and p_th, shape y.shape."""
+    d = thermo.density
+    y = jnp.asarray(y)
+    if d.kind == "constant":
+        return jnp.zeros_like(y)
+    if d.kind == "boussinesq":
+        return -d.density * _species_array(thermo, "expansion") * jnp.ones_like(y)
+    if d.kind == "ideal_gas":
+        c = jnp.asarray([1.0 / s.molar_mass - 1.0 for s in thermo.species])
+        rho = density(thermo, t, y)
+        return -(rho / inverse_molar_mass(thermo, y))[..., None] * c
     raise ValueError(f"unknown density model '{d.kind}'")
 
 
@@ -268,14 +352,101 @@ def viscosity(thermo, t):
     return evaluate(thermo.viscosity, t)
 
 
-def specific_heat(thermo, t):
-    """c_p(T)."""
-    return evaluate(thermo.specific_heat, t)
+def specific_heat(thermo, t, y=None):
+    """c_p(T, Y) (without ``y``: of the bulk fluid)."""
+    cp = evaluate(thermo.specific_heat, t)
+    if y is None:
+        return cp
+    return cp + jnp.sum(jnp.asarray(y) * species_specific_heat(thermo, t), axis=-1)
 
 
-def enthalpy(thermo, t):
-    """h(T) = int_1^T c_p dT (zero at the reference temperature)."""
-    return integral(thermo.specific_heat, t)
+def enthalpy(thermo, t, y=None):
+    """h(T, Y) = int_1^T c_p dT (bulk fluid: zero at the reference temperature)."""
+    h = integral(thermo.specific_heat, t)
+    if y is None:
+        return h
+    return h + jnp.sum(jnp.asarray(y) * species_enthalpy(thermo, t), axis=-1)
+
+
+def species_specific_heat(thermo, t):
+    """c_p,k(T) - c_p,bulk(T) of the transported species, shape t.shape + (n,)."""
+    t = jnp.asarray(t)
+    cp = evaluate(thermo.specific_heat, t)
+    return jnp.stack(
+        [
+            jnp.zeros_like(t)
+            if s.specific_heat is None
+            else evaluate(s.specific_heat, t) - cp
+            for s in thermo.species
+        ],
+        axis=-1,
+    )
+
+
+def species_enthalpy(thermo, t):
+    """h_k(T) - h_bulk(T) of the transported species, shape t.shape + (n,).
+
+    The partial enthalpy dh/dY_k of the mixture: zero for species with the
+    c_p of the bulk fluid and no formation enthalpy.
+    """
+    t = jnp.asarray(t)
+    h = integral(thermo.specific_heat, t)
+    return jnp.stack(
+        [
+            s.formation_enthalpy
+            + (
+                jnp.zeros_like(t)
+                if s.specific_heat is None
+                else integral(s.specific_heat, t) - h
+            )
+            for s in thermo.species
+        ],
+        axis=-1,
+    )
+
+
+def density_diffusivity(thermo, t, y):
+    """Rho D_k of the transported species, shape y.shape.
+
+    ``schmidt``: mu(T) / Sc_k. Other laws: D_k(T) at the operating pressure
+    times the density at the operating pressure (rho D_k of a gas does not
+    depend on the pressure).
+    """
+    t = jnp.asarray(t)
+    rho = density(thermo, t, y) / thermo.pressure_ratio
+    mu = viscosity(thermo, t)
+    return jnp.stack(
+        [
+            mu / s.diffusivity.value
+            if s.diffusivity.kind == "schmidt"
+            else rho * evaluate(s.diffusivity, t)
+            for s in thermo.species
+        ],
+        axis=-1,
+    )
+
+
+def diffusion_flux(thermo, t, y, grad_n):
+    """Diffusion mass fluxes J_k.n of the transported species, shape y.shape.
+
+    Fick's law with a correction velocity: J_k = -rho D_k dY_k/dn + Y_k S
+    with S = sum over all species (the bulk included) of rho D_j dY_j/dn, so
+    that the fluxes of all species sum to zero. The bulk species has
+    dY/dn = -sum_k dY_k/dn and the mass-averaged diffusivity of the
+    transported species (with one transported species its D: S = 0 and the
+    flux is Fick's law of a binary mixture).
+
+    ``grad_n`` is dY_k/dn, shape y.shape.
+    """
+    y = jnp.asarray(y)
+    rho_d = density_diffusivity(thermo, t, y)
+    fick = rho_d * grad_n
+    if len(thermo.species) == 1:
+        return -fick
+    y_sum = jnp.sum(jnp.abs(y), axis=-1) + 1e-30
+    bulk = (jnp.sum(jnp.abs(y) * rho_d, axis=-1) + 1e-30 * rho_d[..., 0]) / y_sum
+    correction = jnp.sum(fick, axis=-1) - bulk * jnp.sum(grad_n, axis=-1)
+    return -fick + y * correction[..., None]
 
 
 def conductivity(thermo, t):

@@ -277,6 +277,27 @@ SCHEMA = {
             "every term) or ideal_gas (operating_pressure / (R T))",
             choices=("constant", "boussinesq", "ideal_gas"),
         ),
+        "species": Opt(
+            "table_list",
+            None,
+            "physics.energy, laminar: transported species of a mixture (the "
+            "fluid of the case is the bulk species with 1 - sum Y_k). One table "
+            "per species: name; molar_mass (kg/kmol, default that of the fluid); "
+            "diffusivity (m^2/s in the fluid at the reference temperature and "
+            "operating pressure) with the optional diffusivity_exponent n (D ~ "
+            "T^n), or schmidt (rho D = mu / Sc); optional specific_heat (J/(kg "
+            "K), default that of the fluid), formation_enthalpy (J/kg, relative "
+            "to the fluid) and expansion (density_model = boussinesq: "
+            "-(1/rho) d(rho)/dY)",
+        ),
+        "molar_mass": Opt(
+            "float",
+            None,
+            "Molar mass of the fluid (the bulk species of fluid.species); "
+            "default 8314.46 / gas_constant",
+            "kg/kmol",
+            minimum=0.0,
+        ),
         "thermal_expansion": Opt(
             "float",
             None,
@@ -388,6 +409,13 @@ SCHEMA = {
             "Initial temperature (physics.energy); default the temperature of "
             "from_boundary, else reference.temperature",
             "K",
+            minimum=0.0,
+        ),
+        "mass_fraction": Opt(
+            "float_list",
+            None,
+            "Initial mass fractions of fluid.species (in their order); default "
+            "those of from_boundary, else 0",
             minimum=0.0,
         ),
         "from_boundary": Opt(
@@ -1430,6 +1458,28 @@ BOUNDARY_TYPES = {
             "(instead of temperature)",
             "W/m^2",
         ),
+        "mass_fraction": Opt(
+            "float_list",
+            None,
+            "fluid.species: fixed mass fractions at the wall (in the order of "
+            "fluid.species); default zero flux",
+            minimum=0.0,
+        ),
+        "species_flux": Opt(
+            "float_list",
+            None,
+            "fluid.species: prescribed diffusion mass fluxes from the wall into "
+            "the fluid (instead of mass_fraction)",
+            "kg/(m^2 s)",
+        ),
+        "stefan_flow": Opt(
+            "bool",
+            False,
+            "fluid.species with mass_fraction: the fluid (bulk species) does not "
+            "cross the wall, so that the diffusion fluxes drive a net mass flux "
+            "sum J_k / (1 - sum Y_k) through it (evaporation, sublimation, "
+            "condensation)",
+        ),
     },
     "symmetry": {},
     "slip-wall": {},
@@ -1441,6 +1491,13 @@ BOUNDARY_TYPES = {
             "Static temperature (compressible, required; physics.energy: "
             "default reference.temperature)",
             "K",
+        ),
+        "mass_fraction": Opt(
+            "float_list",
+            None,
+            "fluid.species: mass fractions of the inflow (in the order of "
+            "fluid.species); default 0",
+            minimum=0.0,
         ),
         "turbulence": Opt("table", None, TURBULENCE_DESCRIPTION),
     },
@@ -1466,6 +1523,13 @@ BOUNDARY_TYPES = {
         "flow_direction": Opt(
             "float2", REQUIRED, "Flow direction (d_x, d_y), normalised internally"
         ),
+        "mass_fraction": Opt(
+            "float_list",
+            None,
+            "fluid.species: mass fractions of the inflow (in the order of "
+            "fluid.species); default 0",
+            minimum=0.0,
+        ),
         "turbulence": Opt("table", None, TURBULENCE_DESCRIPTION),
     },
     "transpiration-wall": {
@@ -1489,6 +1553,28 @@ BOUNDARY_TYPES = {
             None,
             "physics.energy: heat flux from the wall into the fluid",
             "W/m^2",
+        ),
+        "mass_fraction": Opt(
+            "float_list",
+            None,
+            "fluid.species: fixed mass fractions at the wall (in the order of "
+            "fluid.species); default zero flux",
+            minimum=0.0,
+        ),
+        "species_flux": Opt(
+            "float_list",
+            None,
+            "fluid.species: prescribed diffusion mass fluxes from the wall into "
+            "the fluid (instead of mass_fraction)",
+            "kg/(m^2 s)",
+        ),
+        "stefan_flow": Opt(
+            "bool",
+            False,
+            "fluid.species with mass_fraction: the fluid (bulk species) does not "
+            "cross the wall, so that the diffusion fluxes drive a net mass flux "
+            "sum J_k / (1 - sum Y_k) through it (evaporation, sublimation, "
+            "condensation)",
         ),
         "turbulence": Opt("table", None, TURBULENCE_DESCRIPTION),
     },
@@ -1519,6 +1605,13 @@ BOUNDARY_TYPES = {
             "Freestream static temperature (compressible, default 288.15; "
             "physics.energy: default reference.temperature)",
             "K",
+            minimum=0.0,
+        ),
+        "mass_fraction": Opt(
+            "float_list",
+            None,
+            "fluid.species: mass fractions of the inflow (in the order of "
+            "fluid.species); default 0",
             minimum=0.0,
         ),
         "turbulence": Opt("table", None, TURBULENCE_DESCRIPTION),

@@ -918,9 +918,102 @@ COMPRESSIBLE_BOUNDARY_TYPES = (
 def _closed_boundary(b):
     """Return True if the boundary exchanges no mass (closed domain)."""
     kind = b["type"]
+    if b.get("stefan_flow"):
+        return False
     if kind in ("wall", "slip-wall", "symmetry", "periodic"):
         return True
     return kind == "transpiration-wall" and not b.get("normal_velocity")
+
+
+SPECIES_KEYS = (
+    "name",
+    "molar_mass",
+    "diffusivity",
+    "diffusivity_exponent",
+    "schmidt",
+    "specific_heat",
+    "formation_enthalpy",
+    "expansion",
+)
+UNIVERSAL_GAS_CONSTANT = 8314.462618  # J/(kmol K)
+
+
+def _species_rules(data, boundaries, energy, problems):
+    """Rules and defaults of fluid.species (stage S1: laminar, with the energy eq.).
+
+    Every species has a name and either a diffusivity or a Schmidt number;
+    the boundary and initial mass fractions have one value per species and
+    sum to at most 1. Walls take either mass_fraction or species_flux.
+    """
+    fluid, physics = data["fluid"], data["physics"]
+    species = fluid["species"] or []
+    keys = ("mass_fraction", "species_flux")
+    if not species:
+        for name, b in boundaries.items():
+            for key in keys + ("stefan_flow",):
+                if b.get(key):
+                    problems.append(f"boundary.{name}.{key}: needs fluid.species")
+        if data["initial"]["mass_fraction"] is not None:
+            problems.append("initial.mass_fraction: needs fluid.species")
+        return
+    if not energy:
+        problems.append(
+            "fluid.species: needs physics.flow = incompressible with "
+            "physics.energy = true"
+        )
+        return
+    if physics["model"] != "laminar":
+        problems.append(
+            "fluid.species: needs physics.model = laminar (species with a "
+            "turbulence model are a later stage)"
+        )
+    if fluid["molar_mass"] is None:
+        fluid["molar_mass"] = UNIVERSAL_GAS_CONSTANT / fluid["gas_constant"]
+    names = []
+    for i, sp in enumerate(species):
+        dotted = f"fluid.species[{i}]"
+        for key in sp:
+            if key not in SPECIES_KEYS:
+                problems.append(f"{dotted}.{key}: unknown key")
+        name = sp.get("name")
+        if not isinstance(name, str) or not name or name in names:
+            problems.append(f"{dotted}.name: a unique name is required")
+        names.append(name)
+        for key in SPECIES_KEYS[1:]:
+            value = sp.get(key)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int | float)
+            ):
+                problems.append(f"{dotted}.{key}: expected a number, got {value!r}")
+                sp[key] = None
+        if (sp.get("diffusivity") is None) == (sp.get("schmidt") is None):
+            problems.append(f"{dotted}: give either diffusivity or schmidt")
+        for key in ("molar_mass", "diffusivity", "schmidt", "specific_heat"):
+            if sp.get(key) is not None and sp[key] <= 0.0:
+                problems.append(f"{dotted}.{key}: must be > 0")
+        sp.setdefault("molar_mass", fluid["molar_mass"])
+        if sp.get("expansion") and fluid["density_model"] != "boussinesq":
+            problems.append(f"{dotted}.expansion: needs density_model = boussinesq")
+    n = len(species)
+    entries = [(f"boundary.{name}", b) for name, b in boundaries.items()]
+    entries.append(("initial", data["initial"]))
+    for prefix, b in entries:
+        for key in keys:
+            values = b.get(key)
+            if values is None:
+                continue
+            if len(values) != n:
+                problems.append(
+                    f"{prefix}.{key}: expected {n} value(s), one per species"
+                )
+            elif key == "mass_fraction" and sum(values) > 1.0 + 1e-12:
+                problems.append(
+                    f"{prefix}.{key}: the mass fractions sum to more than 1"
+                )
+        if b.get("mass_fraction") is not None and b.get("species_flux") is not None:
+            problems.append(f"{prefix}: give mass_fraction or species_flux, not both")
+        if b.get("stefan_flow") and b.get("mass_fraction") is None:
+            problems.append(f"{prefix}.stefan_flow: needs mass_fraction")
 
 
 def _energy_rules(data, boundaries, farfields, problems, notices):
@@ -1058,7 +1151,8 @@ def _flow_rules(data, boundaries, farfields, compressible, problems, notices):
         notices.append("physics.energy ignored: compressible flow has its energy")
     if energy:
         _energy_rules(data, boundaries, farfields, problems, notices)
-    elif not compressible:
+    _species_rules(data, boundaries, energy, problems)
+    if not energy and not compressible:
         for key, default in (
             ("density_model", "constant"),
             ("thermodynamic_pressure", "auto"),

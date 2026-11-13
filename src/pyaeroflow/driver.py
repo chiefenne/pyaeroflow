@@ -286,9 +286,10 @@ class FlowProblem:
             regular = {
                 name: {**defaults.get(name, {}), **bc} for name, bc in regular.items()
             }
-        self.disc = build_geometry(
-            mesh, weight_exponent, periodic, self.flow.lsq_include(regular, model.n_var)
-        )
+        include = self.flow.lsq_include(regular, model.n_var)
+        if getattr(model, "n_species", 0):  # mass fractions behind T
+            include = vd.lsq_include(regular, model.n_var, model.n_species)
+        self.disc = build_geometry(mesh, weight_exponent, periodic, include)
         self.geom = self.disc.geom
         if self.turbulent:
             walls = [
@@ -918,6 +919,21 @@ class FlowProblem:
             )
         )
 
+    def wall_species_flux(self, w):
+        """Species mass fluxes into the fluid per boundary face, and the net mass flux.
+
+        Arrays (n_bfaces, n_species) and (n_bfaces,), non-dimensional
+        (:func:`pyaeroflow.physics.variable_density.wall_species_flux`).
+        """
+        j, m = vd.wall_species_flux(self.model, self.geom, self.bc, jnp.asarray(w))
+        return np.asarray(j), np.asarray(m)
+
+    def wall_mass_fraction(self, w):
+        """Mass fractions per boundary face, (n_bfaces, n_species)."""
+        return np.asarray(
+            vd.wall_mass_fraction(self.model, self.geom, self.bc, jnp.asarray(w))
+        )
+
     def thermodynamic_pressure(self, w):
         """Thermodynamic pressure p_th of ``w`` (energy equation, ideal gas).
 
@@ -961,7 +977,8 @@ class FlowProblem:
             rho, nu = (
                 np.asarray(a)
                 for a in rans_variable_density.cell_properties(
-                    self.state_model(w), jnp.asarray(w_b[:, -1])
+                    self.state_model(w),
+                    jnp.asarray(w_b[:, self.model.layout.column("T")]),
                 )
             )
         elif self.compressible:
@@ -1091,10 +1108,12 @@ class FlowProblem:
         nu_tilde=None,
         k_omega=None,
         temperature=1.0,
+        mass_fraction=None,
     ):
         """Uniform initial field, shape (n_cells, n_var); nu_tilde default 3 nu.
 
         Compressible flow: (p, u, v, T) with the given ``temperature``.
+        Species: ``mass_fraction`` of the transported species (default 0).
 
         The SA-AFT columns start at gamma_tilde = 0 and n = 0 (freestream).
         SST takes ``k_omega`` = (k, omega); default Tu = 0.1 % of the given
@@ -1109,6 +1128,8 @@ class FlowProblem:
             w[:, comp.T] = temperature
         if self.thermal:
             w[:, self.model.layout.column("T")] = temperature
+            if mass_fraction is not None and self.model.n_species:
+                w[:, self.model.layout.slice("species")] = mass_fraction
         if self.turbulent:
             nu = self.model.viscosity / self.model.density
             if self.model.turbulence == "sst":

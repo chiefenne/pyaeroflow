@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased – species: mixtures and mass transfer (stage S1)
+
+- `[[fluid.species]]`: transported species in the incompressible energy
+  equation (laminar, steady and unsteady, any number of species). The fluid
+  of the case is the bulk species. State p, u, v, T, Y_1 … Y_n; mixture
+  density of the ideal gas (molar masses) or Boussinesq with a solutal
+  expansion; c_p and enthalpy of the mixture; Fick diffusion with a
+  correction velocity (exact for a binary mixture), `diffusivity` (with
+  `diffusivity_exponent`) or `schmidt` per species; enthalpy diffusion in
+  the energy equation. The preconditioner and the upwinding are extended by
+  the species columns. Without species the solver is unchanged to the bit.
+- Boundary conditions: walls with zero flux, `mass_fraction`, `species_flux`
+  or `mass_fraction` with `stefan_flow = true` (net mass flux of a surface
+  that the fluid does not cross); `mass_fraction` at inlets and farfields;
+  `initial.mass_fraction`.
+- Output: fields `mass_fraction_1` … `mass_fraction_4`, wall CSV columns
+  `Y_<name>`, `j_<name>`, `m_w`, log Summary rows `species '<boundary>'`.
+- Fix: the `temperature` field of RANS cases with the energy equation wrote
+  the first turbulence column (T is the last column there).
+- Validation §20: Stefan tube (evaporation rate +0.004 %), thermosolutal
+  cavity (Sh = Nu = 4.521, de Vahl Davis 4.519), laminar plate with mass
+  transfer (Sh_x within 0.3–1.5 % of the similarity solution).
+
 ## Unreleased – closed domains and unsteady flow with the energy equation (stage V3)
 
 - Closed domains: `fluid.thermodynamic_pressure = "auto" | "constant" |

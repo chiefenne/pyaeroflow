@@ -26,6 +26,7 @@ class Capabilities(NamedTuple):
     turbulence: str = "sa-neg"  # "sa-neg" or "sst" (only meaningful with rans)
     flow: str = "incompressible"  # or "compressible" (L1)
     energy: bool = False  # incompressible energy equation (variable density)
+    species: int = 0  # transported species (fluid.species)
 
     @classmethod
     def from_config(cls, data):
@@ -43,6 +44,7 @@ class Capabilities(NamedTuple):
             physics.get("flow", "incompressible"),
             bool(physics.get("energy", False))
             and physics.get("flow", "incompressible") == "incompressible",
+            len(data.get("fluid", {}).get("species") or []),
         )
 
 
@@ -240,7 +242,25 @@ def _density(c):
 
 
 def _temperature(c):
-    return c.w[:, 3] * c.scaling.temperature
+    # Energy equation: T follows the turbulence columns (RANS).
+    thermal = getattr(c.problem, "thermal", False)
+    col = c.problem.model.layout.column("T") if thermal else 3
+    return c.w[:, col] * c.scaling.temperature
+
+
+# Mass-fraction fields exist for the first MAX_SPECIES_FIELDS species.
+MAX_SPECIES_FIELDS = 4
+
+
+def _mass_fraction(index):
+    def compute(c):
+        return c.w[:, c.problem.model.layout.start("species") + index]
+
+    return compute
+
+
+def _has_species(index):
+    return lambda caps: caps.species > index
 
 
 def _mach(c):
@@ -523,6 +543,17 @@ FIELDS = (
         "compressible or physics.energy",
         _thermal,
         _temperature,
+    ),
+    *(
+        Field(
+            f"mass_fraction_{i + 1}",
+            "1",
+            f"Mass fraction of species {i + 1} of fluid.species",
+            f"fluid.species ({i + 1} or more)",
+            _has_species(i),
+            _mass_fraction(i),
+        )
+        for i in range(MAX_SPECIES_FIELDS)
     ),
     Field(
         "mach",
@@ -926,6 +957,11 @@ def default_fields(caps):
     names = [n for n in DEFAULT_NAMES if BY_NAME[n].available(caps)]
     if caps.energy:
         names.insert(names.index("density") + 1, "temperature")
+        at = names.index("temperature") + 1
+        names[at:at] = [
+            f"mass_fraction_{i + 1}"
+            for i in range(min(caps.species, MAX_SPECIES_FIELDS))
+        ]
     return names
 
 
@@ -995,7 +1031,15 @@ def catalogue_table():
         (
             "laminar + energy",
             Capabilities(
-                "laminar", "none", True, True, True, "none", "incompressible", True
+                "laminar",
+                "none",
+                True,
+                True,
+                True,
+                "none",
+                "incompressible",
+                True,
+                MAX_SPECIES_FIELDS,
             ),
         ),
         ("SA", Capabilities("rans", "none", True, True, True)),
