@@ -124,8 +124,14 @@ class VariableDensityModel(NamedTuple):
     beta_factor, spatial_order, limiter, limiter_threshold,
     viscous_gradient, alpha, body_force, pin :
         As in :class:`pyaeroflow.physics.incompressible.IncompressibleModel`.
-    turbulence, transition : str
-        "none" (laminar; RANS with the energy equation is stage V2).
+    turbulence, transition, turbulence_spatial_order, coupling,
+    turbulence_intensity, critical_amplification, lm_positive_jacobian,
+    lm_jacobian_smoothing :
+        RANS (stage V2), as in
+        :class:`~pyaeroflow.physics.incompressible.IncompressibleModel`; the
+        residual is then that of :mod:`pyaeroflow.physics.rans_variable_density`
+        (SA, SA-BCM, SA-AFT) or
+        :mod:`pyaeroflow.physics.rans_sst_variable_density` (SST, SST-LM).
     """
 
     density: float = 1.0
@@ -144,6 +150,10 @@ class VariableDensityModel(NamedTuple):
     turbulence_spatial_order: int = 1
     coupling: str = "segregated"
     transition: str = "none"
+    turbulence_intensity: float = 0.0
+    critical_amplification: float = None
+    lm_positive_jacobian: bool = True
+    lm_jacobian_smoothing: float = 0.0
 
     @property
     def viscosity(self):
@@ -157,7 +167,7 @@ class VariableDensityModel(NamedTuple):
 
     @property
     def n_var(self):
-        """Number of variables (4: p, u, v, T)."""
+        """Number of variables (p, u, v, the turbulence columns and T)."""
         return self.layout.n_var
 
 
@@ -179,6 +189,12 @@ class BoundaryData(NamedTuple):
         rho of the prescribed temperature (total-pressure inlets).
     density : float
         Operating density.
+    nu_tilde, turbulence : float arrays or None
+        Turbulence boundary values (RANS, stage V2), as in
+        :class:`pyaeroflow.physics.incompressible.BoundaryData`.
+    thermo : StaticThermo or None
+        Property laws (RANS: the SST wall omega uses nu of the wall
+        temperature).
     """
 
     kind: jnp.ndarray
@@ -189,6 +205,7 @@ class BoundaryData(NamedTuple):
     density: float = 1.0
     nu_tilde: jnp.ndarray = None
     turbulence: jnp.ndarray = None
+    thermo: th.StaticThermo = None  # RANS: property laws at the boundary faces
 
 
 def thermal_kind(bc):
@@ -232,6 +249,8 @@ def build_boundary_data(disc, conditions, model):
             t_val[sl] = inc._evaluate(bc["temperature"], x, y)
     value = np.column_stack((np.asarray(flow.value), t_val))
     face_density = np.asarray(th.density(model.thermo, jnp.asarray(t_val)))
+    # RANS (stage V2): the turbulence boundary values of the flow part.
+    turbulent = model.turbulence != "none"
     return BoundaryData(
         flow.kind,
         jnp.asarray(value),
@@ -239,6 +258,9 @@ def build_boundary_data(disc, conditions, model):
         jnp.asarray(heat),
         jnp.asarray(face_density),
         float(model.density),
+        flow.nu_tilde if turbulent else None,
+        flow.turbulence if turbulent else None,
+        th.StaticThermo(model.thermo) if turbulent else None,
     )
 
 
@@ -252,8 +274,10 @@ def lsq_include(conditions, n_var=4):
 
     As in the constant-density solver, plus T where it is known: isothermal
     walls, inlets, farfields and symmetry faces; not at adiabatic and
-    heat-flux walls and pressure outlets.
+    heat-flux walls and pressure outlets. T is the last column (the energy
+    block follows the turbulence and transition blocks, RANS stage V2).
     """
+    t_col = n_var - 1
 
     def include(slices, n_bfaces):
         mask = np.ones((n_bfaces, n_var), dtype=bool)
@@ -265,7 +289,7 @@ def lsq_include(conditions, n_var=4):
             elif k == PRESSURE_OUTLET:
                 mask[sl, U:] = False
             if bc["type"] in WALL_TYPES and thermal_kind(bc) != ISOTHERMAL:
-                mask[sl, T] = False
+                mask[sl, t_col] = False
         return mask
 
     return include
@@ -695,7 +719,7 @@ def wall_temperature(model, geom, bc, w):
 
 def cell_properties(model, w):
     """Per-cell rho, mu, k, c_p (dict of arrays) of the state ``w``."""
-    t = jnp.asarray(w)[:, T]
+    t = jnp.asarray(w)[:, model.layout.column("T")]
     tm = model.thermo
     return {
         "density": np.asarray(th.density(tm, t)),

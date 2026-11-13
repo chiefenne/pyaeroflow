@@ -34,8 +34,10 @@ function of the local state (:class:`TurbulentPrandtlInputs`); built in is
 turbulent Schmidt number of the species equations.
 """
 
+from dataclasses import dataclass
 from typing import NamedTuple
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -100,6 +102,18 @@ class Thermo(NamedTuple):
     viscosity: PropertyLaw = PropertyLaw("constant", 1.0e-3)
     conductivity: PropertyLaw = PropertyLaw("prandtl", 0.72)
     specific_heat: PropertyLaw = PropertyLaw("constant", 1.0)
+
+
+@jax.tree_util.register_static
+@dataclass(frozen=True)
+class StaticThermo:
+    """A :class:`Thermo` carried as static (non-traced) data inside a pytree.
+
+    The variable-density SST keeps it in its boundary data, so that the wall
+    value of omega can use nu(T_w) of the wall-face temperature.
+    """
+
+    thermo: Thermo
 
 
 def property_law(kind, value_si=None, parameters=None, *, t_ref=1.0, scale=1.0):

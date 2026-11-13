@@ -473,7 +473,7 @@ def _thermal_conditions(cfg, conditions, scaling):
 
 
 def _energy_model(cfg, base, mu_nd, scaling):
-    """VariableDensityModel of the incompressible energy equation (V1).
+    """VariableDensityModel of the incompressible energy equation (V1, V2 RANS).
 
     The property laws are built from the SI input; mu(T_ref) is the
     non-dimensional viscosity of the case (fluid.viscosity or
@@ -531,6 +531,14 @@ def _energy_model(cfg, base, mu_nd, scaling):
         viscous_gradient=base.viscous_gradient,
         alpha=base.alpha,
         body_force=base.body_force,
+        turbulence=base.turbulence,
+        turbulence_spatial_order=base.turbulence_spatial_order,
+        coupling=base.coupling,
+        transition=base.transition,
+        turbulence_intensity=base.turbulence_intensity,
+        critical_amplification=base.critical_amplification,
+        lm_positive_jacobian=base.lm_positive_jacobian,
+        lm_jacobian_smoothing=base.lm_jacobian_smoothing,
     )
 
 
@@ -1114,7 +1122,9 @@ def load_restart(path, mesh, w_default, flow="incompressible", columns=None):
     ``columns`` names the columns of ``w_default`` (the state layout). A file
     that stores its column names (``columns``, written by runs with the
     energy equation) is matched by name; for other files the rules below
-    apply, and a case with the energy equation takes only p, u, v from them.
+    apply, and a case with the energy equation names their columns from the
+    column count (4 SA, 5 SST, 6 SA-AFT, 7 SST-LM) and matches them by name
+    (T then keeps its default).
 
     The file must hold a state of the same flow family (``flow``; files
     without the entry are incompressible).
@@ -1138,6 +1148,16 @@ def load_restart(path, mesh, w_default, flow="incompressible", columns=None):
         stored_names = (
             [str(c) for c in data["columns"]] if "columns" in data.files else None
         )
+    if (
+        stored_names is None
+        and columns is not None
+        and "T" in columns
+        and flow == "incompressible"
+    ):
+        # Older file without names into a case with the energy equation:
+        # the column count tells the turbulence layout (4 SA, 5 SST, 6
+        # SA-AFT, 7 SST-LM), so that a RANS state keeps its turbulence.
+        stored_names = _unnamed_columns(w.shape[1])
     if stored_names is not None and columns is not None:
         from pyaeroflow.physics.layout import map_columns
 
@@ -1149,8 +1169,6 @@ def load_restart(path, mesh, w_default, flow="incompressible", columns=None):
     if stored_names is not None and "T" in stored_names:
         w = np.delete(w, stored_names.index("T"), axis=1)  # into a case without T
     n = min(w.shape[1], w_default.shape[1])
-    if columns is not None and "T" in columns:
-        n = min(n, 3)  # older file without names: p, u, v only
     sst_family = (5, 7)
     if flow == "incompressible" and (
         (w.shape[1] in sst_family) != (w_default.shape[1] in sst_family)
@@ -1161,6 +1179,22 @@ def load_restart(path, mesh, w_default, flow="incompressible", columns=None):
     w0 = np.array(w_default, dtype=float)
     w0[:, :n] = w[:, :n]
     return w0, n
+
+
+def _unnamed_columns(n_columns):
+    """Column names of an incompressible state without stored names."""
+    from pyaeroflow.physics.layout import incompressible_layout
+
+    layouts = {
+        3: ("none", "none"),
+        4: ("sa-neg", "none"),
+        5: ("sst", "none"),
+        6: ("sa-neg", "aft"),
+        7: ("sst", "lm"),
+    }
+    if n_columns not in layouts:
+        return ["p", "u", "v"] + [f"unknown{i}" for i in range(n_columns - 3)]
+    return list(incompressible_layout(*layouts[n_columns]).names)
 
 
 def load_restart_state(path):

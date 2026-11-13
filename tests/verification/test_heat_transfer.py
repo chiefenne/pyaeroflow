@@ -1,4 +1,4 @@
-"""Incompressible energy equation: natural convection, heated plate (V1)."""
+"""Incompressible energy equation: convection, heated plates (V1, V2 RANS)."""
 
 import pytest
 
@@ -38,3 +38,24 @@ def test_boussinesq_and_ideal_gas_agree_at_small_delta_t():
     b = ht.solve_cavity(1.0e3, 16, density_model="boussinesq")
     assert a.converged and b.converged
     assert a.nusselt_hot == pytest.approx(b.nusselt_hot, rel=2e-3)
+
+
+def test_kays_crawford_stanton():
+    st = float(ht.kays_crawford_stanton(1.0e6, 0.71))
+    assert st == pytest.approx(0.0287 * 1.0e6**-0.2 * 0.71**-0.4)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("turbulence", ["sa-neg", "sst"])
+def test_turbulent_heated_plate(turbulence):
+    """RANS energy equation: St within -4..+7 % of Kays & Crawford (Re_x 4e5-5e6)."""
+    import numpy as np
+
+    r = ht.solve_turbulent_plate(turbulence)
+    assert r.converged
+    re_x = 5.0e6 * r.x
+    sel = (re_x > 4.0e5) & (re_x < 5.0e6)
+    ratio = r.stanton[sel] / r.reference[sel]
+    assert ratio.min() > 0.96 and ratio.max() < 1.07
+    analogy = 2.0 * r.stanton[sel] / r.cf[sel]
+    assert np.all((analogy > 1.1) & (analogy < 1.3))

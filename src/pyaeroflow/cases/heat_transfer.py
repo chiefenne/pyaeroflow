@@ -12,6 +12,10 @@ Three cases with reference data that needs no external file:
 - Heated cylinder in cross flow at low Reynolds number: mean Nu of the
   correlation of Lange, Durst & Breuer (1998), Pr = 0.71,
   Nu = 0.082 Re^0.5 + 0.734 Re^x, x = 0.05 + 0.226 Re^0.085.
+- Turbulent heated flat plate (RANS, stage V2): local Stanton number of the
+  correlation of Kays & Crawford for an isothermal plate, turbulent from the
+  leading edge, St Pr^0.4 = 0.0287 Re_x^-0.2 (5e5 < Re_x < 5e6,
+  0.5 < Pr < 1), on the NASA TMR plate domain.
 
 Non-dimensional set-up of the cavity (reference length L, buoyancy velocity
 U = sqrt(g beta Delta T L), T_ref the mean temperature): rho = 1 / T,
@@ -133,4 +137,90 @@ def solve_cavity(
         mean_nu("left"),
         -mean_nu("right"),
         DE_VAHL_DAVIS_NUSSELT.get(float(rayleigh)),
+    )
+
+
+def kays_crawford_stanton(reynolds_x, prandtl=0.71):
+    """Local St of the turbulent isothermal plate: 0.0287 Re_x^-0.2 Pr^-0.4."""
+    return 0.0287 * np.asarray(reynolds_x, dtype=float) ** -0.2 * prandtl**-0.4
+
+
+class TurbulentPlateResult(NamedTuple):
+    """Turbulent heated flat plate: solution and local St, C_f along the plate."""
+
+    problem: object
+    w: np.ndarray
+    converged: bool
+    iterations: int
+    x: np.ndarray
+    stanton: np.ndarray
+    cf: np.ndarray
+    reference: np.ndarray
+
+
+def solve_turbulent_plate(
+    turbulence="sa-neg",
+    nx_plate=96,
+    ny=64,
+    reynolds=5.0e6,
+    prandtl=0.71,
+    delta=0.01,
+    density_model="ideal_gas",
+    settings=None,
+):
+    """Turbulent heated plate on the TMR domain (Re per unit length ``reynolds``).
+
+    Non-dimensional: U = rho_inf = c_p = 1, T_inf = 1, plate at 1 + ``delta``,
+    mu = 1 / Re at T_inf with Sutherland's law (S = 110.4 K / 300 K), k from
+    Pr, Pr_t = 0.9 (default law). SA-neg with nu_tilde / nu = 3 or SST with
+    Tu = 0.1 %, nu_t / nu = 1 at the inflow (the solver defaults).
+
+    Returns
+    -------
+    TurbulentPlateResult
+        St = q_w / (rho c_p U (T_w - T_inf)) and C_f = 2 tau_w per plate face.
+    """
+    from pyaeroflow.cases.tmr_flat_plate import plate_mesh
+
+    mu = 1.0 / reynolds
+    if density_model == "ideal_gas":
+        dens = th.DensityModel("ideal_gas", pressure=1.0)
+    else:
+        dens = th.DensityModel(density_model, density=1.0, expansion=1.0)
+    thermo = th.Thermo(
+        dens,
+        th.PropertyLaw("sutherland", mu, (110.4 / 300.0,)),
+        th.PropertyLaw("prandtl", prandtl),
+        th.PropertyLaw("constant", 1.0),
+    )
+    model = vd.VariableDensityModel(density=1.0, thermo=thermo, turbulence=turbulence)
+    mesh = plate_mesh(nx_plate, 24, ny, reynolds=reynolds)
+    conditions = {
+        "left": {"type": "velocity-inlet", "velocity": (1.0, 0.0)},
+        "right": {"type": "pressure-outlet", "pressure": 0.0},
+        "top": {"type": "farfield", "velocity": (1.0, 0.0), "pressure": 0.0},
+        "symmetry": {"type": "symmetry"},
+        "plate": {"type": "wall", "temperature": 1.0 + delta},
+    }
+    problem = FlowProblem(mesh, model, conditions)
+    w0 = problem.initial_state((1.0, 0.0), 0.0, temperature=1.0)
+    result = problem.solve(
+        w0,
+        settings=settings
+        or PseudoTimeSettings(residual_drop=8.0, max_iterations=300, cfl_start=1000.0),
+    )
+    faces = problem.boundary_faces(["plate"])
+    x = np.asarray(problem.geom.b_centre)[faces, 0]
+    q = problem.wall_heat_flux(result.u)[faces]
+    loads = problem.wall_loads(result.u)
+    tau = np.hypot(*np.asarray(loads[1])[faces].T)
+    return TurbulentPlateResult(
+        problem,
+        result.u,
+        result.converged,
+        int(result.history["iteration"][-1]) if "iteration" in result.history else -1,
+        x,
+        q / delta,
+        2.0 * tau,
+        kays_crawford_stanton(reynolds * x, prandtl),
     )

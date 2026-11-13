@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased – RANS with the incompressible energy equation (stage V2)
+
+- `physics.energy = true` works with `physics.model = "rans"` and every
+  turbulence and transition model (SA-neg, SA-BCM, SA-AFT, SST, SST-LM):
+  new modules `physics/rans_variable_density.py` (SA family) and
+  `physics/rans_sst_variable_density.py` (SST, LM). State p, u, v, the
+  turbulence columns, T (last, so the turbulence columns keep their numbers).
+- Turbulence rows in conservative form with the local density, ρ times the
+  kinematic equations (the compressible TMR forms; SA with the ∇ρ·∇ν̃
+  correction, SST production with −2/3 k ∇·v of the low-Mach continuity),
+  ν = μ(T)/ρ(T) in every model function, SST wall ω with ν(T_w).
+- Eddy conductivity: k_eff = k(T) + c_p μ_t/Pr_t at the faces through the
+  pluggable Pr_t law (`fluid.prandtl_turbulent_model`, default constant 0.9),
+  also in the wall heat flux and wall temperature output.
+- With `density_model = "constant"` at ρ = 1 the flow and turbulence
+  residuals and Jacobians equal those of the constant-density RANS to
+  round-off. Without `physics.energy` the solver is unchanged (residuals,
+  Jacobians, pseudo-time terms and eddy viscosity of all RANS models
+  bit-identical to 1.7.1 + V1).
+- Restart: a constant-density RANS file (no column names) starts a RANS
+  energy case with its turbulence columns.
+- Validation §19: turbulent heated flat plate, St within −4 to +6 % of Kays &
+  Crawford (SA and SST, two meshes); `heat_transfer.solve_turbulent_plate`.
+
 ## Unreleased – energy equation in the incompressible solver (stage V1)
 
 - `physics.energy = true`: the incompressible solver gets a strongly coupled

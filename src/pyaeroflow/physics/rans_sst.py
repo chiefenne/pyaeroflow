@@ -124,12 +124,13 @@ def _omega(w):
     return jnp.maximum(w[:, NW], OMEGA_MIN)
 
 
-def cell_quantities(model, geom, w, grad):
+def cell_quantities(model, geom, w, grad, nu=None):
     """Per-cell strain rate, F1, F2, nu_t and grad k . grad omega.
 
-    With Langtry-Menter F1 is max(F1, F3).
+    With Langtry-Menter F1 is max(F1, F3). ``nu``: per-cell kinematic
+    viscosity (energy equation), default the model's.
     """
-    nu = kinematic_viscosity(model)
+    nu = kinematic_viscosity(model) if nu is None else nu
     k = jnp.maximum(w[:, NK], 0.0)
     omega = _omega(w)
     strain = strain_rate(grad[:, U : V + 1, :])
@@ -154,15 +155,18 @@ def _flow_inputs(w, grad):
     return vort, jnp.sqrt(u2 + lm.tiny(u2)), du_ds
 
 
-def _lm_arguments(model, geom, w, grad, strain):
-    """Arguments (gamma, re_t, k, omega, nu, S, Omega, d, U, dU/ds) of lm."""
+def _lm_arguments(model, geom, w, grad, strain, nu=None):
+    """Arguments (gamma, re_t, k, omega, nu, S, Omega, d, U, dU/ds) of lm.
+
+    ``nu``: per-cell kinematic viscosity (energy equation), default the model's.
+    """
     vort, speed, du_ds = _flow_inputs(w, grad)
     return (
         w[:, NGL],
         w[:, NRT],
         jnp.maximum(w[:, NK], 0.0),
         _omega(w),
-        kinematic_viscosity(model),
+        kinematic_viscosity(model) if nu is None else nu,
         strain,
         vort,
         geom.wall_distance,
@@ -171,9 +175,11 @@ def _lm_arguments(model, geom, w, grad, strain):
     )
 
 
-def effective_intermittency(model, geom, w, grad, strain):
+def effective_intermittency(model, geom, w, grad, strain, nu=None):
     """gamma_eff = max(gamma, gamma_sep) per cell (Langtry-Menter)."""
-    return lm.effective_intermittency(*_lm_arguments(model, geom, w, grad, strain)[:9])
+    return lm.effective_intermittency(
+        *_lm_arguments(model, geom, w, grad, strain, nu)[:9]
+    )
 
 
 def _face_coefficients(model, nu_t, f1, o, n):

@@ -918,17 +918,14 @@ COMPRESSIBLE_BOUNDARY_TYPES = (
 def _energy_rules(data, boundaries, farfields, problems, notices):
     """Rules and defaults of the incompressible energy equation (physics.energy).
 
-    Laminar and steady (V1). The reference temperature defaults to the
+    Laminar or RANS (V1, V2), steady. The reference temperature defaults to the
     single farfield or inlet temperature; the reference density to the
     density at that temperature (ideal gas: p_th / (R T_ref)). Walls take
     either a temperature or a heat flux.
     """
     fluid, physics, ref = data["fluid"], data["physics"], data["reference"]
-    if physics["model"] != "laminar":
-        problems.append(
-            "physics.energy: needs physics.model = laminar (RANS with the energy "
-            "equation is stage V2)"
-        )
+    if physics["model"] not in ("laminar", "rans"):
+        problems.append("physics.energy: needs physics.model = laminar or rans")
     if data["time"]["mode"] == "unsteady":
         problems.append("physics.energy: time.mode = unsteady is stage V3")
     if data["solver"]["method"] != "implicit":

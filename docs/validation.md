@@ -1326,7 +1326,7 @@ count is in [recipe 15](recipes.md#ibl-start).
 
 [↑ back to table](#stage-table)
 
-## 19. Incompressible energy equation (variable density, stage V1)
+## 19. Incompressible energy equation (variable density, stages V1 and V2)
 
 `physics.energy = true` (configuration: [Energy equation](configuration.md#energy-equation-incompressible)).
 Script: `pyaeroflow.cases.heat_transfer`; tests
@@ -1362,6 +1362,41 @@ freestream, O-grid 128 × 72 with the farfield at 60 radii. Mean Nu 2.443
 against 2.409 of the correlation of Lange, Durst & Breuer (1998) (+1.4 %),
 C_D 2.006, 16 iterations. With the farfield at 10 radii (`cylinder-ogrid` default) the
 blockage gives Nu 2.477 and C_D 2.134.
+
+**Turbulent heated flat plate** (RANS, stage V2). Air at 300 K (ideal gas,
+Pr = 0.71, Pr_t = 0.9), U = 78.4 m/s, Re = 5·10⁶ per metre, isothermal plate
+3 K above the freestream, turbulent from the leading edge, NASA TMR plate
+domain (`make-mesh plate-rans`, 96 × 64 on the plate, y⁺ ≈ 1). Reference:
+the correlation of Kays & Crawford for the isothermal plate,
+St Pr^0.4 = 0.0287 Re_x^−0.2 (stated for 5·10⁵ < Re_x < 5·10⁶;
+`heat_transfer.kays_crawford_stanton`). Local St over the correlation:
+
+| Re_x | SA 7 680 cells | SA 27 648 cells | SST 7 680 cells |
+|------|---------------|-----------------|-----------------|
+| 4·10⁵ | 0.970 | 0.961 | 0.973 |
+| 1.2·10⁶ | 0.996 | 0.994 | 0.985 |
+| 2.5·10⁶ | 1.026 | 1.024 | 1.002 |
+| 5·10⁶ | 1.060 | 1.059 | 1.029 |
+| 9.5·10⁶ (outside) | 1.098 | 1.097 | 1.064 |
+
+The two SA meshes agree to 0.3 % at x = 1 m. The Reynolds-analogy factor
+2 St/C_f is 1.17–1.19 (SA) and 1.16–1.20 (SST). C_D of the plate (q · 2 m)
+is 0.002899 (SA, TMR 0.0028562 at M 0.2, the incompressible result lies
+about 1 % above). 72 (SA) and 94 (SST) iterations from freestream at the
+start-up CFL 1000, 28 s on the 7 680 cells. The same case in non-dimensional
+form is `heat_transfer.solve_turbulent_plate` (test
+`test_turbulent_heated_plate`, `slow`).
+
+Large temperature difference: the same SA case with the plate at 600 K
+(T_w/T_∞ = 2, Sutherland μ(T), k = μ c_p/Pr) converges in 53 iterations;
+St and C_f fall to 0.81–0.82 and 0.81 of the 303 K values. The
+property-ratio correction (T_w/T_∞)^−0.4 of Kays & Crawford gives 0.76 for
+St; this run is a plausibility check, not a validation.
+
+With `density_model = "constant"` at ρ = 1 the flow and turbulence residuals
+and the first-order Jacobian of all five RANS models (SA, SA-BCM, SA-AFT,
+SST, SST-LM) equal those of the constant-density solver to 10⁻¹⁶
+(`tests/unit/test_rans_variable_density.py`).
 
 ## References
 
@@ -1481,6 +1516,9 @@ need their volume, page or paper number checked.
   Washburn, A. E. (2006): Experimental investigation of separation control
   part 1: baseline and steady suction. AIAA J. 44(12), 2820–2830 (data:
   TMR 2DWMH and CFDVAL2004 Case 3 pages).
+- Kays, W. M., Crawford, M. E. (1993): Convective Heat and Mass Transfer,
+  3rd ed. McGraw-Hill †. Turbulent flat-plate Stanton number
+  St Pr^0.4 = 0.0287 Re_x^−0.2 and the property-ratio corrections.
 - Rumsey, C. L., Gatski, T. B., Sellers, W. L., Vatsa, V. N., Viken, S. A.
   (2006): Summary of the 2004 computational fluid dynamics validation
   workshop on synthetic jets. AIAA J. 44(2), 194–207 †.
