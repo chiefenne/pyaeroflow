@@ -22,6 +22,9 @@ Pictures of complete cases are in the [Example gallery](gallery.md).
 16. [Polar: exact slopes and a faster angle sweep](#polar-tangent)
 17. [Avoid recompiling at every start](#compile-cache)
 18. [Start a case from a template](#templates)
+19. [Heated walls: Nusselt and Stanton number](#heated-walls)
+20. [Your own turbulent Prandtl number](#prandtl-turbulent)
+21. [Temperature-dependent fluid properties](#properties)
 
 ---
 
@@ -502,7 +505,7 @@ shedding, SA and Euler, Mach 2 ramp) together with the mesh it runs on. `init`
 writes the case file and builds the mesh next to it, so it works after a
 plain `pip install`, without the repository. Edit the case file from there;
 every key is in [Case configuration](configuration.md). The [Case catalogue](cases.md) lists
-all 45 example cases with their physics, mesh and where they are discussed.
+all 48 example cases with their physics, mesh and where they are discussed.
 
 For your own airfoil mesh use the `airfoil` template, the same as
 `pyaeroflow init-case`:
@@ -519,5 +522,134 @@ distances) with the limiter of the validated band case for SA.
 solution](#ibl-start). The case files of `init airfoil` use the farfield
 vortex correction, so `polar --predictor tangent` falls back to the plain
 chain there; use `cfl = { polar_reset = true }` for the polar instead.
+
+[↑ back to top](#recipes)
+
+---
+
+<a id="heated-walls"></a>
+## 19. Heated walls: Nusselt and Stanton number
+
+```
+pyaeroflow init cavity-heated -o my_cavity     # natural convection, Ra 1e5
+pyaeroflow init plate-heated-sa -o my_plate    # turbulent plate, wall 3 K warm
+pyaeroflow run my_cavity/cavity_heated_ra1e5.toml
+```
+
+Three keys turn an incompressible case into a heat-transfer case:
+
+```toml
+[physics]
+energy = true                     # unknowns p, u, v, T (plus the turbulence variables)
+gravity = [0.0, -9.81]            # only for buoyancy-driven flow
+
+[fluid]
+density_model = "ideal_gas"       # or "boussinesq"; "constant" = passive temperature
+viscosity = 1.846e-5              # at reference.temperature
+specific_heat = 1006.43
+prandtl = 0.71                    # k = mu c_p / Pr
+
+[reference]
+temperature = 300.0
+temperature_difference = 3.0      # the Delta T of Nu and St
+
+[boundary.hot_wall]
+type = "wall"
+temperature = 301.5               # isothermal; or heat_flux = 50.0 (W/m^2 into the fluid)
+```
+
+A wall without `temperature` or `heat_flux` is adiabatic. The log Summary
+prints the heat into the fluid and the mean Nusselt number of every force
+boundary (`output.force_boundaries`); the wall CSV has the local values in
+the columns `T`, `q_w` (W/m²), `nu` and `st`. Nu = q_w L/(k ΔT) uses
+`reference.length`, St = q_w/(ρ c_p U ΔT) the reference velocity. The check
+against Kays and Crawford for the plate:
+
+```
+python examples/cases/stanton_check.py my_plate/output/plate_heated_sa/plate_heated_sa.wall_plate.csv
+```
+
+`temperature` and `density` are written to the field file. Comparison
+with the literature: [validation §19](validation.md#sec-19). All keys:
+[Energy equation](configuration.md#energy-equation-incompressible).
+
+[↑ back to top](#recipes)
+
+---
+
+<a id="prandtl-turbulent"></a>
+## 20. Your own turbulent Prandtl number
+
+With a RANS model the eddy conductivity is c_p μ_t/Pr_t, by default with the
+constant `fluid.prandtl_turbulent = 0.9`. A law of the local state replaces
+it. The law is a JAX function of the face state (temperature, ν, ν_t, wall
+distance, the molecular Prandtl number and the turbulent Péclet number
+`inputs.peclet`), registered by name; a short script runs the case:
+
+```python
+# kays_prt.py
+import sys
+
+from pyaeroflow.physics.thermo import register_turbulent_prandtl
+from pyaeroflow.run import run_case
+
+
+def kays(inputs, a=0.85, b=0.7):
+    """Pr_t = a + b / Pe_t (Kays 1994)."""
+    return a + b / (inputs.peclet + 1.0e-8)
+
+
+register_turbulent_prandtl("kays", kays)
+run_case(sys.argv[1])
+```
+
+```toml
+[fluid]
+prandtl_turbulent_model = "kays"
+prandtl_turbulent_parameters = { a = 0.85, b = 0.7 }   # keyword arguments of the law
+```
+
+```
+python kays_prt.py my_plate/plate_heated_sa.toml
+```
+
+The law must use `jax.numpy` (no NumPy, no `if` on values): it is part of
+the Newton Jacobian. On the template plate the Kays law moves the Stanton
+number from 0.97–1.06 to 0.91–1.06 of Kays and Crawford, so the choice
+matters most near the leading edge, where Pe_t is small. Plain `pyaeroflow
+run` knows only the built-in `"constant"` law.
+
+[↑ back to top](#recipes)
+
+---
+
+<a id="properties"></a>
+## 21. Temperature-dependent fluid properties
+
+Viscosity, specific heat and conductivity are functions of T when
+`physics.energy = true`. The values at `reference.temperature` come from
+`viscosity`, `specific_heat`, `conductivity` (or `prandtl`); a polynomial
+or a table gives the whole law instead, with no value at the reference
+temperature. The `*_model` keys choose the law of T:
+
+```toml
+[fluid]
+density_model = "ideal_gas"
+viscosity = 1.846e-5
+viscosity_model = "sutherland"             # also "constant", "power-law", "polynomial", "table"
+viscosity_parameters = { temperature = 110.4 }      # Sutherland constant S in K
+specific_heat_model = "polynomial"         # no specific_heat with a polynomial
+specific_heat_parameters = { coefficients = [1068.0, -0.45, 1.0e-3] }   # sum a_i T^i, T in K
+conductivity_model = "table"               # without it: k = mu c_p / prandtl
+conductivity_parameters = { temperature = [300, 600, 900], value = [0.026, 0.045, 0.062] }
+```
+
+`power-law` takes `exponent` (μ = μ_ref (T/T_ref)^n), `table` interpolates
+linearly between the given points and holds the end values outside them.
+Without a conductivity model the Prandtl number is constant, so k follows μ c_p.
+The enthalpy is the exact integral of the c_p law. A 600 K wall in air
+(`ideal_gas`, Sutherland) is a case where the properties matter: the
+Stanton number falls to 0.8 of the 3 K case. A laminar example with the
+similarity solution as reference: [validation §19](validation.md#sec-19-plate).
 
 [↑ back to top](#recipes)

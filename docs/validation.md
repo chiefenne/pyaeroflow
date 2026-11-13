@@ -39,7 +39,7 @@ Click a case to jump to its section; each section ends with a link back here.
 | L1 C3 | [Compressible SA-neg: TMR flat plate M 0.2, NACA 0012 M 0.15](#sec-14) | verification/validation | NASA TMR (CFL3D, FUN3D) | `pyaeroflow run examples/cases/naca0012_sa_m015.toml` |
 | L1 C4 | [Compressible SST: TMR flat plate M 0.2, NACA 0012 M 0.15](#sec-15) | verification/validation | NASA TMR SST (CFL3D) | `pyaeroflow run examples/cases/naca0012_sst_m015.toml` |
 | IBL (1.7) | [Viscous panel method `pyaeroflow foil`: mfoil, E387, SD7003](#sec-18) | verification/validation | mfoil (corrected copy), NASA TM 4062, Penn State 2007, XFOIL | `python examples/ibl_validation.py` |
-| V1 / V2 (1.8) | [Incompressible energy equation: cavity, heated plates (laminar, variable properties, turbulent), cylinder, channel](#sec-19) | verification/validation | de Vahl Davis 1983, Pohlhausen and Howarth–Levy–Lees similarity, Lange et al. 1998, Shah & London, Kays & Crawford | `pyaeroflow.cases.heat_transfer`, `tests/verification/test_heat_transfer.py` (case files: project folder `cases/variable_density_v1/`, `variable_density_v2/`) |
+| V1 / V2 (1.8) | [Incompressible energy equation: cavity, heated plates (laminar, variable properties, turbulent), cylinder, channel](#sec-19) | verification/validation | de Vahl Davis 1983, Pohlhausen and Howarth–Levy–Lees similarity, Lange et al. 1998, Shah & London, Kays & Crawford | `pyaeroflow.cases.heat_transfer`, `tests/verification/test_heat_transfer.py` (case files: `examples/cases/` and the project folder `cases/variable_density_v1/`, `variable_density_v2/`) |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
 the scripts write) is not tracked.
@@ -1334,10 +1334,13 @@ count is in [recipe 15](recipes.md#ibl-start).
 `physics.energy = true` (configuration: [Energy equation](configuration.md#energy-equation-incompressible)).
 Script: `pyaeroflow.cases.heat_transfer`; tests
 `tests/verification/test_heat_transfer.py` (the Ra 1e4–1e6 cavities, the
-turbulent plates and the Re 40 cylinder are `slow`); case files in the
-project folder `cases/variable_density_v1/` (laminar) and
-`cases/variable_density_v2/` (RANS); the checking scripts
-`similarity_check.py` and `stanton_check.py` lie beside the case files.
+turbulent plates and the Re 40 cylinder are `slow`); the cavity Ra 1e5,
+the SA plate and the cylinder Re 40 are in `examples/cases/`
+(`cavity_heated_ra1e5.toml`, `plate_heated_sa.toml`,
+`heated_cylinder_re40.toml`; templates `cavity-heated`, `plate-heated-sa`;
+`stanton_check.py` beside them), the other case files in the project folder
+`cases/variable_density_v1/` (laminar) and `cases/variable_density_v2/`
+(RANS) with the checking script `similarity_check.py`.
 
 | case | stage | reference | result |
 |---|---|---|---|

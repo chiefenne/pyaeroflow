@@ -2,6 +2,12 @@
 
 ## Unreleased – RANS with the incompressible energy equation (stage V2)
 
+- Examples: `cavity_heated_ra1e5.toml` (template `cavity-heated`),
+  `plate_heated_sa.toml` (template `plate-heated-sa`),
+  `heated_cylinder_re40.toml` with `plot_heated_cylinder.py` (gallery 9) and
+  `stanton_check.py`; recipes 19 to 21 (heated walls, own Pr_t law,
+  temperature-dependent properties); case catalogue 48 cases.
+
 - `physics.energy = true` works with `physics.model = "rans"` and every
   turbulence and transition model (SA-neg, SA-BCM, SA-AFT, SST, SST-LM):
   new modules `physics/rans_variable_density.py` (SA family) and

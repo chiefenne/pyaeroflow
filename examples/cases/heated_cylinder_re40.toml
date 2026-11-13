@@ -1,0 +1,44 @@
+# Heated cylinder in cross flow, Re_D = 40, Pr = 0.71 (air at 300 K, D = 1 m).
+# Wall 3 K above the freestream. Reference: Lange et al. (1998) mean Nu = 3.281;
+# expected Nu 3.255, CD 1.509, 21 iterations.
+# Mesh: library `cylinder-ogrid` (n_radial 72, farfield at 60 radii):
+#   pyaeroflow make-mesh cylinder-ogrid --set n_radial=72 outer_radius=60 -o cylinder_ogrid_far.su2
+[case]
+name = "heated_cylinder_re40"
+
+[mesh]
+file = "cylinder_ogrid_far.su2"        # radius 0.5, farfield at 60 radii
+
+[physics]
+model = "laminar"
+energy = true
+
+[fluid]
+density_model = "ideal_gas"
+viscosity = 1.846e-5
+specific_heat = 1006.43
+prandtl = 0.71
+
+[reference]
+temperature = 300.0
+temperature_difference = 3.0
+length = 1.0                         # D: Nu = q D / (k dT)
+
+[boundary.farfield]
+type = "farfield"
+velocity = 6.2758e-4                 # Re_D = U D / nu = 20
+temperature = 300.0
+
+[boundary.cylinder]
+type = "wall"
+temperature = 303.0
+
+[numerics]
+limiter = "none"
+
+[solver]
+residual_drop = 9.0
+max_iterations = 300
+
+[output]
+directory = "output/heated_cylinder_re40"

@@ -55,6 +55,20 @@ TEMPLATES = {
     "cavity": Template(
         "channel", "cavity_re100.toml", "cavity", {}, "cavity_quad_64.su2"
     ),
+    "cavity-heated": Template(
+        "channel",
+        "cavity_heated_ra1e5.toml",
+        "cavity-clustered",
+        {"n": 64},
+        "cavity_clustered_64.su2",
+    ),
+    "plate-heated-sa": Template(
+        "plate",
+        "plate_heated_sa.toml",
+        "plate-rans",
+        {"reynolds": 5.0e6},
+        "plate_rans_96x64.su2",
+    ),
     "plate-sa": Template(
         "plate",
         "flat_plate_rans.toml",

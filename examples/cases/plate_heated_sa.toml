@@ -1,0 +1,62 @@
+# Turbulent heated flat plate with the RANS energy equation, SA-neg.
+# Air at 300 K (ideal gas, Pr 0.71, Pr_t 0.9), U = 78.4 m/s, Re = 5e6 per metre,
+# isothermal plate 3 K above the freestream, NASA TMR plate domain.
+# Reference: Kays & Crawford, St Pr^0.4 = 0.0287 Re_x^-0.2 (5e5 < Re_x < 5e6);
+# wall CSV column st (Re_x = 5e6 x). Expected: St/KC 0.97-1.06, 72 iterations.
+# Mesh: template `plate-heated-sa` (library plate-rans, Re 5e6).
+# Check: python stanton_check.py output/<case>/<case>.wall_plate.csv
+[case]
+name = "plate_heated_sa"
+
+[mesh]
+file = "plate_rans_96x64.su2"
+
+[physics]
+model = "rans"
+turbulence = "sa-neg"
+energy = true
+
+[fluid]
+density_model = "ideal_gas"
+viscosity = 1.846e-5
+specific_heat = 1006.43
+prandtl = 0.71
+
+[reference]
+temperature = 300.0
+length = 1.0
+velocity = 78.4
+
+[initial]
+from_boundary = "left"
+
+[boundary.left]
+type = "velocity-inlet"
+velocity = [78.4, 0.0]
+temperature = 300.0
+turbulence = { nu_tilde_ratio = 3.0 }
+
+[boundary.right]
+type = "pressure-outlet"
+pressure = 0.0
+
+[boundary.top]
+type = "farfield"
+velocity = 78.4
+temperature = 300.0
+turbulence = { turbulent_viscosity_ratio = 0.2104 }
+
+[boundary.symmetry]
+type = "symmetry"
+
+[boundary.plate]
+type = "wall"
+temperature = 303.0
+
+[solver]
+residual_drop = 8.0
+max_iterations = 300
+
+[output]
+directory = "output/plate_heated_sa"
+force_boundaries = ["plate"]
