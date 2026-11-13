@@ -280,7 +280,7 @@ SCHEMA = {
         "species": Opt(
             "table_list",
             None,
-            "physics.energy, laminar: transported species of a mixture (the "
+            "physics.energy (laminar or RANS): transported species of a mixture (the "
             "fluid of the case is the bulk species with 1 - sum Y_k). One table "
             "per species: name; molar_mass (kg/kmol, default that of the fluid); "
             "diffusivity (m^2/s in the fluid at the reference temperature and "
@@ -288,7 +288,11 @@ SCHEMA = {
             "T^n), or schmidt (rho D = mu / Sc); optional specific_heat (J/(kg "
             "K), default that of the fluid), formation_enthalpy (J/kg, relative "
             "to the fluid) and expansion (density_model = boussinesq: "
-            "-(1/rho) d(rho)/dY)",
+            "-(1/rho) d(rho)/dY); evaporating walls: latent_heat (J/kg) and "
+            "saturation_model = antoine (antoine_a, antoine_b, antoine_c: "
+            "log10(p_sat / bar) = A - B / (T + C), T in K, as the NIST WebBook) "
+            "or clausius-clapeyron (saturation_pressure in Pa at "
+            "saturation_temperature in K, with latent_heat and molar_mass)",
         ),
         "molar_mass": Opt(
             "float",
@@ -378,6 +382,23 @@ SCHEMA = {
         ),
         "prandtl_turbulent_parameters": Opt(
             "table", None, "Parameters of prandtl_turbulent_model (keyword arguments)"
+        ),
+        "schmidt_turbulent": Opt(
+            "float",
+            0.7,
+            "Turbulent Schmidt number Sc_t of the species (RANS, stage S1b): "
+            "eddy diffusivity mu_t / (rho Sc_t)",
+            minimum=0.0,
+        ),
+        "schmidt_turbulent_model": Opt(
+            "string",
+            "constant",
+            "Turbulent Schmidt number law of the species (RANS): constant "
+            "(schmidt_turbulent) or a law registered with "
+            "pyaeroflow.physics.thermo.register_turbulent_schmidt",
+        ),
+        "schmidt_turbulent_parameters": Opt(
+            "table", None, "Parameters of schmidt_turbulent_model (keyword arguments)"
         ),
         "sutherland_temperature": Opt(
             "float",
@@ -1479,6 +1500,16 @@ BOUNDARY_TYPES = {
             "cross the wall, so that the diffusion fluxes drive a net mass flux "
             "sum J_k / (1 - sum Y_k) through it (evaporation, sublimation, "
             "condensation)",
+        ),
+        "evaporation": Opt(
+            "bool",
+            False,
+            "fluid.species (one species with saturation_model and latent_heat): "
+            "evaporating (or condensing) liquid surface; the surface holds the "
+            "saturation mass fraction at its temperature, the Stefan flow "
+            "j / (1 - Y_s) leaves it and the latent heat enters its energy "
+            "balance (temperature: the surface temperature; heat_flux or "
+            "adiabatic: the surface temperature follows from the balance)",
         ),
     },
     "symmetry": {},

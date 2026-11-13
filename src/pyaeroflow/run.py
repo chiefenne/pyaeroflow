@@ -23,6 +23,7 @@ import numpy as np
 
 from pyaeroflow import __version__
 from pyaeroflow.config import Resolved, load_case, resolve
+from pyaeroflow.config.case import UNIVERSAL_GAS_CONSTANT
 from pyaeroflow.control import ControlFiles, check_no_stop_file
 from pyaeroflow.driver import (
     GAMMA_DIAGNOSTICS,
@@ -491,6 +492,8 @@ def _thermal_conditions(cfg, conditions, scaling):
             elif b.get("species_flux") is not None:
                 mass_flux = scaling.density * scaling.velocity
                 entry["species_flux"] = tuple(j / mass_flux for j in b["species_flux"])
+            if b.get("evaporation"):
+                entry["evaporation"] = True
 
 
 def _species(cfg, scaling):
@@ -526,9 +529,41 @@ def _species(cfg, scaling):
                 formation_enthalpy=(sp.get("formation_enthalpy") or 0.0)
                 / (scaling.specific_heat * scaling.temperature),
                 expansion=float(sp.get("expansion") or 0.0),
+                latent_heat=(sp.get("latent_heat") or 0.0)
+                / (scaling.specific_heat * scaling.temperature),
+                saturation=_saturation(sp, fluid, scaling),
             )
         )
     return tuple(out)
+
+
+def _saturation(sp, fluid, scaling):
+    """Non-dimensional saturation law of a species (see thermo.Species).
+
+    The mole fraction X = p_sat / p_op of the non-dimensional temperature:
+    Antoine log10(p_sat / bar) = A - B / (T + C) becomes a = A + log10(1e5 /
+    p_op), b = B / T_ref, c = C / T_ref; Clausius-Clapeyron p_sat = p_0
+    exp(-(L W / R_u)(1 / T - 1 / T_0)) becomes ln X_0 = ln(p_0 / p_op),
+    theta = L W / (R_u T_ref), 1 / T_0 -> T_ref / T_0.
+    """
+    law = sp.get("saturation_model")
+    if law is None:
+        return None
+    p_op, t_ref = fluid["operating_pressure"], scaling.temperature
+    if law == "antoine":
+        return (
+            "antoine",
+            float(sp["antoine_a"] + np.log10(1.0e5 / p_op)),
+            float(sp["antoine_b"] / t_ref),
+            float(sp["antoine_c"] / t_ref),
+        )
+    theta = sp["latent_heat"] * sp["molar_mass"] / UNIVERSAL_GAS_CONSTANT
+    return (
+        "clausius-clapeyron",
+        float(np.log(sp["saturation_pressure"] / p_op)),
+        float(theta / t_ref),
+        float(t_ref / sp["saturation_temperature"]),
+    )
 
 
 def _closed_domain(cfg, model, conditions, mesh, temperature, mass_fraction=None):
@@ -599,6 +634,10 @@ def _energy_model(cfg, base, mu_nd, scaling):
     prt_params = dict(fluid["prandtl_turbulent_parameters"] or {})
     if fluid["prandtl_turbulent_model"] == "constant":
         prt_params.setdefault("value", fluid["prandtl_turbulent"])
+    sct_params = dict(fluid.get("schmidt_turbulent_parameters") or {})
+    sct_model = fluid.get("schmidt_turbulent_model") or "constant"
+    if sct_model == "constant":
+        sct_params.setdefault("value", fluid.get("schmidt_turbulent", 0.7))
     pressure_work = (
         fluid["gas_constant"] / scaling.specific_heat if kind == "ideal_gas" else 0.0
     )
@@ -609,6 +648,9 @@ def _energy_model(cfg, base, mu_nd, scaling):
         gravity=gravity,
         turbulent_prandtl=th.TurbulentPrandtl(
             fluid["prandtl_turbulent_model"], tuple(sorted(prt_params.items()))
+        ),
+        turbulent_schmidt=th.TurbulentPrandtl(
+            sct_model, tuple(sorted(sct_params.items()))
         ),
         beta_factor=base.beta_factor,
         spatial_order=base.spatial_order,
@@ -1534,7 +1576,9 @@ def _pseudo_time_settings(cfg):
 def _residual_names(problem):
     """Names of the residual columns in the log and history."""
     names = problem.flow.RESIDUAL_NAMES
-    names += tuple(f"Y{i + 1}" for i in range(getattr(problem.model, "n_species", 0)))
+    thermal = getattr(problem, "thermal", False)
+    if thermal:  # (p, u, v, [turbulence], T, Y1..): T after the turbulence
+        names = names[:3]
     if problem.model.turbulence == "sst":
         names += ("k", "om")
     elif problem.turbulent:
@@ -1543,6 +1587,8 @@ def _residual_names(problem):
         names += ("gam", "n")
     elif problem.model.transition == "lm":
         names += ("gam", "ret")
+    if thermal:
+        names += ("T",) + tuple(f"Y{i + 1}" for i in range(problem.model.n_species))
     return names
 
 
@@ -2527,6 +2573,13 @@ class Monitor:
             columns[f"Y_{sp.name}"] = y_w[:, i]
             columns[f"j_{sp.name}"] = j[faces, i] * mass_flux
         columns["m_w"] = m[faces] * mass_flux
+        if any(sp.latent_heat for sp in model.thermo.species):
+            # Evaporating walls: latent heat taken from the surface, W/m^2.
+            latent = model.thermo.species[0].latent_heat
+            evaporating = np.asarray(self.problem.bc.species)[faces] == vd.EVAPORATING
+            columns["q_latent"] = np.where(
+                evaporating, m[faces] * latent * s.heat_flux, 0.0
+            )
         return columns
 
     def mass_summary(self, w, boundaries):

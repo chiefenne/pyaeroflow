@@ -550,12 +550,14 @@ heat_flux = 50.0                  # W/m^2 into the fluid
 ### Species: mixtures and mass transfer
 
 `[[fluid.species]]` tables add transported species to the energy equation
-(stage S1: laminar flow, steady or unsteady, any number of species). The
+(stages S1 and S1b: laminar or RANS with every turbulence and transition
+model, steady or unsteady, any number of species). The
 fluid of the case is the bulk species (the carrier); it is not transported
 and has the mass fraction 1 − Σ Y_k.
 
-- Unknowns per cell: p, u, v, T, Y_1 … Y_n (mass fractions, in the order of
-  the tables); log residual columns `Y1`, `Y2`, …; restart files store the
+- Unknowns per cell: p, u, v, [turbulence], T, Y_1 … Y_n (mass fractions, in
+  the order of the tables); log residual columns `Y1`, `Y2`, … (in the
+  column order, also for RANS energy cases); restart files store the
   columns by name, so an energy restart starts a species case.
 - Equations: ∇·(ρ v Y_k + J_k) = 0 per species, and the energy equation gets
   the enthalpy that the diffusion fluxes carry, ∇·(ρ v h − k∇T + Σ (h_k −
@@ -568,12 +570,19 @@ and has the mass fraction 1 − Σ Y_k.
 - Diffusion: Fick's law with a correction velocity, J_k = −ρ D_k ∇Y_k +
   Y_k Σ_j ρ D_j ∇Y_j (sum over all species with the bulk), so that the fluxes
   sum to zero. With one species this is Fick's law of a binary mixture,
-  which is exact. `diffusivity` is D_k at the reference temperature and the
+  which is exact. RANS adds the eddy diffusivity μ_t/Sc_t to every ρD_k:
+  `fluid.schmidt_turbulent` (default 0.7), or a law of your own with
+  `schmidt_turbulent_model` / `schmidt_turbulent_parameters`, registered
+  with `pyaeroflow.physics.thermo.register_turbulent_schmidt` (the
+  interface of the Pr_t laws; the inputs' `prandtl` holds the molecular
+  Schmidt number of the species). `diffusivity` is D_k at the reference temperature and the
   operating pressure (ρD_k does not depend on the pressure of a closed
   domain); `schmidt` gives ρD_k = μ(T)/Sc_k.
 - The preconditioner Γ gets the columns ∂U/∂Y_k; the mass fractions are
   upwinded with |v_n| like the temperature. The buoyancy velocity of β²
-  includes the density differences of the prescribed mass fractions.
+  includes the density differences of the prescribed mass fractions and,
+  so that a Stefan flow can start from rest, the diffusion velocity
+  max D_k/L_ref.
 - Boundary conditions. Walls: zero flux (default), `mass_fraction = [...]`
   (fixed values) or `species_flux = [...]` (diffusion flux into the fluid,
   kg/(m² s)). `stefan_flow = true` with `mass_fraction`: the fluid does not
@@ -581,24 +590,43 @@ and has the mass fraction 1 − Σ Y_k.
   species), so the diffusion fluxes drive the net mass flux m = Σ J_k/(1 −
   Σ Y_k) through the wall, which carries mass, momentum, enthalpy and
   species (evaporation, sublimation, condensation at a given surface
-  mass fraction). Inlets and farfields: `mass_fraction` (default 0); a
+  mass fraction). `evaporation = true` (one species with `latent_heat` and
+  a saturation law): an evaporating or condensing liquid surface, see
+  below. Inlets and farfields: `mass_fraction` (default 0); a
   farfield also fixes the mass fractions for the diffusion when the flow
   leaves through it (open end). Pressure outlets take the interior values.
 - Closed domains: p_th follows from the total mass of the mixture; a wall
-  with `stefan_flow` makes the domain open.
+  with `stefan_flow` or `evaporation` makes the domain open.
+- Evaporating walls: the surface holds the saturation mass fraction
+  Y_s = X W_k/(X W_k + (1 − X) W) with X = p_sat(T_s)/p_th, the fluid does not
+  cross it (Stefan flow m = j/(1 − Y_s)), and its energy balance takes the
+  latent heat: the heat conducted into the gas is q_w − m L. With
+  `temperature` T_s is the given surface temperature; with `heat_flux` (heat
+  from the liquid side) or neither (adiabatic: the wet-bulb surface) T_s
+  follows from the balance, solved per face inside the residual. Species
+  keys: `latent_heat` (J/kg) and `saturation_model = "antoine"` with
+  `antoine_a`, `antoine_b`, `antoine_c` in the NIST WebBook form
+  log10(p_sat/bar) = A − B/(T + C), T in K, or `"clausius-clapeyron"`
+  with `saturation_pressure` (Pa) at `saturation_temperature` (K) and the
+  latent heat and molar mass of the species. The saturation mole fraction is
+  limited to 0.99.
 - Output: fields `mass_fraction_1` … `mass_fraction_4` (default); wall CSV
   columns `Y_<name>`, `j_<name>` (mass flux of the species into the fluid,
-  kg/(m² s)) and `m_w` (net mass flux); the log Summary gives the mass flow
+  kg/(m² s)), `m_w` (net mass flux) and, with evaporating walls, `q_latent`
+  (m L, W/m²); at an evaporating wall `T` is the surface temperature and
+  `q_w` the heat conducted into the gas; the log Summary gives the mass flow
   of every species into the fluid per force boundary in kg/(s m).
-- Not yet (later stages): species with a turbulence model (Sc_t), the
-  saturation pressure and latent heat of an evaporating wall, mixture rules
-  for μ and k, mole-fraction driven multicomponent diffusion, chemistry.
-  The mass fractions are not clipped to [0, 1].
+- Not yet (stage S2 and later): mixture rules for μ and k, mole-fraction
+  driven multicomponent diffusion, evaporation of several species at one
+  surface, chemistry. The mass fractions are not clipped to [0, 1].
 
 Validation (`docs/validation.md` §20): Stefan tube evaporation rate within
 0.004 % of the exact value, thermosolutal cavity Sh = Nu = 4.521 (de Vahl
 Davis 4.519), laminar plate Sherwood number within 0.3–1.5 % of the
-similarity solution.
+similarity solution; evaporating surfaces (S1b, Lewis number 1): the
+wet-bulb temperature exact to round-off in the Stefan tube and on turbulent
+plates (SA, SST), the tube's mass flux within 2·10⁻⁶ and the turbulent
+Sherwood number within −1…+8 % (SA) and 0…+5 % (SST) of Kays and Crawford.
 
 ```toml
 [physics]
@@ -619,6 +647,8 @@ type = "wall"
 temperature = 300.0
 mass_fraction = [0.02]            # at the wet surface
 stefan_flow = true                # the air does not cross it
+# or, from the saturation pressure at the surface temperature:
+# evaporation = true              # with latent_heat and saturation_model
 
 [boundary.inlet]
 type = "velocity-inlet"

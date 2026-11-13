@@ -680,8 +680,9 @@ class FlowProblem:
         elif self.turbulent:
             b_args = b_args + (self.bc.nu_tilde,)
         if self.turbulent:
+            ns = getattr(self.model, "n_species", 0)
             mask = (
-                self.physics.segregated_mask(self.model.n_var)
+                self.physics.segregated_mask(self.model.n_var, *((ns,) if ns else ()))
                 if self.model.coupling == "segregated"
                 else None
             )
@@ -925,13 +926,15 @@ class FlowProblem:
         Arrays (n_bfaces, n_species) and (n_bfaces,), non-dimensional
         (:func:`pyaeroflow.physics.variable_density.wall_species_flux`).
         """
-        j, m = vd.wall_species_flux(self.model, self.geom, self.bc, jnp.asarray(w))
+        source = self.physics if hasattr(self.physics, "wall_species_flux") else vd
+        j, m = source.wall_species_flux(self.model, self.geom, self.bc, jnp.asarray(w))
         return np.asarray(j), np.asarray(m)
 
     def wall_mass_fraction(self, w):
         """Mass fractions per boundary face, (n_bfaces, n_species)."""
+        source = self.physics if hasattr(self.physics, "wall_mass_fraction") else vd
         return np.asarray(
-            vd.wall_mass_fraction(self.model, self.geom, self.bc, jnp.asarray(w))
+            source.wall_mass_fraction(self.model, self.geom, self.bc, jnp.asarray(w))
         )
 
     def thermodynamic_pressure(self, w):
@@ -1681,7 +1684,9 @@ class FlowProblem:
         scale = np.ones(self.model.n_var)
         if self.model.turbulence == "sst":
             k = self.turbulence_column
-            n_t = self.model.n_var - k - (1 if self.thermal else 0)
+            n_t = self.model.n_var - k
+            if self.thermal:
+                n_t -= 1 + self.model.n_species
             scale[k : k + n_t] = np.asarray(self.physics._row_scale(self.model))
         return scale
 

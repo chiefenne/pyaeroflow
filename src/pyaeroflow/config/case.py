@@ -918,7 +918,7 @@ COMPRESSIBLE_BOUNDARY_TYPES = (
 def _closed_boundary(b):
     """Return True if the boundary exchanges no mass (closed domain)."""
     kind = b["type"]
-    if b.get("stefan_flow"):
+    if b.get("stefan_flow") or b.get("evaporation"):
         return False
     if kind in ("wall", "slip-wall", "symmetry", "periodic"):
         return True
@@ -934,23 +934,35 @@ SPECIES_KEYS = (
     "specific_heat",
     "formation_enthalpy",
     "expansion",
+    "latent_heat",
+    "saturation_model",
+    "antoine_a",
+    "antoine_b",
+    "antoine_c",
+    "saturation_pressure",
+    "saturation_temperature",
 )
+SATURATION_KEYS = {
+    "antoine": ("antoine_a", "antoine_b", "antoine_c"),
+    "clausius-clapeyron": ("saturation_pressure", "saturation_temperature"),
+}
 UNIVERSAL_GAS_CONSTANT = 8314.462618  # J/(kmol K)
 
 
 def _species_rules(data, boundaries, energy, problems):
-    """Rules and defaults of fluid.species (stage S1: laminar, with the energy eq.).
+    """Rules and defaults of fluid.species (stages S1, S1b; with the energy eq.).
 
     Every species has a name and either a diffusivity or a Schmidt number;
     the boundary and initial mass fractions have one value per species and
-    sum to at most 1. Walls take either mass_fraction or species_flux.
+    sum to at most 1. Walls take either mass_fraction or species_flux, or
+    evaporation (one species with a latent heat and a saturation law).
     """
-    fluid, physics = data["fluid"], data["physics"]
+    fluid = data["fluid"]
     species = fluid["species"] or []
     keys = ("mass_fraction", "species_flux")
     if not species:
         for name, b in boundaries.items():
-            for key in keys + ("stefan_flow",):
+            for key in keys + ("stefan_flow", "evaporation"):
                 if b.get(key):
                     problems.append(f"boundary.{name}.{key}: needs fluid.species")
         if data["initial"]["mass_fraction"] is not None:
@@ -962,11 +974,6 @@ def _species_rules(data, boundaries, energy, problems):
             "physics.energy = true"
         )
         return
-    if physics["model"] != "laminar":
-        problems.append(
-            "fluid.species: needs physics.model = laminar (species with a "
-            "turbulence model are a later stage)"
-        )
     if fluid["molar_mass"] is None:
         fluid["molar_mass"] = UNIVERSAL_GAS_CONSTANT / fluid["gas_constant"]
     names = []
@@ -980,6 +987,8 @@ def _species_rules(data, boundaries, energy, problems):
             problems.append(f"{dotted}.name: a unique name is required")
         names.append(name)
         for key in SPECIES_KEYS[1:]:
+            if key == "saturation_model":
+                continue
             value = sp.get(key)
             if value is not None and (
                 isinstance(value, bool) or not isinstance(value, int | float)
@@ -994,6 +1003,20 @@ def _species_rules(data, boundaries, energy, problems):
         sp.setdefault("molar_mass", fluid["molar_mass"])
         if sp.get("expansion") and fluid["density_model"] != "boussinesq":
             problems.append(f"{dotted}.expansion: needs density_model = boussinesq")
+        law = sp.get("saturation_model")
+        if law is not None:
+            if law not in SATURATION_KEYS:
+                problems.append(
+                    f"{dotted}.saturation_model: expected one of "
+                    f"{sorted(SATURATION_KEYS)}, got {law!r}"
+                )
+            else:
+                for key in SATURATION_KEYS[law] + ("latent_heat",):
+                    if sp.get(key) is None:
+                        problems.append(f"{dotted}.{key}: needed by {law}")
+                for key in ("saturation_pressure", "saturation_temperature"):
+                    if sp.get(key) is not None and sp[key] <= 0.0:
+                        problems.append(f"{dotted}.{key}: must be > 0")
     n = len(species)
     entries = [(f"boundary.{name}", b) for name, b in boundaries.items()]
     entries.append(("initial", data["initial"]))
@@ -1014,6 +1037,23 @@ def _species_rules(data, boundaries, energy, problems):
             problems.append(f"{prefix}: give mass_fraction or species_flux, not both")
         if b.get("stefan_flow") and b.get("mass_fraction") is None:
             problems.append(f"{prefix}.stefan_flow: needs mass_fraction")
+        if b.get("evaporation"):
+            if any(b.get(key) is not None for key in keys) or b.get("stefan_flow"):
+                problems.append(
+                    f"{prefix}.evaporation: replaces mass_fraction, species_flux "
+                    "and stefan_flow"
+                )
+            if n != 1 or species[0].get("saturation_model") is None:
+                problems.append(
+                    f"{prefix}.evaporation: needs exactly one species, with "
+                    "saturation_model and latent_heat"
+                )
+    if fluid["thermodynamic_pressure"] == "closed" and any(
+        b.get("evaporation") for b in boundaries.values()
+    ):
+        problems.append(
+            "fluid.thermodynamic_pressure = closed: evaporating walls add mass"
+        )
 
 
 def _energy_rules(data, boundaries, farfields, problems, notices):

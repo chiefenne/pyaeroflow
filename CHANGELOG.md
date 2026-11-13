@@ -1,6 +1,30 @@
 # Changelog
 
-## Unreleased – species: mixtures and mass transfer (stage S1)
+## Unreleased – species: mixtures and mass transfer (stages S1, S1b)
+
+Stage S1b (turbulence and evaporation):
+
+- Species with every RANS model (SA, SA-BCM, SA-AFT, SST, SST-LM): eddy
+  diffusivity μ_t/Sc_t, `fluid.schmidt_turbulent` (default 0.7) or a
+  registered law (`schmidt_turbulent_model`, `schmidt_turbulent_parameters`,
+  `thermo.register_turbulent_schmidt`). State p, u, v, [turbulence], T, Y.
+- Evaporating walls, `evaporation = true`: saturation mass fraction from
+  the surface temperature (per species `latent_heat` and `saturation_model`
+  = `antoine` in the NIST form, or `clausius-clapeyron`), Stefan flow, and
+  the latent heat in the surface energy balance (isothermal, heat-flux or
+  adiabatic surface; the surface temperature is solved per face inside the
+  residual). Wall CSV column `q_latent`. One transported species.
+- β² of species cases includes the diffusion velocity max D_k/L_ref; slow
+  Stefan flows from rest stalled before (the velocity never developed).
+- Fix: β² of RANS energy cases with gravity took the buoyancy velocity from
+  the first turbulence column instead of T.
+- Fix: the log residual names of RANS energy cases were in the wrong order
+  (T is after the turbulence columns).
+- Validation §20: wet-bulb temperature exact to round-off (tube, turbulent
+  plates), evaporating tube mass flux −2·10⁻⁶, turbulent Sherwood number
+  −1…+8 % (SA) and 0…+5 % (SST) of Kays & Crawford.
+
+Stage S1:
 
 - `[[fluid.species]]`: transported species in the incompressible energy
   equation (laminar, steady and unsteady, any number of species). The fluid

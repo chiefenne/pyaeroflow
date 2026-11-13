@@ -131,6 +131,13 @@ class Species(NamedTuple):
         the hook of the heat release of chemistry).
     expansion : float
         boussinesq: beta_k = -(1 / rho_0) d(rho)/dY_k.
+    latent_heat : float
+        Evaporating walls: latent heat of the phase change, L / (c_p,ref T_ref).
+    saturation : tuple or None
+        Evaporating walls: saturation mole fraction X = p_sat(T) / p_op of the
+        non-dimensional temperature, ("antoine", a, b, c) with
+        log10 X = a - b / (c + T), or ("clausius-clapeyron", ln X_0, theta,
+        1 / T_0) with ln X = ln X_0 - theta (1 / T - 1 / T_0).
     """
 
     name: str = "Y1"
@@ -139,6 +146,8 @@ class Species(NamedTuple):
     specific_heat: PropertyLaw = None
     formation_enthalpy: float = 0.0
     expansion: float = 0.0
+    latent_heat: float = 0.0
+    saturation: tuple = None
 
 
 class Thermo(NamedTuple):
@@ -426,7 +435,55 @@ def density_diffusivity(thermo, t, y):
     )
 
 
-def diffusion_flux(thermo, t, y, grad_n):
+def saturation_mole_fraction(species, t, pressure_ratio=1.0):
+    """X = p_sat(T) / p_th of an evaporating species at temperatures ``t``.
+
+    ``pressure_ratio`` is p_th / p_op (closed domains).
+    """
+    t = jnp.maximum(jnp.asarray(t), 1e-12)
+    kind, *par = species.saturation
+    if kind == "antoine":
+        a, b, c = par
+        x = 10.0 ** (a - b / (c + t))
+    elif kind == "clausius-clapeyron":
+        ln_x0, theta, inv_t0 = par
+        x = jnp.exp(ln_x0 - theta * (1.0 / t - inv_t0))
+    else:
+        raise ValueError(f"unknown saturation law '{kind}'")
+    return x / pressure_ratio
+
+
+def saturation_mass_fraction(thermo, t):
+    """Saturation mass fraction of the (single) transported species at ``t``.
+
+    Y = X W / (X W + 1 - X) with the molar mass ratio W = W_k / W_bulk; the
+    saturation mole fraction is limited to 0.99.
+    """
+    sp = thermo.species[0]
+    x = jnp.minimum(saturation_mole_fraction(sp, t, thermo.pressure_ratio), 0.99)
+    return x * sp.molar_mass / (x * sp.molar_mass + 1.0 - x)
+
+
+def turbulent_schmidt_coefficients(thermo, sct_law, t, y, mu_t, wall_distance=None):
+    """mu_t / Sc_t,k of the transported species at the faces, shape y.shape.
+
+    The Sc_t law has the interface of the turbulent Prandtl number laws
+    (:func:`register_turbulent_schmidt`): the inputs' ``prandtl`` field holds
+    the molecular Schmidt number mu / (rho D_k) of the species.
+    """
+    rho = density(thermo, t, y)
+    mu = viscosity(thermo, t)
+    rho_d = density_diffusivity(thermo, t, y)
+    nu = mu / rho
+    d = jnp.zeros_like(t) if wall_distance is None else wall_distance
+    out = []
+    for k in range(len(thermo.species)):
+        inputs = TurbulentPrandtlInputs(t, nu, mu_t / rho, d, mu / rho_d[..., k])
+        out.append(mu_t / turbulent_schmidt(sct_law, inputs))
+    return jnp.stack(out, axis=-1)
+
+
+def diffusion_flux(thermo, t, y, grad_n, turbulent=None):
     """Diffusion mass fluxes J_k.n of the transported species, shape y.shape.
 
     Fick's law with a correction velocity: J_k = -rho D_k dY_k/dn + Y_k S
@@ -436,10 +493,13 @@ def diffusion_flux(thermo, t, y, grad_n):
     transported species (with one transported species its D: S = 0 and the
     flux is Fick's law of a binary mixture).
 
-    ``grad_n`` is dY_k/dn, shape y.shape.
+    ``grad_n`` is dY_k/dn, shape y.shape; ``turbulent`` (shape y.shape) is
+    added to rho D_k (RANS: mu_t / Sc_t,k).
     """
     y = jnp.asarray(y)
     rho_d = density_diffusivity(thermo, t, y)
+    if turbulent is not None:
+        rho_d = rho_d + turbulent
     fick = rho_d * grad_n
     if len(thermo.species) == 1:
         return -fick
@@ -514,6 +574,31 @@ def turbulent_prandtl(law, inputs):
         raise ValueError(
             f"unknown turbulent Prandtl number law '{law.kind}' (known: "
             f"{sorted(TURBULENT_PRANDTL_LAWS)})"
+        ) from None
+    return function(inputs, **dict(law.parameters))
+
+
+TURBULENT_SCHMIDT_LAWS = {"constant": _constant_prandtl}
+
+
+def register_turbulent_schmidt(name, function):
+    """Add a turbulent Schmidt number law.
+
+    ``function(inputs, **parameters) -> Sc_t`` takes
+    :class:`TurbulentPrandtlInputs` (``prandtl`` holds the molecular Schmidt
+    number of the species) and returns an array of the faces; written in JAX.
+    """
+    TURBULENT_SCHMIDT_LAWS[name] = function
+
+
+def turbulent_schmidt(law, inputs):
+    """Sc_t at the faces for the selected law."""
+    try:
+        function = TURBULENT_SCHMIDT_LAWS[law.kind]
+    except KeyError:
+        raise ValueError(
+            f"unknown turbulent Schmidt number law '{law.kind}' (known: "
+            f"{sorted(TURBULENT_SCHMIDT_LAWS)})"
         ) from None
     return function(inputs, **dict(law.parameters))
 

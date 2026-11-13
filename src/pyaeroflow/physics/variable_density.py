@@ -136,7 +136,11 @@ THERMAL_NAMES = {
 }
 # Species kinds of wall faces: zero flux, prescribed diffusion flux, fixed mass
 # fractions, fixed mass fractions with Stefan flow.
-ZERO_FLUX, SPECIES_FLUX, FIXED_FRACTION, STEFAN_FLOW = 0, 1, 2, 3
+# EVAPORATING: the surface of a liquid at the saturation mass fraction of its
+# temperature, with the Stefan flow and the latent heat.
+ZERO_FLUX, SPECIES_FLUX, FIXED_FRACTION, STEFAN_FLOW, EVAPORATING = 0, 1, 2, 3, 4
+# Newton iterations of the surface temperature of an evaporating wall.
+EVAPORATION_ITERATIONS = 8
 WALL_TYPES = ("wall", "transpiration-wall")
 FIXED_TEMPERATURE_TYPES = ("velocity-inlet", "total-pressure-inlet", "farfield")
 
@@ -155,6 +159,9 @@ class VariableDensityModel(NamedTuple):
         Gravitational acceleration (g_x, g_y), non-dimensional g L / U^2.
     turbulent_prandtl : TurbulentPrandtl
         Pr_t law of the eddy conductivity (RANS, stage V2).
+    turbulent_schmidt : TurbulentPrandtl
+        Sc_t law of the eddy diffusivity of the species (RANS, stage S1b),
+        a law of :func:`pyaeroflow.physics.thermo.turbulent_schmidt`.
     beta_factor, spatial_order, limiter, limiter_threshold,
     viscous_gradient, alpha, body_force, pin :
         As in :class:`pyaeroflow.physics.incompressible.IncompressibleModel`.
@@ -180,6 +187,9 @@ class VariableDensityModel(NamedTuple):
     thermo: th.Thermo = th.Thermo()
     gravity: tuple = (0.0, 0.0)
     turbulent_prandtl: th.TurbulentPrandtl = th.TurbulentPrandtl()
+    turbulent_schmidt: th.TurbulentPrandtl = th.TurbulentPrandtl(
+        "constant", (("value", 0.7),)
+    )
     beta_factor: float = 4.1
     spatial_order: int = 2
     limiter: str = "none"
@@ -261,10 +271,13 @@ class BoundaryData(NamedTuple):
     # diffusion fluxes into the fluid (n_bfaces, n_species); None without.
     species: jnp.ndarray = None
     species_flux: jnp.ndarray = None
+    spacing: jnp.ndarray = None  # wall-normal distance d.n of the owner centre
 
 
 def species_kind(bc):
     """Species kind of a wall condition dict."""
+    if bc.get("evaporation"):
+        return EVAPORATING
     if bc.get("species_flux") is not None:
         return SPECIES_FLUX
     if bc.get("mass_fraction") is not None:
@@ -334,13 +347,17 @@ def build_boundary_data(disc, conditions, model):
                 kinds[sl] = species_kind(bc)
                 if kinds[sl.start] == SPECIES_FLUX:
                     fluxes[sl] = _species_values(bc["species_flux"], ns, x, y)
-                elif kinds[sl.start] != ZERO_FLUX:
+                elif kinds[sl.start] not in (ZERO_FLUX, EVAPORATING):
                     y_val[sl] = _species_values(bc["mass_fraction"], ns, x, y)
             elif bc.get("mass_fraction") is not None:
                 y_val[sl] = _species_values(bc["mass_fraction"], ns, x, y)
         value = np.column_stack((value, y_val))
         kinds, fluxes = jnp.asarray(kinds), jnp.asarray(fluxes)
         y_val = jnp.asarray(y_val)
+        geom = disc.geom
+        spacing = jnp.asarray(
+            np.abs(np.einsum("fk,fk->f", geom.b_delta, geom.b_normal))
+        )
     face_density = np.asarray(th.density(model.thermo, jnp.asarray(t_val), y_val))
     # RANS (stage V2): the turbulence boundary values of the flow part.
     turbulent = model.turbulence != "none"
@@ -356,15 +373,31 @@ def build_boundary_data(disc, conditions, model):
         th.StaticThermo(model.thermo) if turbulent else None,
         kinds,
         fluxes,
+        spacing if ns else None,
+    )
+
+
+def species_boundary_args(bc):
+    """Per-face species arrays of the compact boundary fluxes (empty without)."""
+    if bc.species is None:
+        return ()
+    return (bc.species, bc.species_flux, bc.spacing)
+
+
+def with_species_arguments(bc, args):
+    """``bc`` (one face) with the species arrays of :func:`species_boundary_args`."""
+    if not args:
+        return bc
+    kind, flux, spacing = args
+    return bc._replace(
+        species=kind[None], species_flux=flux[None], spacing=spacing[None]
     )
 
 
 def jacobian_boundary_args(bc):
     """Per-face arrays of :func:`boundary_flux` (first-order Jacobian)."""
     args = (bc.kind, bc.value, bc.thermal, bc.heat_flux, bc.face_density)
-    if bc.species is not None:
-        args += (bc.species, bc.species_flux)
-    return args
+    return args + species_boundary_args(bc)
 
 
 def lsq_include(conditions, n_var=4, n_species=0):
@@ -390,7 +423,10 @@ def lsq_include(conditions, n_var=4, n_species=0):
                 mask[sl, U:] = False
             if bc["type"] in WALL_TYPES and thermal_kind(bc) != ISOTHERMAL:
                 mask[sl, t_col] = False
-            if bc["type"] in WALL_TYPES and species_kind(bc) < FIXED_FRACTION:
+            if bc["type"] in WALL_TYPES and species_kind(bc) not in (
+                FIXED_FRACTION,
+                STEFAN_FLOW,
+            ):
                 mask[sl, t_col + 1 :] = False
         return mask
 
@@ -433,11 +469,16 @@ def boundary_state(bc, normal, v_in):
         (k == VELOCITY_INLET)
         | (k == TOTAL_PRESSURE_INLET)
         | (k == FARFIELD)
-        | ((k == WALL) & (bc.species >= FIXED_FRACTION))
+        | ((k == WALL) & _fixed_fraction(bc.species))
     )
     return out.at[:, T + 1 :].set(
         jnp.where(fixed_y[:, None], bc.value[:, T + 1 :], out[:, T + 1 :])
     )
+
+
+def _fixed_fraction(kind):
+    """Faces of walls whose mass fractions are prescribed (not evaporating)."""
+    return (kind == FIXED_FRACTION) | (kind == STEFAN_FLOW)
 
 
 def _fractions(model, w):
@@ -539,11 +580,12 @@ def is_closed_domain(conditions):
     """Return True if no boundary condition exchanges mass.
 
     Walls, slip walls, symmetry and periodic faces; transpiration walls only
-    with zero normal velocity; no wall with the Stefan flow of a species.
+    with zero normal velocity; no wall with the Stefan flow of a species
+    (``stefan_flow`` or ``evaporation``).
     """
     for bc in conditions.values():
         kind = bc["type"]
-        if bc.get("stefan_flow"):  # species: a net mass flux through the wall
+        if bc.get("stefan_flow") or bc.get("evaporation"):  # species mass flux
             return False
         if kind in ("wall", "slip-wall", "symmetry", "periodic"):
             continue
@@ -572,7 +614,10 @@ def buoyancy_velocity_squared(
 
 
 def beta_squared(model, w, bc):
-    """beta^2 = beta_factor max(max|v|^2, U_b^2) over cells and boundary values."""
+    """beta^2 = beta_factor max(max|v|^2, U_b^2) over cells and boundary values.
+
+    Species: also the diffusion velocity (max D_k / L_ref)^2.
+    """
     w = np.asarray(w)
     value = np.asarray(bc.value)
     v2 = max(
@@ -582,15 +627,27 @@ def beta_squared(model, w, bc):
     fixed = (np.asarray(bc.thermal) == ISOTHERMAL) | np.isin(
         np.asarray(bc.kind), (VELOCITY_INLET, TOTAL_PRESSURE_INLET, FARFIELD)
     )
+    # T of the cells from the layout (RANS: after the turbulence columns);
+    # the boundary values hold (p, u, v, T, Y).
+    tc = model.layout.column("T")
     if model.thermo.species:
         # Species: also the faces with prescribed mass fractions (the
         # prescribed T and Y of either kind of face; defaults elsewhere).
-        fixed = fixed | (np.asarray(bc.species) >= FIXED_FRACTION)
+        fixed = fixed | np.isin(np.asarray(bc.species), (FIXED_FRACTION, STEFAN_FLOW))
         ub2 = buoyancy_velocity_squared(
-            model, w[:, T], value[fixed, T], w[:, T + 1 :], value[fixed, T + 1 :]
+            model, w[:, tc], value[fixed, T], w[:, tc + 1 :], value[fixed, T + 1 :]
         )
-        return float(model.beta_factor * max(v2, ub2, 1e-10))
-    ub2 = buoyancy_velocity_squared(model, w[:, T], value[fixed, T])
+        # The Stefan flow of species walls starts from rest: also the
+        # diffusion velocity D_k / L of the species (reference length 1),
+        # else beta^2 stays at its floor and the flow never develops.
+        t, y = jnp.asarray(w[:, tc]), jnp.asarray(w[:, tc + 1 :])
+        d = (
+            th.density_diffusivity(model.thermo, t, y)
+            / th.density(model.thermo, t, y)[:, None]
+        )
+        ud2 = float(np.max(np.asarray(d))) ** 2
+        return float(model.beta_factor * max(v2, ub2, ud2, 1e-10))
+    ub2 = buoyancy_velocity_squared(model, w[:, tc], value[fixed, T])
     return float(model.beta_factor * max(v2, ub2, 1e-10))
 
 
@@ -756,7 +813,7 @@ def _with_species(model, flux, j, t_f):
     return jnp.concatenate((flux, j), axis=1)
 
 
-def boundary_viscous_flux(model, bc, grad, w_b, normal):
+def boundary_viscous_flux(model, bc, grad, w_b, normal, details=False):
     """-F_v.n through boundary faces (n_bfaces, 4).
 
     Momentum as in the constant-density solver (mu of the face T). Energy:
@@ -771,27 +828,128 @@ def boundary_viscous_flux(model, bc, grad, w_b, normal):
     prescribed = wall & (bc.thermal == HEAT_FLUX)
     flux = flux.at[:, T].set(jnp.where(prescribed, -bc.heat_flux, flux[:, T]))
     if bc.species is None:
-        return flux
-    # Species: diffusion where the mass fractions are prescribed and at
-    # outlets, minus the prescribed flux at flux walls, nothing at zero-flux
-    # walls and symmetry faces.
-    t_b, y_b = w_b[:, T], w_b[:, T + 1 :]
-    j = species_flux(model, grad, t_b, y_b, normal)
-    diffuse = ~((wall & (bc.species < FIXED_FRACTION)) | (k == SYMMETRY))
+        return (flux, {"conduction": -flux[:, T]}) if details else flux
+    return boundary_species_flux(
+        model,
+        bc,
+        flux,
+        grad[:, T + 1 :],
+        w_b[:, T],
+        w_b[:, T + 1 :],
+        normal,
+        details=details,
+    )
+
+
+def evaporation_state(model, bc, t_b, y_b, rho_d, k):
+    """Surface state of evaporating walls: (T_s, Y_s, j, m) per boundary face.
+
+    The surface holds the saturation mass fraction Y_s(T_s) of the (single)
+    species; the gas does not cross it, so the net mass flux is
+    m = j / (1 - Y_s) with the diffusion flux j = rho D (Y_s - Y_c) / dn into
+    the fluid (one-sided, ``rho_d`` the effective coefficient). Isothermal
+    walls: T_s is the wall temperature. Otherwise the surface energy balance
+    gives the heat conducted into the fluid q = q_w - m L (q_w the prescribed
+    heat flux, zero at adiabatic walls) and T_s = T_c + q dn / k, solved by
+    Newton's method on T_s (``k`` the effective conductivity).
+    ``t_b``, ``y_b`` are the boundary states (T: the prescribed or the cell
+    value, Y: the cell values).
+    """
+    tm = model.thermo
+    sp = tm.species[0]
+    dn = bc.spacing
+    y_c = y_b[:, 0]
+    fixed_t = bc.thermal == ISOTHERMAL
+    q_w = jnp.where(bc.thermal == HEAT_FLUX, bc.heat_flux, 0.0)
+
+    def flux(t_s):
+        y_s = th.saturation_mass_fraction(tm, t_s)
+        j = rho_d * (y_s - y_c) / dn
+        return y_s, j, j / jnp.maximum(1.0 - y_s, 1e-6)
+
+    def balance(t_s):
+        return t_s - t_b - (q_w - flux(t_s)[2] * sp.latent_heat) * dn / k
+
+    t_s = t_b
+    for _ in range(EVAPORATION_ITERATIONS):
+        f, df = jax.jvp(balance, (t_s,), (jnp.ones_like(t_s),))
+        t_s = jnp.where(fixed_t, t_b, t_s - f / df)
+    y_s, j, m = flux(t_s)
+    return t_s, y_s, j, m
+
+
+def boundary_species_flux(
+    model,
+    bc,
+    flux,
+    grad_y,
+    t_b,
+    y_b,
+    normal,
+    turbulent=None,
+    conductivity=None,
+    details=False,
+):
+    """Append the species columns to the boundary fluxes ``flux`` (n, 4).
+
+    Diffusion (with ``turbulent`` = mu_t / Sc_t added to rho D) where the
+    mass fractions are prescribed and at outlets, minus the prescribed flux
+    at flux walls, nothing at zero-flux walls and symmetry faces; the
+    enthalpy of the diffusion fluxes in the energy column. Stefan-flow and
+    evaporating walls: the net mass flux m carries mass, momentum (velocity
+    m / rho along the normal), enthalpy and species; at evaporating walls
+    the heat conducted into the fluid is q_w - m L (:func:`evaporation_state`,
+    ``conductivity`` the effective conductivity, default k(T)).
+
+    ``details``: also return a dict of the heat conducted into the fluid,
+    the surface temperature and mass fractions and the net mass flux into
+    the fluid per face.
+    """
+    k = bc.kind
+    wall = k == WALL
+    tm = model.thermo
+    grad_n = jnp.einsum("nsk,nk->ns", grad_y, normal)
+    j = th.diffusion_flux(tm, t_b, y_b, grad_n, turbulent)
+    diffuse = ~((wall & ~_fixed_fraction(bc.species)) | (k == SYMMETRY))
     j = jnp.where(diffuse[:, None], j, 0.0)
     j = jnp.where((wall & (bc.species == SPECIES_FLUX))[:, None], -bc.species_flux, j)
-    flux = _with_species(model, flux, j, t_b)
-    # Stefan flow: the bulk species does not cross the wall, the net mass
-    # flux m = sum J_k / (1 - sum Y_k) carries mass, momentum (velocity
-    # m / rho along the normal), enthalpy and species.
     stefan = wall & (bc.species == STEFAN_FLOW)
     bulk = jnp.maximum(1.0 - jnp.sum(y_b, axis=1), 1e-6)
-    m = jnp.where(stefan, jnp.sum(j, axis=1) / bulk, 0.0)
-    rho, _, h, _ = _properties(model, t_b, y_b)
+    m = jnp.where(stefan, -jnp.sum(j, axis=1) / bulk, 0.0)
+    t_s, y_s = t_b, y_b
+    evaporating = wall & (bc.species == EVAPORATING)
+    if tm.species[0].saturation is not None:
+        rho_d = th.density_diffusivity(tm, t_b, y_b)[:, 0]
+        if turbulent is not None:
+            rho_d = rho_d + turbulent[:, 0]
+        k_eff = th.conductivity(tm, t_b) if conductivity is None else conductivity
+        t_e, y_e, j_e, m_e = evaporation_state(model, bc, t_b, y_b, rho_d, k_eff)
+        # j above is J.n with n out of the fluid: the flux into it is -J.n.
+        j = jnp.where(evaporating[:, None], -j_e[:, None], j)
+        m = jnp.where(evaporating, m_e, m)
+        t_s = jnp.where(evaporating, t_e, t_b)
+        y_s = jnp.where(evaporating[:, None], y_e[:, None], y_b)
+        latent = m_e * tm.species[0].latent_heat
+        q_w = jnp.where(bc.thermal == HEAT_FLUX, bc.heat_flux, 0.0)
+        conducted = jnp.where(bc.thermal == ISOTHERMAL, -flux[:, T], q_w - latent)
+        flux = flux.at[:, T].set(jnp.where(evaporating, -conducted, flux[:, T]))
+    conduction = -flux[:, T]
+    flux = _with_species(model, flux, j, t_s)
+    rho, _, h, _ = _properties(model, t_s, y_s)
+    # m is the mass flux into the fluid, the velocity -(m / rho) n: outward
+    # fluxes -m of mass, m^2 / rho n of momentum, -m h of enthalpy.
     carried = jnp.stack(
-        (m, m * m / rho * normal[:, 0], m * m / rho * normal[:, 1], m * h), axis=1
+        (-m, m * m / rho * normal[:, 0], m * m / rho * normal[:, 1], -m * h), axis=1
     )
-    return flux + jnp.concatenate((carried, m[:, None] * y_b), axis=1)
+    flux = flux + jnp.concatenate((carried, -m[:, None] * y_s), axis=1)
+    if details:
+        return flux, {
+            "conduction": conduction,
+            "temperature": t_s,
+            "mass_fraction": y_s,
+            "mass_flux": m,
+        }
+    return flux
 
 
 def boundary_convective_flux(model, bc, normal, w_in, beta2):
@@ -956,8 +1114,7 @@ def boundary_flux(
         bc_rho[None],
         model.density,
     )
-    if species:
-        bc = bc._replace(species=species[0][None], species_flux=species[1][None])
+    bc = with_species_arguments(bc, tuple(species))
     conv = boundary_convective_flux(model, bc, normal[None], w_o[None], beta2)[0]
     w_b = boundary_state(bc, normal[None], w_o[None])[0]
     dn = jnp.dot(delta, normal)
@@ -1096,18 +1253,28 @@ def wall_traction(model, grad, w_b, normal):
     return -inc.viscous_flux(model, grad[:, U : V + 1], normal, mu)[:, 1:]
 
 
-@partial(jax.jit, static_argnums=0)
-def wall_heat_flux(model, geom, bc, w):
-    """Heat flux into the fluid per boundary face (n_bfaces,), k dT/dn.
-
-    ``n`` is the outward normal of the fluid domain (into the wall): a wall
-    hotter than the fluid has q_w > 0. Zero at adiabatic walls, the
-    prescribed value at heat-flux walls.
-    """
+def _wall_details(model, geom, bc, w):
+    """Boundary fluxes and their details (:func:`boundary_species_flux`)."""
+    model = closed_model(model, geom, w)
     w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
     grad = lsq_gradient(geom, w, w_b)
     g_b = boundary_face_gradient(geom, w, w_b, grad, model.viscous_gradient)
-    return -boundary_viscous_flux(model, bc, g_b, w_b, geom.b_normal)[:, T]
+    flux, details = boundary_viscous_flux(
+        model, bc, g_b, w_b, geom.b_normal, details=True
+    )
+    return model, w_b, flux, details
+
+
+@partial(jax.jit, static_argnums=0)
+def wall_heat_flux(model, geom, bc, w):
+    """Heat conducted into the fluid per boundary face (n_bfaces,), k dT/dn.
+
+    ``n`` is the outward normal of the fluid domain (into the wall): a wall
+    hotter than the fluid has q_w > 0. Zero at adiabatic walls, the
+    prescribed value at heat-flux walls; evaporating walls: the prescribed
+    value (zero if adiabatic) minus the latent heat m L.
+    """
+    return _wall_details(model, geom, bc, w)[3]["conduction"]
 
 
 @partial(jax.jit, static_argnums=0)
@@ -1115,10 +1282,11 @@ def wall_temperature(model, geom, bc, w):
     """Temperature per boundary face (n_bfaces,).
 
     The prescribed T at isothermal walls and fixed-T boundaries; elsewhere
-    T_cell + q_w (d.n) / k (the one-sided gradient of the face heat flux).
+    T_cell + q_w (d.n) / k (the one-sided gradient of the face heat flux;
+    at evaporating walls the surface temperature of the energy balance).
     """
-    w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
-    q = wall_heat_flux(model, geom, bc, w)
+    model, w_b, _, details = _wall_details(model, geom, bc, w)
+    q = details["conduction"]
     t_c = w[geom.b_owner, T]
     dn = jnp.einsum("fk,fk->f", geom.b_delta, geom.b_normal)
     k = th.conductivity(model.thermo, t_c)
@@ -1126,43 +1294,46 @@ def wall_temperature(model, geom, bc, w):
     return jnp.where(walls, t_c + q * dn / k, w_b[:, T])
 
 
-def _wall_species(model, geom, bc, w):
-    model = closed_model(model, geom, w)
-    w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
-    grad = lsq_gradient(geom, w, w_b)
-    g_b = boundary_face_gradient(geom, w, w_b, grad, model.viscous_gradient)
-    flux = boundary_viscous_flux(model, bc, g_b, w_b, geom.b_normal)
-    return model, w_b, -flux[:, T + 1 :], -flux[:, P]
-
-
 @partial(jax.jit, static_argnums=0)
 def wall_species_flux(model, geom, bc, w):
     """Species mass fluxes into the fluid per boundary face, (n_bfaces, n_species).
 
-    The diffusion flux -J_k.n plus, at Stefan-flow walls, the part m Y_k that
-    the net mass flux carries; ``n`` is the outward normal of the fluid
-    domain. Zero at zero-flux walls, the prescribed value at flux walls.
-    Second return value: the net mass flux m into the fluid (n_bfaces,),
-    non-zero at Stefan-flow walls.
+    The diffusion flux -J_k.n plus, at Stefan-flow and evaporating walls,
+    the part m Y_k that the net mass flux carries; ``n`` is the outward
+    normal of the fluid domain. Zero at zero-flux walls, the prescribed value
+    at flux walls. Second return value: the net mass flux m into the fluid
+    (n_bfaces,).
     """
-    _, _, j, m = _wall_species(model, geom, bc, w)
-    return j, m
+    _, _, flux, details = _wall_details(model, geom, bc, w)
+    return -flux[:, T + 1 :], details["mass_flux"]
 
 
 @partial(jax.jit, static_argnums=0)
 def wall_mass_fraction(model, geom, bc, w):
     """Mass fractions per boundary face, (n_bfaces, n_species).
 
-    The prescribed values where they are fixed; elsewhere Y_cell plus the
-    one-sided gradient of the face flux, Y_cell + j_k (d.n) / (rho D_k).
+    The prescribed values where they are fixed, the saturation values at
+    evaporating walls; elsewhere Y_cell plus the one-sided gradient of the
+    face flux, Y_cell + j_k (d.n) / (rho D_k).
     """
-    model, w_b, j, _ = _wall_species(model, geom, bc, w)
+    model, w_b, flux, details = _wall_details(model, geom, bc, w)
+    return wall_fractions(model, geom, bc, w, -flux[:, T + 1 :], details)
+
+
+def wall_fractions(model, geom, bc, w, j, details, turbulent=None):
+    """Wall mass fractions from the species fluxes ``j`` into the fluid."""
     w_c = w[geom.b_owner]
+    ns = len(model.thermo.species)
+    t_c, y_c = w_c[:, -1 - ns], w_c[:, w.shape[1] - ns :]
     dn = jnp.einsum("fk,fk->f", geom.b_delta, geom.b_normal)
-    rho_d = th.density_diffusivity(model.thermo, w_c[:, T], w_c[:, T + 1 :])
-    walls = (bc.kind == WALL) & (bc.species < FIXED_FRACTION)
-    extrapolated = w_c[:, T + 1 :] + j * dn[:, None] / rho_d
-    return jnp.where(walls[:, None], extrapolated, w_b[:, T + 1 :])
+    rho_d = th.density_diffusivity(model.thermo, t_c, y_c)
+    if turbulent is not None:
+        rho_d = rho_d + turbulent
+    walls = (bc.kind == WALL) & (
+        (bc.species == ZERO_FLUX) | (bc.species == SPECIES_FLUX)
+    )
+    extrapolated = y_c + j * dn[:, None] / rho_d
+    return jnp.where(walls[:, None], extrapolated, details["mass_fraction"])
 
 
 def cell_properties(model, w, geom=None):
