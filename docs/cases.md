@@ -1,6 +1,6 @@
 # Case catalogue
 
-The case files in `examples/cases/` (45) with what each one is, the mesh it
+The case files in `examples/cases/` (48) with what each one is, the mesh it
 needs and where it is discussed. Start a case with the command in the last
 column; a case with a template or a library mesh runs after a plain
 `pip install`, the others need a clone of the repository (their meshes are
@@ -27,12 +27,14 @@ Validation sections are in [Validation](validation.md), pictures in the
 | `couette_unsteady.toml` | laminar, unsteady | template `couette-unsteady` | impulsively started Couette flow, time accuracy | unit tests |
 | `poiseuille.toml` | laminar | template `poiseuille` | plane Poiseuille flow on perturbed triangles | validation §2 |
 | `cavity_re100.toml` | laminar | template `cavity` | lid-driven cavity, Re 100, against Ghia et al. | validation §2 |
+| `cavity_heated_ra1e5.toml` | laminar, energy | template `cavity-heated` | natural convection at Ra 1e5, mean Nu against de Vahl Davis (recipe 19) | validation §19 |
 
 ## Flat plates
 
 | Case file | Physics | Mesh | Shows | Where |
 |---|---|---|---|---|
 | `flat_plate_rans.toml` | SA-neg | template `plate-sa` | turbulent plate, NASA TMR zero-pressure-gradient case | validation §5 |
+| `plate_heated_sa.toml` | SA-neg, energy | template `plate-heated-sa` | the same plate heated 3 K: Stanton number against Kays and Crawford (recipes 19, 20) | validation §19 |
 | `flat_plate_transition.toml` | SA + BCM | template `plate-bcm` | transitional plate at Tu 3.3 % | validation §7 |
 | `lm_t3a.toml` | SST + Langtry–Menter | template `plate-lm-t3a` | ERCOFTAC T3A | validation §10 |
 | `lm_t3am.toml` | SST + Langtry–Menter | template `plate-lm-t3am` | ERCOFTAC T3A− | validation §10 |
@@ -44,6 +46,7 @@ Validation sections are in [Validation](validation.md), pictures in the
 |---|---|---|---|---|
 | `jet_crossflow.toml` | laminar | template `jet-crossflow` | normal jet in crossflow, Re_d 100, velocity ratio 2 | gallery 5 |
 | `jet_crossflow_inclined.toml` | laminar | template `jet-crossflow-inclined` | the same jet inclined at 60° | gallery 5 |
+| `heated_cylinder_re40.toml` | laminar, energy | library `cylinder-ogrid` (n_radial 72, 60 radii) | heated cylinder at Re 40, mean Nu against Lange et al. | gallery 9, validation §19 |
 | `cylinder_euler.toml` | Euler | template `cylinder-euler` | inviscid cylinder, pressure against the potential solution | validation §3 |
 | `naca0012_re1000_a20_spinup.toml` | laminar, unsteady | template `naca0012-shedding` | NACA 0012 at Re 1000, α 20°: vortex shedding, first phase | gallery 1 |
 | `naca0012_re1000_a20_video.toml` | laminar, unsteady | library `naca0012-shedding` | second phase of the shedding run: restart and write frames | gallery 1, recipe 7 |

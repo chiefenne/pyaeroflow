@@ -1,0 +1,58 @@
+# Natural-convection cavity at Ra = 1e5 (de Vahl Davis 1983), Pr = 0.71.
+# Air as an ideal gas at 300 K, hot left / cold right wall, Delta T = 3 K
+# (Delta T / T = 1 %: the Boussinesq limit), adiabatic top and bottom.
+# Reference: mean Nu = 4.519 (log Summary: heat 'left', mean Nu).
+# Mesh: template `cavity-heated` (library cavity-clustered, n = 64).
+
+[case]
+name = "cavity_heated_ra1e5"
+
+[mesh]
+file = "cavity_clustered_64.su2"
+scale = 0.07070143204                 # m, L from Ra = g beta dT L^3 / (nu alpha)
+
+[physics]
+model = "laminar"
+energy = true
+gravity = [0.0, -9.81]
+
+[fluid]
+density_model = "ideal_gas"
+operating_pressure = 101325.0
+gas_constant = 287.058
+viscosity = 1.846e-5
+specific_heat = 1006.43
+prandtl = 0.71
+
+[reference]
+temperature = 300.0
+temperature_difference = 3.0      # Nu = q L / (k dT)
+length = 0.07070143204
+velocity = 0.08328151346               # m/s, buoyancy velocity sqrt(g beta dT L)
+
+[initial]
+velocity = [0.0, 0.0]
+
+[boundary.left]
+type = "wall"
+temperature = 301.5
+
+[boundary.right]
+type = "wall"
+temperature = 298.5
+
+[boundary.top]
+type = "wall"
+
+[boundary.bottom]
+type = "wall"
+
+[numerics]
+limiter = "none"
+
+[solver]
+residual_drop = 9.0
+max_iterations = 300
+
+[output]
+directory = "output/cavity_heated_ra1e5"

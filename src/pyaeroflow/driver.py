@@ -35,6 +35,8 @@ from pyaeroflow.physics import (
     rans_compressible,
     rans_sst,
     rans_sst_compressible,
+    rans_sst_variable_density,
+    rans_variable_density,
     sst,
 )
 from pyaeroflow.physics import variable_density as vd
@@ -252,11 +254,6 @@ class FlowProblem:
         # Energy equation of the incompressible solver (variable density, V1).
         self.thermal = self.flow is vd
         self.turbulent = model.turbulence != "none"
-        if self.thermal and (self.turbulent or model.transition != "none"):
-            raise ValueError(
-                "the incompressible energy equation is laminar so far (RANS is "
-                "stage V2)"
-            )
         self.source_limited_cells = 0  # cells capped by the source-term dt limit
         if self.compressible and self.turbulent:
             if model.transition != "none":
@@ -334,6 +331,11 @@ class FlowProblem:
                 "sa-neg": rans_compressible,
                 "sst": rans_sst_compressible,
             }.get(model.turbulence, comp)
+        elif self.thermal:  # RANS with the energy equation (stage V2)
+            self.physics = {
+                "sa-neg": rans_variable_density,
+                "sst": rans_sst_variable_density,
+            }.get(model.turbulence, vd)
         else:
             self.physics = {"sa-neg": rans, "sst": rans_sst}.get(
                 model.turbulence, self.flow
@@ -370,9 +372,14 @@ class FlowProblem:
         with d1 = the centroid distance, on the flat plate at every grid
         level): the 1/y^2 profile of omega is not resolved by the wall cell.
         """
-        # Compressible flow: the factor 60 / (beta_1 d1^2); nu_w of the wall
-        # state is applied in the residual (rans_sst_compressible).
-        nu = 1.0 if self.compressible else model.viscosity / model.density
+        # Compressible flow and the energy equation: the factor
+        # 60 / (beta_1 d1^2); nu_w of the wall state is applied in the
+        # boundary state (rans_sst_compressible, rans_sst_variable_density).
+        nu = (
+            1.0
+            if self.compressible or self.thermal
+            else model.viscosity / model.density
+        )
         delta, normal = np.asarray(self.geom.b_delta), np.asarray(self.geom.b_normal)
         d1 = 2.0 * np.abs(np.einsum("fk,fk->f", delta, normal))
         turb = np.array(self.bc.turbulence)
@@ -644,7 +651,11 @@ class FlowProblem:
         )
         f_args = ()
         mask = None
-        if self.model.turbulence == "sst":
+        if hasattr(self.physics, "jacobian_arguments"):  # RANS with energy
+            f_args, b_args = self.physics.jacobian_arguments(
+                self.model, self.geom, self.bc, w
+            )
+        elif self.model.turbulence == "sst":
             mu_f, dc_f, mu_b, dc_b = self.physics.jacobian_coefficients(
                 self.model, self.geom, self.bc, w
             )
@@ -854,11 +865,12 @@ class FlowProblem:
 
     def effective_intermittency(self, w):
         """Langtry-Menter gamma_eff = max(gamma, gamma_sep) per cell."""
-        return np.asarray(
-            rans_sst.effective_intermittency_field(
-                self.model, self.geom, self.bc, jnp.asarray(w)
-            )
+        field = getattr(
+            self.physics,
+            "effective_intermittency_field",
+            rans_sst.effective_intermittency_field,
         )
+        return np.asarray(field(self.model, self.geom, self.bc, jnp.asarray(w)))
 
     def wall_eddy_viscosity_ratio(self, w, faces):
         """Maximum nu_t/nu over the boundary-layer column above each wall face.
@@ -907,12 +919,20 @@ class FlowProblem:
         faces = np.asarray(faces)
         owner = np.asarray(self.geom.b_owner)[faces]
         dist = np.asarray(self.geom.wall_distance)[owner]
-        if self.compressible:
+        if self.compressible or self.thermal:
             w_b = np.asarray(
                 self.physics.boundary_state(
                     self.bc, self.geom.b_normal, jnp.asarray(w)[self.geom.b_owner]
                 )
             )[faces]
+        if self.thermal:
+            rho, nu = (
+                np.asarray(a)
+                for a in rans_variable_density.cell_properties(
+                    self.model, jnp.asarray(w_b[:, -1])
+                )
+            )
+        elif self.compressible:
             rho = np.asarray(comp.density(self.model.gas_constant, w_b))
             nu = np.asarray(rans_compressible.kinematic_viscosity(self.model, w_b))
         else:
@@ -1352,7 +1372,25 @@ class FlowProblem:
 
             return limit_step
         if self.thermal:
-            return self._positivity_limiter()  # T > 0
+            positivity = self._positivity_limiter()  # T > 0
+            if not self.turbulent:
+                return positivity
+            if self.model.turbulence == "sst":
+                turbulence = self._sst_limiter(
+                    clip=clip,
+                    guard=gamma_guard,
+                    stats=guard_stats,
+                    whole_cell=whole_cell,
+                )
+            else:
+                turbulence = self._nu_tilde_limiter(factor)
+            if turbulence is None:
+                return positivity
+
+            def limit_thermal(u, du, r=None, tau=None):
+                return turbulence(u, positivity(u, du), r, tau)
+
+            return limit_thermal
         if self.model.turbulence == "sst":
             return self._sst_limiter(
                 clip=clip, guard=gamma_guard, stats=guard_stats, whole_cell=whole_cell
@@ -1368,7 +1406,11 @@ class FlowProblem:
         1 - max_drop of the old values, so that no trial state of the line
         search has a negative pressure or temperature.
         """
-        cols = list(self.flow.POSITIVE_COLUMNS)
+        cols = (
+            [self.model.layout.column("T")]
+            if self.thermal
+            else list(self.flow.POSITIVE_COLUMNS)
+        )
 
         def limit_step(u, du, r=None, tau=None):
             val = np.maximum(u[:, cols], 1e-300)

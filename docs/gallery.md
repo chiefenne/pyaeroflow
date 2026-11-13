@@ -19,6 +19,7 @@ Case files are in `examples/cases/`, meshes in `examples/meshes/`
 | 6 | [Oblique shock on a Mach 2 compression ramp](#ramp) | compressible, steady | Euler |
 | 7 | [Refinement band around a NACA 0012](#band) | incompressible, steady | SA-neg |
 | 8 | [Airfoil polar in minutes with the viscous panel method](#foil) | incompressible, steady | panels + integral boundary layer |
+| 9 | [Heated cylinder: the thermal wake at Re 40](#heated-cylinder) | incompressible with energy equation, steady | laminar |
 
 ---
 
@@ -292,5 +293,41 @@ The first command writes `e387_Re2e+05.polar.csv` and, with `--cp`, one wall
 file per angle. The script writes everything to `examples/output/ibl/`. Open
 `naca0012_ibl_field.vtu` in ParaView and colour by `velocity` or
 `nu_t_over_nu`. Recipe: [estimate an airfoil before meshing](recipes.md#foil).
+
+[↑ back to top](#example-gallery)
+
+---
+
+<a id="heated-cylinder"></a>
+## 9. Heated cylinder: the thermal wake at Re 40
+
+![Temperature, isotherms and streamlines of a heated cylinder at Re 40](figures/gallery/heated_cylinder_re40.png)
+
+A cylinder 3 K above the air around it. At Re 40 the flow is steady with a
+closed recirculation bubble behind the cylinder and the warm fluid is carried downstream in a long
+thermal wake. The run solves the energy equation strongly coupled with the
+momentum equations (`physics.energy = true`, density from the ideal-gas law,
+viscosity, specific heat and conductivity as functions of T) and converges
+from freestream in 21 iterations and about 12 s.
+
+| | |
+|---|---|
+| Mesh | O-grid, 9k cells, farfield 60 radii (`make-mesh cylinder-ogrid`) |
+| Flow | Re_D = 40, Pr = 0.71, air at 300 K, T_wall − T_∞ = 3 K |
+| Case file | `heated_cylinder_re40.toml` |
+| Validation | mean Nu 3.255 against 3.281 (Lange et al. 1998), −0.8 %; [§19](validation.md#sec-19-cylinder) |
+
+```
+cd examples/cases
+pyaeroflow make-mesh cylinder-ogrid --set n_radial=72 outer_radius=60 -o cylinder_ogrid_far.su2
+pyaeroflow run heated_cylinder_re40.toml
+python plot_heated_cylinder.py output/heated_cylinder_re40/heated_cylinder_re40.vtu heated_cylinder.png
+```
+
+The last script needs `pip install matplotlib meshio`; in ParaView open
+`heated_cylinder_re40.vtu` and colour by `temperature`. The Nusselt number
+is in the log Summary, the local one in the wall file
+`heated_cylinder_re40.wall_cylinder.csv` (columns `T`, `q_w`, `nu`; recipe
+[heated walls](recipes.md#heated-walls)).
 
 [↑ back to top](#example-gallery)

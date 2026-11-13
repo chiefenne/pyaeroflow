@@ -9,7 +9,7 @@ behind the figures (iMac 2019, 3.6 GHz 8-core Intel Core i9, 32 GB, October
 2026). Versions: sections 1 to 6 are from 0.7.1, section 7 from the 0.8
 development (released in 0.9), sections 8 to 10 from 0.9, the LM polar in
 section 10 from 1.0 and the positive-linearization measurement there from
-1.1, section 18 from 1.7 (sandbox, 4 cores, November 2026). The meshes are in `examples/meshes/` (`README.md` there), the case
+1.1, section 18 from 1.7 and section 19 from the 1.8 development (sandbox, 4 cores, November 2026). The meshes are in `examples/meshes/` (`README.md` there), the case
 files in `examples/cases/`.
 
 Click a case to jump to its section; each section ends with a link back here.
@@ -39,6 +39,7 @@ Click a case to jump to its section; each section ends with a link back here.
 | L1 C3 | [Compressible SA-neg: TMR flat plate M 0.2, NACA 0012 M 0.15](#sec-14) | verification/validation | NASA TMR (CFL3D, FUN3D) | `pyaeroflow run examples/cases/naca0012_sa_m015.toml` |
 | L1 C4 | [Compressible SST: TMR flat plate M 0.2, NACA 0012 M 0.15](#sec-15) | verification/validation | NASA TMR SST (CFL3D) | `pyaeroflow run examples/cases/naca0012_sst_m015.toml` |
 | IBL (1.7) | [Viscous panel method `pyaeroflow foil`: mfoil, E387, SD7003](#sec-18) | verification/validation | mfoil (corrected copy), NASA TM 4062, Penn State 2007, XFOIL | `python examples/ibl_validation.py` |
+| V1 / V2 (1.8) | [Incompressible energy equation: cavity, heated plates (laminar, variable properties, turbulent), cylinder, channel](#sec-19) | verification/validation | de Vahl Davis 1983, Pohlhausen and Howarth–Levy–Lees similarity, Lange et al. 1998, Shah & London, Kays & Crawford | `pyaeroflow.cases.heat_transfer`, `tests/verification/test_heat_transfer.py` (case files: `examples/cases/` and the project folder `cases/variable_density_v1/`, `variable_density_v2/`) |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
 the scripts write) is not tracked.
@@ -1326,12 +1327,32 @@ count is in [recipe 15](recipes.md#ibl-start).
 
 [↑ back to table](#stage-table)
 
-## 19. Incompressible energy equation (variable density, stage V1)
+<a id="sec-19"></a>
+
+## 19. Incompressible energy equation (variable density, stages V1 and V2)
 
 `physics.energy = true` (configuration: [Energy equation](configuration.md#energy-equation-incompressible)).
 Script: `pyaeroflow.cases.heat_transfer`; tests
-`tests/verification/test_heat_transfer.py` (the Ra 1e4–1e6 cases are
-`slow`); case files in the project folder `cases/variable_density_v1/`.
+`tests/verification/test_heat_transfer.py` (the Ra 1e4–1e6 cavities, the
+turbulent plates and the Re 40 cylinder are `slow`); the cavity Ra 1e5,
+the SA plate and the cylinder Re 40 are in `examples/cases/`
+(`cavity_heated_ra1e5.toml`, `plate_heated_sa.toml`,
+`heated_cylinder_re40.toml`; templates `cavity-heated`, `plate-heated-sa`;
+`stanton_check.py` beside them), the other case files in the project folder
+`cases/variable_density_v1/` (laminar) and `cases/variable_density_v2/`
+(RANS) with the checking script `similarity_check.py`.
+
+| case | stage | reference | result |
+|---|---|---|---|
+| [natural convection in a cavity](#sec-19-cavity), Ra 1e3–1e6 | V1 | de Vahl Davis 1983 | Nu within 0.1–0.4 % |
+| [heated laminar plate](#sec-19-plate), ΔT = 3 K | V1 | Pohlhausen | Nu_x within 0.1–1.7 % |
+| [heated laminar plate, T_w/T_∞ = 1.5 and 2](#sec-19-plate-hot) | V1, variable properties | Howarth–Levy–Lees similarity | Nu_x within 1 % for x ≤ 0.5 |
+| [heated cylinder](#sec-19-cylinder), Re 20 and 40 | V1 | Lange et al. 1998 | Nu +1.4 % / −0.8 % |
+| [heated channel, uniform wall heat flux](#sec-19-channel) | V1, heat-flux walls | Shah & London | developed Nu −0.15 % |
+| [turbulent heated plate](#sec-19-turbulent), SA and SST | V2 | Kays & Crawford | St −4 to +6 % |
+| [turbulent heated plate, T_w/T_∞ = 2](#sec-19-turbulent) | V2, variable properties | Kays & Crawford property ratio | plausibility only |
+
+<a id="sec-19-cavity"></a>
 
 **Natural convection in a square cavity** (de Vahl Davis 1983). Hot left and
 cold right wall, adiabatic top and bottom, Pr = 0.71, ideal-gas density at
@@ -1349,6 +1370,8 @@ agrees to 10⁻⁹, the energy balance), iterations of the case files
 
 Boussinesq and ideal-gas density give the same Nu to 0.2 % at this ΔT.
 
+<a id="sec-19-plate"></a>
+
 **Heated laminar flat plate** (Pohlhausen). Re_L = 5·10⁴, Pr = 0.71,
 isothermal plate 3 K above the freestream, 5376 cells (`make-mesh
 plate-heated`). The similarity solution gives Nu_x = 0.29416 Re_x^½
@@ -1357,11 +1380,108 @@ Nu_x/Re_x^½: 0.2939 (x = 0.05), 0.2943 (0.1), 0.2947 (0.25), 0.2957 (0.5),
 0.2970 (0.75), 0.2992 (0.95); mean Nu_L 132.0 against 131.5. C_D 0.00610
 (Blasius 0.00594, leading-edge and outlet effects). 38 iterations.
 
-**Heated cylinder in cross flow**, Re_D = 20, Pr = 0.71, wall 3 K above the
-freestream, O-grid 128 × 72 with the farfield at 60 radii. Mean Nu 2.443
-against 2.409 of the correlation of Lange, Durst & Breuer (1998) (+1.4 %),
-C_D 2.006, 16 iterations. With the farfield at 10 radii (`cylinder-ogrid` default) the
-blockage gives Nu 2.477 and C_D 2.134.
+<a id="sec-19-plate-hot"></a>
+
+**Heated laminar plate with variable properties.** The same plate with the
+wall at 450 K and 600 K (T_w/T_∞ = 1.5 and 2), Sutherland's μ(T) (S =
+110.4 K), ρ = p/(R T), k = μ c_p/Pr, 23–26 iterations. The reference is the
+exact similarity solution for the low-speed limit (no dissipation, no
+pressure work) in Howarth–Levy–Lees variables, (C f″)′ + f f″ = 0,
+(C θ′/Pr)′ + f θ′ = 0 with C = ρμ/(ρ_∞μ_∞), computed by
+`heat_transfer.similarity_plate` (it returns Pohlhausen's 0.29416 and
+Blasius' 0.6641 at T_w = T_∞). It gives Nu_x/Re_x^½ = 0.2861 and 0.2790 and
+C_f Re_x^½ = 0.6449 and 0.6279 for the two walls: the hot wall lowers both
+(0.9732 and 0.9491 of the cold values for Nu, 0.9716 and 0.9460 for C_f).
+
+| T_w | x | Nu_x/Re_x^½ | vs similarity | C_f Re_x^½ | vs similarity |
+|-----|---|-------------|---------------|------------|---------------|
+| 303 K | 0.1 / 0.5 | 0.2943 / 0.2957 | +0.1 % / +0.6 % | 0.6719 / 0.6812 | +1.2 % / +2.6 % |
+| 450 K | 0.1 / 0.5 | 0.2868 / 0.2897 | +0.2 % / +1.2 % | 0.6595 / 0.6766 | +2.3 % / +4.9 % |
+| 600 K | 0.1 / 0.5 | 0.2794 / 0.2838 | +0.1 % / +1.7 % | 0.6491 / 0.6738 | +3.4 % / +7.3 % |
+
+Nu_x agrees within 1 % for x ≤ 0.25 and within 1.7 % for x ≤ 0.5 at
+every wall temperature. The reduction by the hot wall (Nu 5 %, C_f 5 %
+at 600 K) is reproduced in the ratio hot/cold to 1.2 % for Nu and to
+2–5 % (too small a reduction) for C_f at x ≤ 0.5. C_f is higher than the
+zero-pressure-gradient similarity and the difference grows with x and ΔT
+(at x = 0.96: +7 %, +12 %, +17 % for 303, 450, 600 K): the plate
+displaces the flow, the outlet at p = 0 pulls the wall pressure down
+(c_p 0.012 → 0.001 along the plate at 303 K, twice that at 600 K), and the
+resulting favourable gradient raises C_f. It is not discretization: the
+192 × 96 mesh (19 968 cells) changes C_f by less than 2 points at every
+x. A comparison without these effects would need a much longer domain;
+`similarity_check.py` also prints the hot/cold ratios in which the common
+part cancels.
+
+<a id="sec-19-cylinder"></a>
+
+**Heated cylinder in cross flow**, Re_D = 20 and 40, Pr = 0.71, wall 3 K above the
+freestream, O-grid 128 × 72 with the farfield at 60 radii. Mean Nu
+2.443 at Re 20 against 2.409 of the correlation of Lange, Durst & Breuer
+(1998) (+1.4 %), C_D 2.006, 16 iterations; Re 40: Nu 3.255 against 3.281
+(−0.8 %), C_D 1.509 (Dennis & Chang 1970: 1.52), 21 iterations, 16 s. With
+the farfield at 10 radii (`cylinder-ogrid` default) the blockage gives Nu
+2.477 and C_D 2.134 at Re 20. The case file of Re 40 is
+`heated_cylinder_re40.toml`.
+
+<a id="sec-19-channel"></a>
+
+**Heated channel with uniform wall heat flux** (parallel plates, fully
+developed Poiseuille inflow, Re_Dh = 40, Pr = 0.71, H = D_h/2, L = 8 H =
+4 D_h, 64 × 24 cells, `heat_transfer.solve_channel`). Heat flux into the
+fluid at both walls, 0.5 % bulk temperature rise over the channel
+(ideal-gas density, constant μ).
+Local Nu = q D_h/(k (T_w − T_b)) with the mixing-cup temperature of the
+cross-section: 9.91 (x/(D_h Re Pr) = 0.008), 8.58 (0.017), 8.245 (0.034),
+then 8.223 from x = 2 D_h to 3.5 D_h against 140/17 = 8.235 of the fully
+developed flow (Shah & London): −0.15 %. It tests the heat-flux wall
+condition, the enthalpy transport and the thermal entrance. 13
+iterations, 10 s. The last cells before the outlet show the outlet effect
+(8.35) and are left out of the test.
+
+<a id="sec-19-turbulent"></a>
+
+**Turbulent heated flat plate** (RANS, stage V2). Air at 300 K (ideal gas,
+Pr = 0.71, Pr_t = 0.9), U = 78.4 m/s, Re = 5·10⁶ per metre, isothermal plate
+3 K above the freestream, turbulent from the leading edge, NASA TMR plate
+domain (`make-mesh plate-rans`, 96 × 64 on the plate, y⁺ ≈ 1). Reference:
+the correlation of Kays & Crawford for the isothermal plate,
+St Pr^0.4 = 0.0287 Re_x^−0.2 (stated for 5·10⁵ < Re_x < 5·10⁶;
+`heat_transfer.kays_crawford_stanton`). Local St over the correlation:
+
+| Re_x | SA 7 680 cells | SA 27 648 cells | SST 7 680 cells |
+|------|---------------|-----------------|-----------------|
+| 4·10⁵ | 0.970 | 0.961 | 0.973 |
+| 1.2·10⁶ | 0.996 | 0.994 | 0.985 |
+| 2.5·10⁶ | 1.026 | 1.024 | 1.002 |
+| 5·10⁶ | 1.060 | 1.059 | 1.029 |
+| 9.5·10⁶ (outside) | 1.098 | 1.097 | 1.064 |
+
+The two SA meshes agree to 0.3 % at x = 1 m. The Reynolds-analogy factor
+2 St/C_f is 1.17–1.19 (SA) and 1.16–1.20 (SST). C_D of the plate (q · 2 m)
+is 0.002899 (SA, TMR 0.0028562 at M 0.2, the incompressible result lies
+about 1 % above). 72 (SA) and 94 (SST) iterations from freestream at the
+start-up CFL 1000, 28 s on the 7 680 cells. The same case in non-dimensional
+form is `heat_transfer.solve_turbulent_plate` (test
+`test_turbulent_heated_plate`, `slow`).
+
+Large temperature difference: the same SA case with the plate at 600 K
+(T_w/T_∞ = 2, Sutherland μ(T), k = μ c_p/Pr) converges in 53 iterations;
+St and C_f fall to 0.81–0.82 and 0.81 of the 303 K values. The
+property-ratio correction (T_w/T_∞)^−0.4 of Kays & Crawford gives 0.76 for
+St, and the reference-temperature method with Eckert's T* = T_∞ + ½(T_w −
+T_∞) gives 0.77 for C_f. The 5–7 % higher drop is the size of the scatter
+of such correlations; this run is a plausibility check, not a validation.
+The compressible RANS path (`physics.flow = "compressible"`, isothermal
+wall) is the independent code to compare with, as a case file
+(`plate_heated_sa_compressible_600K.toml`, not run: it needs PARDISO).
+
+With `density_model = "constant"` at ρ = 1 the flow and turbulence residuals
+and the first-order Jacobian of all five RANS models (SA, SA-BCM, SA-AFT,
+SST, SST-LM) equal those of the constant-density solver to 10⁻¹⁶
+(`tests/unit/test_rans_variable_density.py`).
+
+[↑ back to table](#stage-table)
 
 ## References
 
@@ -1481,6 +1601,15 @@ need their volume, page or paper number checked.
   Washburn, A. E. (2006): Experimental investigation of separation control
   part 1: baseline and steady suction. AIAA J. 44(12), 2820–2830 (data:
   TMR 2DWMH and CFDVAL2004 Case 3 pages).
+- Shah, R. K., London, A. L. (1978): Laminar Flow Forced Convection in
+  Ducts. Academic Press †. Fully developed Nu of the parallel plates with
+  uniform wall heat flux, 140/17.
+- Dennis, S. C. R., Chang, G.-Z. (1970): Numerical solutions for steady flow
+  past a circular cylinder at Reynolds numbers up to 100. J. Fluid Mech. 42,
+  471–489 †.
+- Kays, W. M., Crawford, M. E. (1993): Convective Heat and Mass Transfer,
+  3rd ed. McGraw-Hill †. Turbulent flat-plate Stanton number
+  St Pr^0.4 = 0.0287 Re_x^−0.2 and the property-ratio corrections.
 - Rumsey, C. L., Gatski, T. B., Sellers, W. L., Vatsa, V. N., Viken, S. A.
   (2006): Summary of the 2004 computational fluid dynamics validation
   workshop on synthetic jets. AIAA J. 44(2), 194–207 †.

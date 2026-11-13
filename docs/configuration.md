@@ -215,7 +215,7 @@ file (either byte order). Formats 1 and 3 are rejected; export the mesh as
 | `model` | `"euler"` \| `"laminar"` \| `"rans"` | req. | Governing equations | D10 |
 | `turbulence` | `"sa-neg"` \| `"sst"` | `"sa-neg"` if `model = "rans"` | Turbulence model: `"sa-neg"` Spalart–Allmaras, negative variant (NASA TMR); `"sst"` Menter k-ω SST, version SST-2003m (NASA TMR) (see [k-ω SST](#k-ω-sst)). The transition models `"bcm"` and `"aft"` need `"sa-neg"`, `"lm"` needs `"sst"` | D11, D12, L2 |
 | `mean_pressure_gradient` | [float, float] | – | Driving force for periodic channels: constant mean pressure gradient (dp/dx, dp/dy) in Pa/m, applied as a momentum source | D39 |
-| `energy` | bool | `false` | Incompressible flow: solve the energy equation strongly coupled with continuity and momentum (unknowns p, u, v, T; density from `fluid.density_model`, μ, k, c_p functions of T). Laminar and steady so far. `false`: the constant-density solver, unchanged. See [Energy equation (incompressible)](#energy-equation-incompressible) | D13, P2 |
+| `energy` | bool | `false` | Incompressible flow: solve the energy equation strongly coupled with continuity and momentum (unknowns p, u, v, T; density from `fluid.density_model`, μ, k, c_p functions of T). Laminar or RANS (all turbulence and transition models), steady. `false`: the constant-density solver, unchanged. See [Energy equation (incompressible)](#energy-equation-incompressible) | D13, P2 |
 | `gravity` | [float, float] | – | `energy = true`: gravitational acceleration (g_x, g_y) in m/s² of the buoyancy source (ρ − ρ_ref) g, ρ_ref the density at `reference.temperature`; the pressure is then p − ρ_ref g·x | |
 
 `[physics.transition]`, only for `model = "rans"`:
@@ -439,9 +439,9 @@ in that run and keep them.
 ### Energy equation (incompressible)
 
 `physics.energy = true` adds the temperature to the incompressible solver
-(stage V1 of the variable-density plan: laminar, steady, constant
+(stages V1 and V2 of the variable-density plan: laminar and RANS, steady, constant
 thermodynamic pressure). The density follows from the temperature, so the
-temperature acts on the flow (buoyancy, inertia, continuity), and all four
+temperature acts on the flow (buoyancy, inertia, continuity), and all
 equations are solved together by the Newton solver.
 
 - Unknowns per cell: p, u, v, T (gauge pressure and temperature); log
@@ -472,15 +472,29 @@ equations are solved together by the Newton solver.
   equation); wall CSV columns `T` (wall temperature), `q_w` (W/m², heat flux
   into the fluid), `nu` and `st`; the log Summary gives the heat into the
   fluid and the mean Nu of every force boundary.
-- Not yet: RANS (V2: eddy conductivity with the Pr_t law), unsteady flow and
-  closed domains with a varying thermodynamic pressure (V3), compressible
-  keys. Forced convection at M ≥ 0.05 also works with `physics.flow =
-  "compressible"`.
+- RANS (stage V2): `physics.model = "rans"` with every turbulence and
+  transition model (SA-neg, SA-BCM, SA-AFT, SST, SST-LM). The unknowns are
+  p, u, v, the turbulence (and transition) columns and T last, so the
+  turbulence columns keep their numbers. The turbulence equations are the
+  conservative forms with the local density (ρ times the kinematic
+  equations, the compressible forms of the NASA TMR) and ν = μ(T)/ρ(T); the
+  SST wall ω uses ν of the wall temperature. Heat flux with the effective
+  conductivity k(T) + c_p μ_t/Pr_t, Pr_t from `fluid.prandtl_turbulent_model`
+  (default constant `fluid.prandtl_turbulent` = 0.9; own JAX laws of T, ν,
+  ν_t, wall distance and Pe_t by `register_turbulent_prandtl`). With
+  `density_model = "constant"` at ρ = 1 the flow and turbulence rows equal
+  those of the constant-density RANS to round-off. A constant-density RANS
+  restart starts an energy case with its turbulence columns (T from
+  `[initial]`).
+- Not yet: unsteady flow and closed domains with a varying thermodynamic
+  pressure (V3), compressible keys. Forced convection at M ≥ 0.05 also
+  works with `physics.flow = "compressible"`.
 
 Validation (`docs/validation.md` §19): de Vahl Davis cavity Nu 1.117 / 2.244 /
 4.525 / 8.836 at Ra 1e3–1e6 (reference 1.118 / 2.243 / 4.519 / 8.800),
 heated laminar plate within 0.1–1.7 % of Pohlhausen, heated cylinder at
-Re 20 within 1.4 % of Lange et al. (1998).
+Re 20 within 1.4 % of Lange et al. (1998), turbulent heated plate (SA, SST)
+within −4 to +6 % of Kays & Crawford over 4·10⁵ < Re_x < 5·10⁶.
 
 ```toml
 [physics]

@@ -126,11 +126,13 @@ def critical_amplification(model):
     return aft.critical_amplification(model.turbulence_intensity)
 
 
-def local_shape_factor(model, geom, w, w_b):
+def local_shape_factor(model, geom, w, w_b, nu=None):
     """H_L = d^2/nu grad(u . n_d) . n_d, n_d the unit wall-distance gradient.
 
     The gradient of q = u . n_d is the least-squares gradient with the
     velocity's coefficient set (q is known wherever the velocity is).
+    ``nu``: per-cell kinematic viscosity (energy equation); default that of
+    the model.
     """
     n_d = geom.wall_normal
     q = w[:, U] * n_d[:, 0] + w[:, V] * n_d[:, 1]
@@ -141,10 +143,11 @@ def local_shape_factor(model, geom, w, w_b):
         coeff = coeff[:, U : U + 1]
     grad_q = lsq_gradient(geom._replace(lsq_coeff=coeff), q[:, None], q_b[:, None])
     dq_dn = grad_q[:, 0, 0] * n_d[:, 0] + grad_q[:, 0, 1] * n_d[:, 1]
-    return geom.wall_distance**2 / kinematic_viscosity(model) * dq_dn
+    nu = kinematic_viscosity(model) if nu is None else nu
+    return geom.wall_distance**2 / nu * dq_dn
 
 
-def _source(model, nu_tilde, vort, distance, grad_sq, switch, gamma=None):
+def _source(model, nu_tilde, vort, distance, grad_sq, switch, gamma=None, nu=None):
     """SA source with the transition model's intermittency (cell-local).
 
     ``gamma`` (optional) is a given intermittency, e.g. the under-relaxed
@@ -156,10 +159,13 @@ def _source(model, nu_tilde, vort, distance, grad_sq, switch, gamma=None):
     of the BCM formula have unbounded slope (at onset and as nu_t -> 0), so
     the exact derivative makes the linear systems stiff and the Newton steps
     erratic.
+
+    ``nu`` is a per-cell kinematic viscosity (energy equation, variable
+    density); default the constant one of the model.
     """
-    nu = kinematic_viscosity(model)
+    nu = kinematic_viscosity(model) if nu is None else nu
     if gamma is None:
-        gamma = intermittency(model, nu_tilde, vort, distance)
+        gamma = intermittency(model, nu_tilde, vort, distance, nu)
     gamma = jax.lax.stop_gradient(gamma)
     return sa.source(
         nu_tilde,
@@ -173,19 +179,22 @@ def _source(model, nu_tilde, vort, distance, grad_sq, switch, gamma=None):
     )
 
 
-def _turbulence_sources(model, t, grad_v, distance, grad_sq, switch, h_l, gamma):
+def _turbulence_sources(
+    model, t, grad_v, distance, grad_sq, switch, h_l, gamma, nu=None
+):
     """Return the sources (n, n_t) of the turbulence columns ``t``, cell-local.
 
     ``grad_v`` (n, 2, 2) are the velocity gradients, ``h_l`` the SA-AFT local
     shape factor (unused otherwise). With AFT the SA equation uses
     f_t2 = c_t3 (1 - exp(gamma_tilde)) and no intermittency factor; nothing
-    is frozen (the transition terms enter the JVP exactly).
+    is frozen (the transition terms enter the JVP exactly). ``nu``: per-cell
+    kinematic viscosity (energy equation), default the model's.
     """
     vort = jnp.abs(grad_v[:, 1, 0] - grad_v[:, 0, 1])
     if model.transition != "aft":
-        src = _source(model, t[:, 0], vort, distance, grad_sq, switch, gamma)
+        src = _source(model, t[:, 0], vort, distance, grad_sq, switch, gamma, nu)
         return src[:, None]
-    nu = kinematic_viscosity(model)
+    nu = kinematic_viscosity(model) if nu is None else nu
     nt, g, n = t[:, 0], t[:, NG - NT], t[:, NN - NT]
     src_sa = sa.source(nt, nu, vort, distance, grad_sq, switch, ft2_value=aft.ft2(g))
     strain = strain_rate(grad_v)
@@ -203,12 +212,12 @@ def _turbulence_sources(model, t, grad_v, distance, grad_sq, switch, h_l, gamma)
     return jnp.stack((src_sa, src_g, src_n), axis=1)
 
 
-def intermittency(model, nu_tilde, vort, distance):
+def intermittency(model, nu_tilde, vort, distance, nu=None):
     """Transition intermittency on the SA production: 1 without a model."""
     if model.transition == "bcm":
         return sa.bcm_intermittency(
             nu_tilde,
-            kinematic_viscosity(model),
+            kinematic_viscosity(model) if nu is None else nu,
             vort,
             distance,
             model.turbulence_intensity,
@@ -241,17 +250,18 @@ def _dot_n_cols(g, normal):
     return g[:, :, 0] * normal[:, 0:1] + g[:, :, 1] * normal[:, 1:2]
 
 
-def _source_inputs(model, geom, w, w_b, grad):
+def _source_inputs(model, geom, w, w_b, grad, nu=None):
     """Return the stencil-dependent inputs of the sources.
 
     These are the velocity gradient, |grad nu_tilde|^2, the production
-    switch and the AFT local shape factor (zeros without AFT).
+    switch and the AFT local shape factor (zeros without AFT). ``nu``:
+    per-cell kinematic viscosity (energy equation), default the model's.
     """
     grad_sq = jnp.sum(grad[:, NT, :] ** 2, axis=1)
     switch = 1.0 if geom.production_switch is None else geom.production_switch
     switch = jnp.broadcast_to(jnp.asarray(switch, dtype=float), grad_sq.shape)
     h_l = (
-        local_shape_factor(model, geom, w, w_b)
+        local_shape_factor(model, geom, w, w_b, nu)
         if model.transition == "aft"
         else jnp.zeros_like(grad_sq)
     )

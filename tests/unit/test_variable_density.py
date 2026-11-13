@@ -303,8 +303,10 @@ def test_thermal_walls_and_beta_floor():
     # At rest, beta^2 follows the buoyancy velocity of the wall temperatures.
     ub2 = 50.0 * (1.0 / 0.95 - 1.0 / 1.05) / model.density
     assert prob.beta2(w) == pytest.approx(model.beta_factor * max(ub2, 0.3**2))
-    with pytest.raises(ValueError, match="laminar so far"):
-        FlowProblem(mesh, model._replace(turbulence="sa-neg"), _cavity_conditions())
+    # RANS (stage V2): the variable-density SA module, T in the last column.
+    rans = FlowProblem(mesh, model._replace(turbulence="sa-neg"), _cavity_conditions())
+    assert rans.physics.__name__.endswith("rans_variable_density")
+    assert rans.initial_state((0.0, 0.0)).shape[1] == 5
 
 
 CASE = {
@@ -339,8 +341,8 @@ def _problems(raw):
 def test_energy_case_rules():
     raw = {**CASE, "reference": {"velocity": 0.05, "length": 0.03}}
     assert "reference.temperature is required" in _problems(raw)
-    raw = {**CASE, "physics": {"model": "rans", "energy": True}}
-    assert "needs physics.model = laminar" in _problems(raw)
+    raw = {**CASE, "physics": {"model": "euler", "energy": True}}
+    assert "needs physics.model = laminar or rans" in _problems(raw)
     both = {
         **CASE["boundary"],
         "top": {"type": "wall", "heat_flux": 1.0, "temperature": 300.0},

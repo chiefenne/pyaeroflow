@@ -12,6 +12,10 @@ Three cases with reference data that needs no external file:
 - Heated cylinder in cross flow at low Reynolds number: mean Nu of the
   correlation of Lange, Durst & Breuer (1998), Pr = 0.71,
   Nu = 0.082 Re^0.5 + 0.734 Re^x, x = 0.05 + 0.226 Re^0.085.
+- Turbulent heated flat plate (RANS, stage V2): local Stanton number of the
+  correlation of Kays & Crawford for an isothermal plate, turbulent from the
+  leading edge, St Pr^0.4 = 0.0287 Re_x^-0.2 (5e5 < Re_x < 5e6,
+  0.5 < Pr < 1), on the NASA TMR plate domain.
 
 Non-dimensional set-up of the cavity (reference length L, buoyancy velocity
 U = sqrt(g beta Delta T L), T_ref the mean temperature): rho = 1 / T,
@@ -133,4 +137,244 @@ def solve_cavity(
         mean_nu("left"),
         -mean_nu("right"),
         DE_VAHL_DAVIS_NUSSELT.get(float(rayleigh)),
+    )
+
+
+def similarity_plate(wall_ratio, prandtl=0.71, sutherland=None):
+    """Laminar flat plate with variable properties (Howarth-Levy-Lees similarity).
+
+    Low speed (no dissipation, no pressure work), constant c_p and Pr, ideal-gas
+    density rho ~ 1/T and mu(T) of Sutherland's law (``sutherland`` = S / T_inf,
+    None: mu ~ T^0, i.e. constant mu), k = mu c_p / Pr. With the density-weighted
+    coordinate eta = sqrt(U / (2 rho_inf mu_inf x)) int rho dy the equations are
+    (C f'')' + f f'' = 0 and (C theta' / Pr)' + f theta' = 0,
+    C = rho mu / (rho_inf mu_inf), theta = (T - T_inf) / (T_w - T_inf).
+
+    Returns
+    -------
+    (nusselt, skin_friction) : float
+        Nu_x / sqrt(Re_x) and C_f sqrt(Re_x) at the wall-to-freestream
+        temperature ratio ``wall_ratio`` (Nu_x = q_w x / (k_inf (T_w - T_inf)),
+        C_f = tau_w / (rho_inf U^2 / 2)). ``wall_ratio`` = 1 gives Pohlhausen.
+    """
+
+    def mu_of(t):
+        if sutherland is None:
+            return 1.0
+        return t**1.5 * (1.0 + sutherland) / (t + sutherland)
+
+    def c_of(t):
+        return mu_of(t) / t
+
+    def rhs(_, y):
+        f, fp, fpp, th_, thp = y
+        t = 1.0 + (wall_ratio - 1.0) * th_
+        h = 1e-6
+        dc = (c_of(t + h) - c_of(t - h)) / (2.0 * h)
+        c = c_of(t)
+        tp = (wall_ratio - 1.0) * thp
+        fppp = (-f * fpp - dc * tp * fpp) / c
+        thpp = (-prandtl * f * thp - dc * tp * thp) / c
+        return [fp, fpp, fppp, thp, thpp]
+
+    def shoot(guess):
+        fpp0, thp0 = guess
+        sol = solve_ivp(
+            rhs,
+            (0.0, 12.0),
+            [0.0, 0.0, fpp0, 1.0, thp0],
+            rtol=1e-10,
+            atol=1e-12,
+        )
+        return sol.y[:, -1]
+
+    def miss(guess):
+        y = shoot(guess)
+        return [y[1] - 1.0, y[3]]
+
+    from scipy.optimize import fsolve
+
+    fpp0, thp0 = fsolve(miss, [0.4696, -0.3 * (prandtl / 0.71) ** 0.33])
+    t_w = wall_ratio
+    mu_w, rho_w = mu_of(t_w), 1.0 / t_w
+    nusselt = -mu_w * rho_w * thp0 / math.sqrt(2.0)
+    skin = math.sqrt(2.0) * rho_w * mu_w * fpp0
+    return float(nusselt), float(skin)
+
+
+class ChannelResult(NamedTuple):
+    """Heated channel: local Nusselt number along the walls."""
+
+    problem: object
+    w: np.ndarray
+    converged: bool
+    iterations: int
+    x: np.ndarray
+    nusselt: np.ndarray
+    reference: float
+
+
+def solve_channel(
+    flux=3.0e-4,
+    reynolds=40.0,
+    prandtl=0.71,
+    length_ratio=8.0,
+    nx=64,
+    ny=24,
+    settings=None,
+):
+    """Parallel-plate channel with a uniform heat flux on both walls.
+
+    Non-dimensional: height H = 1/2, hydraulic diameter D_h = 2 H = 1, mean
+    velocity 1, Re_Dh = ``reynolds``, rho = 1/T (ideal gas, T_ref = 1), constant
+    mu and c_p, k = mu / Pr, parabolic inflow at T = 1, ``flux`` into the fluid
+    at both walls. The local Nusselt number Nu = q D_h / (k (T_w - T_b)) with
+    the mixing-cup temperature T_b of the cross-section approaches the
+    fully developed value 140 / 17 = 8.235 (Shah & London) beyond the thermal
+    entrance, x / (D_h Re Pr) of about 0.05.
+    """
+    h = 0.5
+    length = length_ratio * h
+    mu = 1.0 / reynolds
+    thermo = th.Thermo(
+        th.DensityModel("ideal_gas", pressure=1.0),
+        th.PropertyLaw("constant", mu),
+        th.PropertyLaw("prandtl", prandtl),
+        th.PropertyLaw("constant", 1.0),
+    )
+    model = vd.VariableDensityModel(density=1.0, thermo=thermo)
+    mesh = rectangle(
+        nx,
+        ny,
+        x=(0.0, length),
+        y=(0.0, h),
+        cell_type="quad",
+        cluster_y="both",
+        beta=1.5,
+    )
+
+    def inflow(x, y):
+        return 6.0 * y / h * (1.0 - y / h), np.zeros_like(y)
+
+    conditions = {
+        "left": {"type": "velocity-inlet", "velocity": inflow, "temperature": 1.0},
+        "right": {"type": "pressure-outlet", "pressure": 0.0},
+        "bottom": {"type": "wall", "heat_flux": flux},
+        "top": {"type": "wall", "heat_flux": flux},
+    }
+    problem = FlowProblem(mesh, model, conditions)
+    w0 = problem.initial_state((1.0, 0.0), 0.0, temperature=1.0)
+    result = problem.solve(
+        w0,
+        settings=settings
+        or PseudoTimeSettings(residual_drop=9.0, max_iterations=300, cfl_start=1000.0),
+    )
+    w = result.u
+    faces = problem.boundary_faces(["bottom"])
+    xf = np.asarray(problem.geom.b_centre)[faces, 0]
+    t_wall = problem.wall_temperature(w)[faces]
+    centre = mesh.cell_centroid
+    area = mesh.cell_area
+    k = 1.0 / (reynolds * prandtl)
+    nu_x = np.empty(faces.size)
+    for i, x in enumerate(xf):
+        col = np.isclose(centre[:, 0], x, atol=1e-9)
+        rho = np.asarray(th.density(thermo, w[col, 3]))
+        weight = rho * w[col, 1] * area[col]
+        t_b = float(np.sum(weight * w[col, 3]) / np.sum(weight))
+        nu_x[i] = flux * 1.0 / (k * (t_wall[i] - t_b))
+    return ChannelResult(
+        problem,
+        w,
+        result.converged,
+        int(result.history["iteration"][-1]) if "iteration" in result.history else -1,
+        xf,
+        nu_x,
+        140.0 / 17.0,
+    )
+
+
+def kays_crawford_stanton(reynolds_x, prandtl=0.71):
+    """Local St of the turbulent isothermal plate: 0.0287 Re_x^-0.2 Pr^-0.4."""
+    return 0.0287 * np.asarray(reynolds_x, dtype=float) ** -0.2 * prandtl**-0.4
+
+
+class TurbulentPlateResult(NamedTuple):
+    """Turbulent heated flat plate: solution and local St, C_f along the plate."""
+
+    problem: object
+    w: np.ndarray
+    converged: bool
+    iterations: int
+    x: np.ndarray
+    stanton: np.ndarray
+    cf: np.ndarray
+    reference: np.ndarray
+
+
+def solve_turbulent_plate(
+    turbulence="sa-neg",
+    nx_plate=96,
+    ny=64,
+    reynolds=5.0e6,
+    prandtl=0.71,
+    delta=0.01,
+    density_model="ideal_gas",
+    settings=None,
+):
+    """Turbulent heated plate on the TMR domain (Re per unit length ``reynolds``).
+
+    Non-dimensional: U = rho_inf = c_p = 1, T_inf = 1, plate at 1 + ``delta``,
+    mu = 1 / Re at T_inf with Sutherland's law (S = 110.4 K / 300 K), k from
+    Pr, Pr_t = 0.9 (default law). SA-neg with nu_tilde / nu = 3 or SST with
+    Tu = 0.1 %, nu_t / nu = 1 at the inflow (the solver defaults).
+
+    Returns
+    -------
+    TurbulentPlateResult
+        St = q_w / (rho c_p U (T_w - T_inf)) and C_f = 2 tau_w per plate face.
+    """
+    from pyaeroflow.cases.tmr_flat_plate import plate_mesh
+
+    mu = 1.0 / reynolds
+    if density_model == "ideal_gas":
+        dens = th.DensityModel("ideal_gas", pressure=1.0)
+    else:
+        dens = th.DensityModel(density_model, density=1.0, expansion=1.0)
+    thermo = th.Thermo(
+        dens,
+        th.PropertyLaw("sutherland", mu, (110.4 / 300.0,)),
+        th.PropertyLaw("prandtl", prandtl),
+        th.PropertyLaw("constant", 1.0),
+    )
+    model = vd.VariableDensityModel(density=1.0, thermo=thermo, turbulence=turbulence)
+    mesh = plate_mesh(nx_plate, 24, ny, reynolds=reynolds)
+    conditions = {
+        "left": {"type": "velocity-inlet", "velocity": (1.0, 0.0)},
+        "right": {"type": "pressure-outlet", "pressure": 0.0},
+        "top": {"type": "farfield", "velocity": (1.0, 0.0), "pressure": 0.0},
+        "symmetry": {"type": "symmetry"},
+        "plate": {"type": "wall", "temperature": 1.0 + delta},
+    }
+    problem = FlowProblem(mesh, model, conditions)
+    w0 = problem.initial_state((1.0, 0.0), 0.0, temperature=1.0)
+    result = problem.solve(
+        w0,
+        settings=settings
+        or PseudoTimeSettings(residual_drop=8.0, max_iterations=300, cfl_start=1000.0),
+    )
+    faces = problem.boundary_faces(["plate"])
+    x = np.asarray(problem.geom.b_centre)[faces, 0]
+    q = problem.wall_heat_flux(result.u)[faces]
+    loads = problem.wall_loads(result.u)
+    tau = np.hypot(*np.asarray(loads[1])[faces].T)
+    return TurbulentPlateResult(
+        problem,
+        result.u,
+        result.converged,
+        int(result.history["iteration"][-1]) if "iteration" in result.history else -1,
+        x,
+        q / delta,
+        2.0 * tau,
+        kays_crawford_stanton(reynolds * x, prandtl),
     )
