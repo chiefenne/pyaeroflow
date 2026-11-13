@@ -41,6 +41,7 @@ from pyaeroflow.physics import (
 )
 from pyaeroflow.physics import variable_density as vd
 from pyaeroflow.solver import (
+    ConservativeMass,
     JacobianPattern,
     PseudoTimeSettings,
     block_diagonal,
@@ -69,6 +70,9 @@ SST_OMEGA_LIMITS = (1.0e-4, 1.0e15)
 # Compressible flow: an update may lower p or T by at most this fraction of
 # the current value (the cell's update is scaled), so that they stay positive.
 COMPRESSIBLE_MAX_DROP = 0.8
+# Energy equation, unsteady: the extrapolated start of a time step may change
+# T by at most this fraction of the current value (per cell, scaled).
+EXTRAPOLATION_MAX_CHANGE = 0.1
 
 
 def sst_default_values(nu, speed):
@@ -361,6 +365,17 @@ class FlowProblem:
         )
         self._fi = partial(self.physics.interior_flux, model)
         self._fb = partial(self.physics.boundary_flux, model)
+        # Closed domain (energy equation, stage V3): p_th is a function of the
+        # state; the compact fluxes of the first-order Jacobian get its
+        # current value as their last per-face argument.
+        self.closed = getattr(model, "closed_mass", None) is not None
+        if self.closed:
+            self._fi = partial(
+                vd.with_pressure_argument(self.physics.interior_flux), model
+            )
+            self._fb = partial(
+                vd.with_pressure_argument(self.physics.boundary_flux), model
+            )
 
     def _set_wall_omega(self, model):
         """SST wall values: k = 0, omega = 60 nu / (beta_1 d1^2) per wall face.
@@ -677,6 +692,10 @@ class FlowProblem:
         pin = ()
         if self.model.pin is not None:
             pin = (self.model.pin[0] * self.model.n_var + inc.P,)
+        if self.closed:
+            p_th = self.thermodynamic_pressure(w)
+            f_args = tuple(f_args) + (jnp.full(self.geom.f_owner.shape, p_th),)
+            b_args = tuple(b_args) + (jnp.full(self.geom.b_owner.shape, p_th),)
         if self._pattern is None:
             self._pattern = self._structural_pattern(
                 w, params, b_args, f_args, mask, src
@@ -899,10 +918,23 @@ class FlowProblem:
             )
         )
 
+    def thermodynamic_pressure(self, w):
+        """Thermodynamic pressure p_th of ``w`` (energy equation, ideal gas).
+
+        Non-dimensional; the operating pressure unless the domain is closed.
+        """
+        return float(vd.thermodynamic_pressure(self.model, self.geom, jnp.asarray(w)))
+
+    def state_model(self, w):
+        """Return the model at p_th of ``w`` (closed domains), for eager use."""
+        if not self.closed:
+            return self.model
+        return vd.at_pressure(self.model, self.thermodynamic_pressure(w))
+
     def kinematic_viscosity(self, w):
         """Molecular kinematic viscosity per cell (compressible: mu(T) / rho)."""
         if self.thermal:
-            props = vd.cell_properties(self.model, w)
+            props = vd.cell_properties(self.model, w, self.geom)
             return props["viscosity"] / props["density"]
         if self.compressible:
             return np.asarray(
@@ -929,7 +961,7 @@ class FlowProblem:
             rho, nu = (
                 np.asarray(a)
                 for a in rans_variable_density.cell_properties(
-                    self.model, jnp.asarray(w_b[:, -1])
+                    self.state_model(w), jnp.asarray(w_b[:, -1])
                 )
             )
         elif self.compressible:
@@ -950,7 +982,9 @@ class FlowProblem:
                     self.model, self.geom, self.bc, jnp.asarray(w)
                 )
             )
-        return np.asarray(self.physics.eddy_viscosity(self.model, jnp.asarray(w)))
+        return np.asarray(
+            self.physics.eddy_viscosity(self.state_model(w), jnp.asarray(w))
+        )
 
     def blending_f1(self, w):
         """Menter's first SST blending function per cell (SST only)."""
@@ -1397,6 +1431,25 @@ class FlowProblem:
             )
         return self._nu_tilde_limiter(factor)
 
+    def _extrapolation_limiter(self, max_change=EXTRAPOLATION_MAX_CHANGE):
+        """Energy equation: limit the extrapolated start of a time step.
+
+        Per cell the extrapolation u_n - u^(n-1) is scaled so that T changes
+        by at most ``max_change`` relative. After a sudden change of a wall
+        temperature the wall cell moves by a large fraction in one step
+        (Le Quere cavity: T 1 -> 0.44 next to the cold wall), and the linear
+        extrapolation would start the next step at a negative temperature.
+        In smooth flow the limit does not act.
+        """
+        col = self.model.layout.column("T")
+
+        def limit(u, du):
+            rel = np.abs(du[:, col]) / np.maximum(np.abs(u[:, col]), 1e-300)
+            scale = np.minimum(1.0, max_change / np.maximum(rel, 1e-300))
+            return du * scale[:, None]
+
+        return limit
+
     def _positivity_limiter(self, max_drop=COMPRESSIBLE_MAX_DROP):
         """Compressible flow: p and T stay positive.
 
@@ -1584,17 +1637,57 @@ class FlowProblem:
         )
 
     def mass(self):
-        """Diagonal of the mass matrix: rho * area on u, v; area on turbulence."""
+        """Diagonal of the mass matrix: rho * area on u, v; area on turbulence.
+
+        The turbulence rows carry the row scaling of the residual (SST).
+
+        With the energy equation the time term of the conservative variables
+        (:meth:`conservative_mass`).
+        """
         if self.compressible:
             raise NotImplementedError("unsteady compressible flow is planned")
         if self.thermal:
-            raise NotImplementedError(
-                "unsteady flow with the energy equation is planned (stage V3)"
-            )
+            return self.conservative_mass()
         area = np.asarray(self.geom.area)
         rho = self.model.density
-        diag = [0.0, rho, rho] + [1.0] * (self.model.n_var - 3)
+        # Turbulence rows: the residual's row scaling (SST: nu_ref on omega,
+        # RET_SCALE on Re_thetat), so that d(phi)/dt keeps its weight.
+        diag = [0.0, rho, rho] + list(self.time_row_scale()[3:])
         return area[:, None] * np.array(diag)
+
+    def time_row_scale(self):
+        """Row factors of the time term: the residual row scaling (SST), else 1."""
+        scale = np.ones(self.model.n_var)
+        if self.model.turbulence == "sst":
+            k = self.turbulence_column
+            n_t = self.model.n_var - k - (1 if self.thermal else 0)
+            scale[k : k + n_t] = np.asarray(self.physics._row_scale(self.model))
+        return scale
+
+    def conservative_mass(self):
+        """Time term d Q(w)/dt of the energy equation (variable density, V3).
+
+        Q is the cell area times (rho, rho u, rho v, rho phi..., rho h - c
+        p_th) (:func:`pyaeroflow.physics.variable_density.conservative_variables`);
+        the first-order Jacobian gets its cell-local blocks.
+        """
+        model, geom = self.model, self.geom
+        scale = jnp.asarray(self.time_row_scale())
+
+        def q(w):
+            return np.asarray(
+                vd.conservative_variables(model, geom, jnp.asarray(w), scale)
+            )
+
+        def jacobian(w):
+            blocks = vd.conservative_blocks(model, geom, jnp.asarray(w), scale)
+            return block_diagonal(np.asarray(blocks))
+
+        def linearize(w):
+            _, lin = vd.conservative_linearize(model, geom, jnp.asarray(w), scale)
+            return lambda dw: np.asarray(_apply_linear(lin, jnp.asarray(dw)))
+
+        return ConservativeMass(q, jacobian, linearize)
 
     def solve_unsteady(
         self,
@@ -1640,6 +1733,7 @@ class FlowProblem:
                 nu_tilde_step_limit, transition_clip, gamma_guard
             ),
             resume=resume,
+            limit_start=self._extrapolation_limiter() if self.thermal else None,
         )
 
     def solve_explicit(

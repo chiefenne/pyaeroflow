@@ -366,6 +366,14 @@ def setup(config, mesh=None):
             for region in physics["transition"]["laminar_region"]
         ]
     nd_mesh = _scaled_mesh(mesh, 1.0 / scaling.length)
+    init = cfg["initial"]
+    temperature = 1.0
+    if energy:
+        if init["temperature"] is not None:
+            temperature = init["temperature"] / scaling.temperature
+        elif init["from_boundary"] is not None:
+            temperature = conditions[init["from_boundary"]].get("temperature", 1.0)
+        model = _closed_domain(cfg, model, conditions, nd_mesh, temperature)
     point = ref["pressure_point"]
     problem = FlowProblem(
         nd_mesh,
@@ -379,7 +387,6 @@ def setup(config, mesh=None):
         laminar_regions=regions,
     )
 
-    init = cfg["initial"]
     nu_tilde = k_omega = None
     if init["from_boundary"] is not None:
         src = conditions[init["from_boundary"]]
@@ -394,12 +401,6 @@ def setup(config, mesh=None):
         pressure = init["pressure"] / scaling.pressure
     else:  # restart without an explicit initial state: freestream of 1
         velocity, pressure = (1.0, 0.0), init["pressure"] / scaling.pressure
-    temperature = 1.0
-    if energy:
-        if init["temperature"] is not None:
-            temperature = init["temperature"] / scaling.temperature
-        elif init["from_boundary"] is not None:
-            temperature = conditions[init["from_boundary"]].get("temperature", 1.0)
     if rans and "initial" not in turbulence:
         speed = math.hypot(*velocity) * scaling.velocity
         tv = turbulence_values(init["turbulence"], nu_si, speed, turb_model)
@@ -472,6 +473,23 @@ def _thermal_conditions(cfg, conditions, scaling):
             entry["temperature"] = 1.0 if t is None else t / scaling.temperature
 
 
+def _closed_domain(cfg, model, conditions, mesh, temperature):
+    """Set the closed-domain mass of an ideal gas (fluid.thermodynamic_pressure).
+
+    ``closed`` (or ``auto`` without a boundary that exchanges mass): the
+    domain holds the mass of the gas at the operating pressure and the
+    initial temperature ``temperature`` (non-dimensional), M_0 = rho(p_op,
+    T_0) times the domain area; p_th then follows from M_0 (stage V3).
+    """
+    mode = cfg["fluid"]["thermodynamic_pressure"]
+    if model.thermo.density.kind != "ideal_gas" or mode == "constant":
+        return model
+    if mode == "auto" and not vd.is_closed_domain(conditions):
+        return model
+    rho0 = float(th.density(model.thermo, np.array(float(temperature))))
+    return model._replace(closed_mass=rho0 * float(np.sum(mesh.cell_area)))
+
+
 def _energy_model(cfg, base, mu_nd, scaling):
     """VariableDensityModel of the incompressible energy equation (V1, V2 RANS).
 
@@ -517,8 +535,12 @@ def _energy_model(cfg, base, mu_nd, scaling):
     prt_params = dict(fluid["prandtl_turbulent_parameters"] or {})
     if fluid["prandtl_turbulent_model"] == "constant":
         prt_params.setdefault("value", fluid["prandtl_turbulent"])
+    pressure_work = (
+        fluid["gas_constant"] / scaling.specific_heat if kind == "ideal_gas" else 0.0
+    )
     return vd.VariableDensityModel(
         density=float(th.density(thermo, np.array(1.0))),
+        pressure_work=pressure_work,
         thermo=thermo,
         gravity=gravity,
         turbulent_prandtl=th.TurbulentPrandtl(
@@ -1799,6 +1821,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
             ]
             + _transition_rows(monitor, result.u)
             + _heat_rows(monitor, problem, result.u, force_boundaries)
+            + _pressure_rows(config.data, problem, result.u)
         )
         for bname in force_boundaries:
             path = out_dir / f"{name}.wall_{bname}.csv"
@@ -1826,6 +1849,20 @@ def _heat_rows(monitor, problem, w, boundaries):
     return [
         (f"heat '{b}'", f"Q = {q:.6g} W/m into the fluid, mean Nu = {nu:.6g}")
         for b, (q, nu) in monitor.heat_summary(w, boundaries).items()
+    ]
+
+
+def _pressure_rows(cfg, problem, w):
+    """Summary row: thermodynamic pressure of a closed domain (physics.energy)."""
+    if not getattr(problem, "closed", False):
+        return []
+    ratio = problem.thermodynamic_pressure(w) / problem.model.thermo.density.pressure
+    p0 = cfg["fluid"]["operating_pressure"]
+    return [
+        (
+            "thermodynamic pressure",
+            f"{ratio * p0:.6g} Pa, p_th / p_0 = {ratio:.6g} (closed domain)",
+        )
     ]
 
 
@@ -2012,6 +2049,9 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
     force_boundaries = cfg["output"]["force_boundaries"]
     monitor = Monitor(config, problem, scaling) if force_boundaries else None
     coeff_names = ("CL", "CD", "CM") if monitor else ()
+    closed = getattr(problem, "closed", False)
+    if closed:  # closed domain: p_th(t) / p_0 per step in the log and history
+        coeff_names = coeff_names + ("p_th/p0",)
     diagnose = cfg["output"]["transition_diagnostics"]
     after = (resume or {}).get("step")
     history = StepHistoryWriter(
@@ -2093,7 +2133,12 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         if timing["setup"] is None:
             timing["setup"] = log.elapsed - offset
         lin = callback.info.get("linear_iterations", 0)
-        coeffs = monitor.coefficients(w) if monitor else ()
+        coeffs = tuple(monitor.coefficients(w)) if monitor else ()
+        if closed:
+            coeffs = coeffs + (
+                problem.thermodynamic_pressure(w)
+                / problem.model.thermo.density.pressure,
+            )
         extra = (lin if lin else "",) + tuple(f"{c:.5f}" for c in coeffs)
         note = "" if converged else "inner limit"
         log.step(step, t * t_scale, inner, drop, residuals, extra, note)
@@ -2124,10 +2169,10 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         if written:
             write_series(step, t, w)
         for n in control.due_results(step, bool(converged)):
-            names = _result_names(log, control, fields, n)
-            if names or not (written and n == step):
-                write_series(n, t, w, names)
-            extra = f" ({len(names)} fields)" if names else ""
+            selected = _result_names(log, control, fields, n)
+            if selected or not (written and n == step):
+                write_series(n, t, w, selected)
+            extra = f" ({len(selected)} fields)" if selected else ""
             log.write(f"control file .result_{n}: fields written for step {n}{extra}")
         restarts(step, w, good=bool(converged), time=t * t_scale, state=restart_state)
         if tavg and tavg.update(step, coeffs):
@@ -2224,6 +2269,7 @@ def _run_unsteady(log, config, problem, scaling, w0, mesh, out_dir, resume=None)
         ("final time", f"{result.time * t_scale:.6g} s"),
         ("inner iterations", f"{h['inner_iterations'].mean():.1f} per step (mean)"),
         ("steps at inner limit", str(int(np.count_nonzero(~h["converged"])))),
+        *_pressure_rows(cfg, problem, result.u),
         ("setup and compilation", f"{timing['setup']:.1f} s"),
         ("wall time", f"{log.elapsed:.1f} s"),
         *([("fields", str(out_dir / f"{name}.vtu"))] if write_final else []),
@@ -2877,6 +2923,8 @@ def _energy_rows(cfg, problem, scaling):
         if fluid["conductivity_model"] == "prandtl"
         else fluid["conductivity_model"]
     )
+    if m.closed_mass is not None:
+        text += "; closed domain: p_th from the total mass (filled at p_th, T_0)"
     rows = [
         ("density model", text),
         (

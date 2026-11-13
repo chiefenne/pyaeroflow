@@ -204,8 +204,8 @@ SCHEMA = {
             False,
             "Incompressible: solve the energy equation, strongly coupled "
             "(temperature column, density from fluid.density_model, mu, k and "
-            "c_p of T; laminar and steady so far). false: the constant-density "
-            "solver",
+            "c_p of T; laminar or RANS, steady or unsteady). false: the "
+            "constant-density solver",
         ),
         "gravity": Opt(
             "float2",
@@ -271,8 +271,8 @@ SCHEMA = {
         "density_model": Opt(
             "string",
             "constant",
-            "Incompressible with physics.energy: equation of state rho(T) at "
-            "constant thermodynamic pressure: constant (fluid.density; passive "
+            "Incompressible with physics.energy: equation of state rho(p_th, T) "
+            "(p_th see thermodynamic_pressure): constant (fluid.density; passive "
             "temperature), boussinesq (fluid.density (1 - beta (T - T_ref)) in "
             "every term) or ideal_gas (operating_pressure / (R T))",
             choices=("constant", "boussinesq", "ideal_gas"),
@@ -287,9 +287,21 @@ SCHEMA = {
         "operating_pressure": Opt(
             "float",
             101325.0,
-            "density_model = ideal_gas: thermodynamic pressure p_th (constant)",
+            "density_model = ideal_gas: thermodynamic pressure p_th (the "
+            "initial value in a closed domain, see thermodynamic_pressure)",
             "Pa",
             minimum=0.0,
+        ),
+        "thermodynamic_pressure": Opt(
+            "string",
+            "auto",
+            "density_model = ideal_gas: constant (p_th = operating_pressure) or "
+            "closed (closed domain: p_th follows from the total mass of the gas, "
+            "filled at operating_pressure and initial.temperature, so that the "
+            "mass is conserved); auto: closed when no boundary exchanges mass "
+            "(walls, slip walls, symmetry, periodic, transpiration walls at zero "
+            "velocity), else constant",
+            choices=("auto", "constant", "closed"),
         ),
         "specific_heat": Opt(
             "float",

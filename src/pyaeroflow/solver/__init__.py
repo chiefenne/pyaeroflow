@@ -1,6 +1,7 @@
 """Residual assembly, Jacobian, linear solvers, pseudo-time and dual time stepping."""
 
 from pyaeroflow.solver.dual_time import (
+    ConservativeMass,
     DualTimeSettings,
     UnsteadyResult,
     bdf_coefficients,
@@ -31,6 +32,7 @@ from pyaeroflow.solver.pseudo_time import (
 from pyaeroflow.solver.residual import divergence
 
 __all__ = [
+    "ConservativeMass",
     "DualTimeSettings",
     "LinearSettings",
     "LinearSolverError",

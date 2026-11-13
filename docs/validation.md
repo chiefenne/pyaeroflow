@@ -39,7 +39,7 @@ Click a case to jump to its section; each section ends with a link back here.
 | L1 C3 | [Compressible SA-neg: TMR flat plate M 0.2, NACA 0012 M 0.15](#sec-14) | verification/validation | NASA TMR (CFL3D, FUN3D) | `pyaeroflow run examples/cases/naca0012_sa_m015.toml` |
 | L1 C4 | [Compressible SST: TMR flat plate M 0.2, NACA 0012 M 0.15](#sec-15) | verification/validation | NASA TMR SST (CFL3D) | `pyaeroflow run examples/cases/naca0012_sst_m015.toml` |
 | IBL (1.7) | [Viscous panel method `pyaeroflow foil`: mfoil, E387, SD7003](#sec-18) | verification/validation | mfoil (corrected copy), NASA TM 4062, Penn State 2007, XFOIL | `python examples/ibl_validation.py` |
-| V1 / V2 (1.8) | [Incompressible energy equation: cavity, heated plates (laminar, variable properties, turbulent), cylinder, channel](#sec-19) | verification/validation | de Vahl Davis 1983, Pohlhausen and Howarth–Levy–Lees similarity, Lange et al. 1998, Shah & London, Kays & Crawford | `pyaeroflow.cases.heat_transfer`, `tests/verification/test_heat_transfer.py` (case files: `examples/cases/` and the project folder `cases/variable_density_v1/`, `variable_density_v2/`) |
+| V1 / V2 / V3 (1.8) | [Incompressible energy equation: cavity, heated plates (laminar, variable properties, turbulent), cylinder, channel, non-Boussinesq closed cavity](#sec-19) | verification/validation | de Vahl Davis 1983, Pohlhausen and Howarth–Levy–Lees similarity, Lange et al. 1998, Shah & London, Kays & Crawford, Le Quéré et al. 2005 | `pyaeroflow.cases.heat_transfer`, `tests/verification/test_heat_transfer.py`, `tests/unit/test_closed_domain.py` (case files: `examples/cases/` and the project folder `cases/variable_density_v1/`, `variable_density_v2/`, `closed_domain_v3/`) |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
 the scripts write) is not tracked.
@@ -1329,7 +1329,7 @@ count is in [recipe 15](recipes.md#ibl-start).
 
 <a id="sec-19"></a>
 
-## 19. Incompressible energy equation (variable density, stages V1 and V2)
+## 19. Incompressible energy equation (variable density, stages V1 to V3)
 
 `physics.energy = true` (configuration: [Energy equation](configuration.md#energy-equation-incompressible)).
 Script: `pyaeroflow.cases.heat_transfer`; tests
@@ -1339,8 +1339,9 @@ the SA plate and the cylinder Re 40 are in `examples/cases/`
 (`cavity_heated_ra1e5.toml`, `plate_heated_sa.toml`,
 `heated_cylinder_re40.toml`; templates `cavity-heated`, `plate-heated-sa`;
 `stanton_check.py` beside them), the other case files in the project folder
-`cases/variable_density_v1/` (laminar) and `cases/variable_density_v2/`
-(RANS) with the checking script `similarity_check.py`.
+`cases/variable_density_v1/` (laminar), `cases/variable_density_v2/`
+(RANS) with the checking script `similarity_check.py` and
+`cases/closed_domain_v3/` (closed domains, unsteady).
 
 | case | stage | reference | result |
 |---|---|---|---|
@@ -1351,6 +1352,8 @@ the SA plate and the cylinder Re 40 are in `examples/cases/`
 | [heated channel, uniform wall heat flux](#sec-19-channel) | V1, heat-flux walls | Shah & London | developed Nu −0.15 % |
 | [turbulent heated plate](#sec-19-turbulent), SA and SST | V2 | Kays & Crawford | St −4 to +6 % |
 | [turbulent heated plate, T_w/T_∞ = 2](#sec-19-turbulent) | V2, variable properties | Kays & Crawford property ratio | plausibility only |
+| [non-Boussinesq cavity, Ra 10⁶, ε = 0.6](#sec-19-lequere) | V3, closed domain | Le Quéré et al. 2005 | Nu +0.09 / +0.15 %, p_th −0.03 / −0.04 % (128²) |
+| [heated closed box](#sec-19-lequere) | V3, unsteady | energy balance of the ideal gas | exact per time step |
 
 <a id="sec-19-cavity"></a>
 
@@ -1481,6 +1484,52 @@ and the first-order Jacobian of all five RANS models (SA, SA-BCM, SA-AFT,
 SST, SST-LM) equal those of the constant-density solver to 10⁻¹⁶
 (`tests/unit/test_rans_variable_density.py`).
 
+<a id="sec-19-lequere"></a>
+
+**Non-Boussinesq cavity** (stage V3; Le Quéré et al. 2005, the benchmark for
+low-Mach solvers). The de Vahl Davis cavity with ε = (T_h − T_c)/(T_h + T_c)
+= 0.6 (ΔT/T₀ = 1.2): air as an ideal gas, T₀ = 600 K, hot wall 960 K, cold
+wall 240 K, adiabatic top and bottom, P₀ = 101325 Pa, Pr = 0.71, γ = 1.4,
+R = 287 J/(kg K), Ra = Pr g ρ₀² ΔT L³/(T₀ μ₀²) = 10⁶. T1: constant μ =
+1.68·10⁻⁵ Pa s; T2: Sutherland's μ(T) (T* = 273 K, S = 110.5 K), k = μ c_p/Pr.
+The domain is closed: p_th follows from the mass of the gas filled at P₀,
+T₀ (`fluid.thermodynamic_pressure = "auto"`). Steady, start from rest at T₀,
+start-up CFL 1000, meshes clustered at all walls (`make-mesh
+cavity-clustered`, tanh β = 1.5). Nu = q L/(k₀ (T_h − T_c)) with k₀ = k(T₀),
+mean over the hot wall (the cold wall agrees to 10⁻⁹):
+
+| case | mesh | Nu | p_th/P₀ | iterations | time |
+|------|------|----|---------|------------|------|
+| T1 | 64² | 8.8913 (+0.36 %) | 0.855550 (−0.09 %) | 66 | 11 s |
+| T1 | 128² | 8.8680 (+0.09 %) | 0.856103 (−0.03 %) | 137 | 44 s |
+| T1 | Richardson | 8.8602 (+0.005 %) | 0.856287 (−0.006 %) | | |
+| T1 | reference | 8.85978 | 0.856338 | | |
+| T2 | 64² | 8.7310 (+0.51 %) | 0.923539 (−0.10 %) | 56 | 11 s |
+| T2 | 128² | 8.6995 (+0.15 %) | 0.924098 (−0.04 %) | 89 | 42 s |
+| T2 | Richardson | 8.6890 (+0.03 %) | 0.924284 (−0.02 %) | | |
+| T2 | reference | 8.6866 | 0.924487 | | |
+
+The errors fall by 3.8 (T1) and 3.4 (T2) from 64² to 128²: second order.
+With a constant p_th (`"constant"`, the V1/V2 behaviour) the steady solution
+keeps the operating pressure and holds about 1/0.856 − 1 ≈ 17 % (T1) more
+gas than the cavity was filled with. The case files are `lequere_t1_ra1e6.toml`,
+`lequere_t2_ra1e6.toml` and the unsteady start-up `lequere_t1_unsteady.toml`
+in `cases/closed_domain_v3/`. The start-up (T1, 64², BDF2, Δt = 0.05 s =
+0.8 L/U, 60 steps from rest with the wall temperatures switched on at t = 0)
+takes 2.2 inner iterations per step and 36 s; p_th/P₀ falls monotonically,
+0.994 after the first step, 0.924 at 0.95 s, 0.867 at 3 s, towards the
+steady 0.8556 of this mesh.
+
+**Heated closed box** (unsteady, `test_heated_closed_box_energy_balance`):
+a closed box at rest with an isothermal wall and a heat-flux wall, constant
+c_p. The energy rows sum to the wall heat flux, so (1 − R/c_p) A dp_th/dt =
+Q holds per BDF1 step to 10⁻¹⁴ with the dp_th/dt work of the low-Mach energy
+equation, and the mass stays M₀ to round-off; 6 inner iterations per step.
+The closed-domain residual, pseudo-time term, first-order Jacobian, wall
+heat flux and eddy viscosity equal those of an open domain at the same
+p_th for all models, and the Newton product matches a central difference
+including the global p_th coupling (`tests/unit/test_closed_domain.py`).
+
 [↑ back to table](#stage-table)
 
 ## References
@@ -1610,6 +1659,11 @@ need their volume, page or paper number checked.
 - Kays, W. M., Crawford, M. E. (1993): Convective Heat and Mass Transfer,
   3rd ed. McGraw-Hill †. Turbulent flat-plate Stanton number
   St Pr^0.4 = 0.0287 Re_x^−0.2 and the property-ratio corrections.
+- Le Quéré, P., Weisman, C., Paillère, H., Vierendeels, J., Dick, E.,
+  Becker, R., Braack, M., Locke, J. (2005): Modelling of natural convection
+  flows with large temperature differences: a benchmark problem for low
+  Mach number solvers. Part 1. Reference solutions. ESAIM: M2AN 39(3),
+  609–616. Test cases T1 and T2 (Ra 10⁶, ε = 0.6), Nu and P/P₀.
 - Rumsey, C. L., Gatski, T. B., Sellers, W. L., Vatsa, V. N., Viken, S. A.
   (2006): Summary of the 2004 computational fluid dynamics validation
   workshop on synthetic jets. AIAA J. 44(2), 194–207 †.
