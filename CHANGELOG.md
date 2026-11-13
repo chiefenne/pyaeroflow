@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased – closed domains and unsteady flow with the energy equation (stage V3)
+
+- Closed domains: `fluid.thermodynamic_pressure = "auto" | "constant" |
+  "closed"` (default `"auto"`). With an ideal gas and no boundary that
+  exchanges mass the thermodynamic pressure follows from the total mass of
+  the gas filled at `operating_pressure` and `initial.temperature`, p_th =
+  p_op M₀ / Σ A ρ(p_op, T); it is a global unknown evaluated inside the
+  residual, so the Newton product contains its coupling exactly (all models:
+  laminar, SA, SA-BCM, SA-AFT, SST, SST-LM). The first-order Jacobian gets
+  the current p_th per face. Log Summary row `thermodynamic pressure`.
+  Behaviour change: closed ideal-gas cavities of V1/V2 now conserve their
+  mass (`"constant"` restores the old behaviour; at ΔT/T = 1 % the change
+  is below 10⁻⁴ in Nu).
+- Unsteady flow with the energy equation (`time.mode = "unsteady"`): dual
+  time stepping with the time term of the conservative variables A (ρ, ρu,
+  ρv, ρφ, ρh − (R/c_p) p_th), ρ(p_th, T) (`solver.ConservativeMass`), with
+  the dp_th/dt work of the low-Mach energy equation in closed domains;
+  column `p_th/p0` in the unsteady log and history.
+- Fix: unsteady constant-density SST had no row scaling on the time term of
+  ω (and Re_θt): the residual rows are scaled by ν_ref (RET_SCALE), the mass
+  was the cell area, so dω/dt was weighted by 1/ν_ref. The mass now carries
+  the same factors.
+- Fix: an unsteady run with `output.verbosity = "detailed"` stopped after
+  the first step (a local variable `names` shadowed the residual names).
+- Unsteady energy runs limit the extrapolated start of a step to a 10 %
+  change of T per cell (after a sudden wall temperature it went below zero
+  next to the cold wall).
+- Validation §19: Le Quéré et al. (2005) non-Boussinesq cavity (Ra 10⁶,
+  ε = 0.6), T1 constant properties and T2 Sutherland, on 64² and 128²;
+  heated closed box energy balance (`tests/unit/test_closed_domain.py`).
+
 ## Unreleased – RANS with the incompressible energy equation (stage V2)
 
 - Examples: `cavity_heated_ra1e5.toml` (template `cavity-heated`),

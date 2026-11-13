@@ -247,8 +247,9 @@ file (either byte order). Formats 1 and 3 are rejected; export the mesh as
 | `sutherland_temperature` | float | `110.4` | Compressible flow: Sutherland's constant S in K | L1 |
 | `prandtl` | float | `0.72` | Compressible flow: laminar Prandtl number; conductivity k = μ c_p / Pr | L1 |
 | `prandtl_turbulent` | float | `0.9` | Compressible RANS: turbulent Prandtl number; eddy conductivity μ_t c_p / Pr_t. Energy equation: the value of `prandtl_turbulent_model = "constant"` | L1 |
-| `density_model` | `"constant"` \| `"boussinesq"` \| `"ideal_gas"` | `"constant"` | `physics.energy`: equation of state ρ(T) at constant thermodynamic pressure. `"constant"`: `density` (passive temperature); `"boussinesq"`: `density` (1 − β (T − T_ref)) in every term; `"ideal_gas"`: p_th/(R T) | |
-| `operating_pressure` | float | `101325` | `density_model = "ideal_gas"`: thermodynamic pressure p_th in Pa (constant) | |
+| `density_model` | `"constant"` \| `"boussinesq"` \| `"ideal_gas"` | `"constant"` | `physics.energy`: equation of state ρ(p_th, T). `"constant"`: `density` (passive temperature); `"boussinesq"`: `density` (1 − β (T − T_ref)) in every term; `"ideal_gas"`: p_th/(R T) | |
+| `operating_pressure` | float | `101325` | `density_model = "ideal_gas"`: thermodynamic pressure p_th in Pa (constant, or the fill pressure of a closed domain) | |
+| `thermodynamic_pressure` | `"auto"` \| `"constant"` \| `"closed"` | `"auto"` | `density_model = "ideal_gas"`: `"constant"` keeps p_th = `operating_pressure`; `"closed"`: closed domain, p_th follows from the total mass of the gas filled at `operating_pressure` and `initial.temperature` (default `reference.temperature`), so that the mass is conserved (stage V3); `"auto"`: `"closed"` when no boundary exchanges mass (walls, slip walls, symmetry, periodic, transpiration walls at zero velocity), else `"constant"` | |
 | `thermal_expansion` | float | 1/`reference.temperature` | `density_model = "boussinesq"`: β in 1/K | |
 | `viscosity_model` | string | `"sutherland"` (compressible), `"constant"` | μ(T). Compressible flow: `"sutherland"` or `"constant"`. Energy equation also `"power-law"`, `"polynomial"`, `"table"`; parameters in `viscosity_parameters` | |
 | `viscosity_parameters` | table | – | `sutherland`: `{ temperature = S }` (K, default `sutherland_temperature`); `power-law`: `{ exponent = n }`, μ = μ_ref (T/T_ref)^n; `polynomial`: `{ coefficients = [a0, a1, …] }`, μ = Σ a_i T^i with T in K (μ_ref follows, `viscosity` must not be set); `table`: `{ temperature = […], value = […] }`, linear in between, constant outside | |
@@ -439,8 +440,8 @@ in that run and keep them.
 ### Energy equation (incompressible)
 
 `physics.energy = true` adds the temperature to the incompressible solver
-(stages V1 and V2 of the variable-density plan: laminar and RANS, steady, constant
-thermodynamic pressure). The density follows from the temperature, so the
+(stages V1 to V3 of the variable-density plan: laminar and RANS, steady and
+unsteady, constant thermodynamic pressure or that of a closed domain). The density follows from the temperature, so the
 temperature acts on the flow (buoyancy, inertia, continuity), and all
 equations are solved together by the Newton solver.
 
@@ -486,9 +487,30 @@ equations are solved together by the Newton solver.
   those of the constant-density RANS to round-off. A constant-density RANS
   restart starts an energy case with its turbulence columns (T from
   `[initial]`).
-- Not yet: unsteady flow and closed domains with a varying thermodynamic
-  pressure (V3), compressible keys. Forced convection at M ≥ 0.05 also
-  works with `physics.flow = "compressible"`.
+- Closed domains (stage V3): with an ideal gas and no boundary that
+  exchanges mass (`fluid.thermodynamic_pressure = "auto"` or `"closed"`) the
+  thermodynamic pressure is no longer `operating_pressure` but follows from
+  the mass M₀ of the gas filled at `operating_pressure` and
+  `initial.temperature`: p_th = p_op M₀ / Σ A_i ρ(p_op, T_i) (Le Quéré et
+  al. 2005, eq. 5). It is evaluated from the temperature field inside the
+  residual, so the Newton product contains its global coupling exactly
+  (forward-mode AD); the first-order Jacobian uses the current p_th. The
+  log Summary gives p_th in Pa and p_th/p₀. `"constant"` keeps the V1/V2
+  behaviour (the steady solution then holds whatever mass the operating
+  pressure gives).
+- Unsteady flow (stage V3, `time.mode = "unsteady"`): the time term is that
+  of the conservative variables, d/dt of A (ρ, ρu, ρv, ρφ, ρh − (R/c_p) p_th)
+  with ρ(p_th, T), the turbulence and transition columns φ conservative in
+  ρφ like their residual rows. In a closed domain the dp_th/dt work of the
+  low-Mach energy equation is included, so heat into a closed box raises
+  p_th by (1 − R/c_p) A dp_th/dt = Q (exact per BDF step); with an open
+  domain p_th is constant. The log and the history CSV get a column
+  `p_th/p0` per time step in a closed domain. The extrapolated start
+  2uⁿ − uⁿ⁻¹ of a step is scaled per cell to change T by at most 10 %
+  (a sudden wall temperature would otherwise start the second step below
+  zero next to a cold wall).
+- Not yet: compressible keys. Forced convection at M ≥ 0.05 also works
+  with `physics.flow = "compressible"`.
 
 Validation (`docs/validation.md` §19): de Vahl Davis cavity Nu 1.117 / 2.244 /
 4.525 / 8.836 at Ra 1e3–1e6 (reference 1.118 / 2.243 / 4.519 / 8.800),

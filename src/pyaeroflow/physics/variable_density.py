@@ -50,6 +50,18 @@ U_b^2 = |g| L_ref (rho_max - rho_min) / rho_op over the cells and the
 prescribed boundary temperatures: a flow that starts at rest gets its beta^2
 from the temperature differences.
 
+Closed domains (stage V3): with an ideal gas and no boundary that exchanges
+mass, the thermodynamic pressure is no longer the operating pressure but
+follows from the total mass M_0 of the gas in the domain,
+
+    sum_i A_i rho(p_th, T_i) = M_0   ->   p_th = p_op M_0 / sum_i A_i rho(p_op, T_i)
+
+(rho = p_th / T is linear in p_th). :func:`thermodynamic_pressure` evaluates
+it from the state inside the residual, so that p_th is a global unknown that
+the Newton linearization (forward-mode AD) contains exactly;
+:func:`closed_model` returns the model at that pressure. The first-order
+Jacobian uses p_th of the current state but not its global derivative.
+
 Thermal boundary conditions: walls (and transpiration walls) adiabatic
 (default), isothermal (``temperature``) or with a prescribed heat flux into
 the fluid (``heat_flux``); velocity inlets, total-pressure inlets and
@@ -132,6 +144,14 @@ class VariableDensityModel(NamedTuple):
         residual is then that of :mod:`pyaeroflow.physics.rans_variable_density`
         (SA, SA-BCM, SA-AFT) or
         :mod:`pyaeroflow.physics.rans_sst_variable_density` (SST, SST-LM).
+    closed_mass : float or None
+        Closed domain (stage V3): total mass M_0 of the gas (non-dimensional,
+        rho times area); p_th then follows from it
+        (:func:`thermodynamic_pressure`). None: constant p_th.
+    pressure_work : float
+        R / c_p,ref, the factor of dp_th/dt in the unsteady energy equation
+        d(rho h)/dt + div(rho v h) = (R / c_p,ref) dp_th/dt + div(k grad T)
+        (non-dimensional; zero without an ideal gas).
     """
 
     density: float = 1.0
@@ -154,6 +174,8 @@ class VariableDensityModel(NamedTuple):
     critical_amplification: float = None
     lm_positive_jacobian: bool = True
     lm_jacobian_smoothing: float = 0.0
+    closed_mass: float = None
+    pressure_work: float = 0.0
 
     @property
     def viscosity(self):
@@ -336,6 +358,80 @@ def _properties(model, t):
         th.enthalpy(tm, t),
         th.specific_heat(tm, t),
     )
+
+
+def thermodynamic_pressure(model, geom, w):
+    """Thermodynamic pressure p_th (non-dimensional) of the state ``w``.
+
+    The operating pressure of the density model, or, in a closed domain
+    (``model.closed_mass``), p_op M_0 / sum_i A_i rho(p_op, T_i): the total
+    mass of the gas stays M_0. T is the last column of ``w``. Works on traced
+    and on concrete arrays.
+    """
+    p_op = model.thermo.density.pressure
+    if model.closed_mass is None:
+        return p_op
+    rho_op = th.density(model.thermo, w[:, -1])
+    return p_op * model.closed_mass / jnp.sum(geom.area * rho_op)
+
+
+def at_pressure(model, pressure):
+    """``model`` with the thermodynamic pressure ``pressure`` (ideal gas)."""
+    tm = model.thermo
+    return model._replace(
+        thermo=tm._replace(density=tm.density._replace(pressure=pressure))
+    )
+
+
+def closed_model(model, geom, w):
+    """Return the model at p_th of ``w`` (closed domains), else ``model``.
+
+    Inside traced code the pressure is a tracer: the returned model must not
+    be passed as a static argument to a jitted function.
+    """
+    if model.closed_mass is None:
+        return model
+    return at_pressure(model, thermodynamic_pressure(model, geom, w))
+
+
+def closed_boundary(model, bc):
+    """``bc`` with the property laws of ``model`` (RANS: the SST wall omega)."""
+    if model.closed_mass is None or bc.thermo is None:
+        return bc
+    return bc._replace(thermo=th.StaticThermo(model.thermo))
+
+
+def with_pressure_argument(flux):
+    """Compact face flux with p_th as the last per-face argument.
+
+    ``flux(model, params, *args, normal, delta)`` becomes
+    ``f(model, params, *args, p_th, normal, delta)``: the first-order
+    Jacobian of a closed domain passes the current p_th per face.
+    """
+
+    def wrapped(model, params, *args):
+        *rest, pressure, normal, delta = args
+        return flux(at_pressure(model, pressure), params, *rest, normal, delta)
+
+    return wrapped
+
+
+def is_closed_domain(conditions):
+    """Return True if no boundary condition exchanges mass.
+
+    Walls, slip walls, symmetry and periodic faces; transpiration walls only
+    with zero normal velocity.
+    """
+    for bc in conditions.values():
+        kind = bc["type"]
+        if kind in ("wall", "slip-wall", "symmetry", "periodic"):
+            continue
+        if kind == "transpiration-wall":
+            vn = bc.get("normal_velocity", 0.0)
+            if not callable(vn) and float(vn) == 0.0:
+                continue
+        return False
+    return True
 
 
 def buoyancy_velocity_squared(model, t_cells, t_boundary):
@@ -542,7 +638,9 @@ def residual(model, geom, bc, w, order, beta2, psi=None):
     """Residual R(V), shape (n_cells, 4): net outflow minus sources.
 
     Parameters as in :func:`pyaeroflow.physics.incompressible.residual`.
+    In a closed domain the density follows p_th(w) (:func:`closed_model`).
     """
+    model = closed_model(model, geom, w)
     w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
     grad = lsq_gradient(geom, w, w_b)
     if order == 2:
@@ -588,6 +686,7 @@ def residual_linearize(model, geom, bc, w, order, beta2, psi=None):
 
 def source_blocks(model, geom, bc, w):
     """dR/dw of the cell sources, shape (n_cells, 4, 4): -area rho_T g in (u, v; T)."""
+    model = closed_model(model, geom, w)
     rho_t = th.density_derivative(model.thermo, w[:, T])
     g = jnp.asarray(model.gravity, dtype=w.dtype)
     blocks = jnp.zeros((w.shape[0], 4, 4), dtype=w.dtype)
@@ -639,6 +738,7 @@ def _diffusivity(model, t):
 @partial(jax.jit, static_argnums=0)
 def spectral_radius(model, geom, w, beta2):
     """Sum over faces of (|v_n| + beta + 2 max(nu, kappa) / (d.n)) * length."""
+    model = closed_model(model, geom, w)
     beta = jnp.sqrt(beta2)
     n = w.shape[0]
     o, nb, b = geom.f_owner, geom.f_neigh, geom.b_owner
@@ -666,16 +766,80 @@ def spectral_radius(model, geom, w, beta2):
 def explicit_update(model, geom, w, r, beta2, cfl):
     """Explicit increment CFL / Lambda_i * Gamma_i^-1 R_i, shape (n_cells, 4)."""
     lam = spectral_radius(model, geom, w, beta2)
-    du = jnp.linalg.solve(preconditioner(model, w, beta2), r[:, :, None])[:, :, 0]
+    gamma = preconditioner(closed_model(model, geom, w), w, beta2)
+    du = jnp.linalg.solve(gamma, r[:, :, None])[:, :, 0]
     return du * (cfl / lam)[:, None]
 
 
 def time_term_blocks(model, geom, w, beta2, cfl):
     """Pseudo-time blocks Gamma_i * Lambda_i / CFL, shape (n_cells, 4, 4)."""
     w = jnp.asarray(w)
-    gamma = np.asarray(preconditioner(model, w, beta2))
+    gamma = np.asarray(preconditioner(closed_model(model, geom, w), w, beta2))
     lam = np.asarray(spectral_radius(model, geom, w, beta2))
     return gamma * (lam / cfl)[:, None, None]
+
+
+# -- unsteady time term (stage V3) ---------------------------------------------------
+
+
+def _conservative_cell(model, w, area, row_scale, pressure_term):
+    """Area times (rho, rho u, rho v, rho phi..., rho h - c p_th) of cells."""
+    t = w[..., -1]
+    rho = th.density(model.thermo, t)
+    q = rho[..., None] * w
+    q = q.at[..., P].set(rho)
+    e = rho * th.enthalpy(model.thermo, t)
+    if pressure_term:
+        e = e - model.pressure_work * model.thermo.density.pressure
+    q = q.at[..., -1].set(e)
+    return area[..., None] * q * row_scale
+
+
+@partial(jax.jit, static_argnums=0)
+def conservative_variables(model, geom, w, row_scale):
+    """Q(w): cell area times the conservative variables, (n_cells, n_var).
+
+    (rho, rho u, rho v, rho phi..., rho h - c p_th) with rho of p_th(w) in a
+    closed domain and c = ``model.pressure_work`` (the dp_th/dt work of the
+    low-Mach energy equation; p_th is constant in an open domain, the term is
+    left out there). The turbulence and transition columns phi are
+    conservative in rho phi, as the residual rows of the variable-density
+    RANS modules; ``row_scale`` (n_var,) multiplies the rows as the residual
+    row scaling does (SST: nu_ref on omega). The pinned continuity row (the
+    gauge-pressure level) carries no time term.
+    """
+    m = closed_model(model, geom, w)
+    q = _conservative_cell(
+        m, w, geom.area, row_scale[None, :], model.closed_mass is not None
+    )
+    if model.pin is not None:
+        q = q.at[model.pin[0], P].set(0.0)
+    return q
+
+
+@partial(jax.jit, static_argnums=0)
+def conservative_linearize(model, geom, w, row_scale):
+    """Q(w) and its exact linearization (``jax.linearize``)."""
+    return jax.linearize(lambda x: conservative_variables(model, geom, x, row_scale), w)
+
+
+@partial(jax.jit, static_argnums=0)
+def conservative_blocks(model, geom, w, row_scale):
+    """Cell-local dQ_i/dw_i at the current p_th, (n_cells, n_var, n_var).
+
+    The global part of a closed domain (dp_th/dT of every cell) is left out:
+    these blocks serve the first-order Jacobian of the inner iterations.
+    """
+    m = closed_model(model, geom, w)
+    closed = model.closed_mass is not None
+
+    def cell(x, a):
+        return _conservative_cell(m, x, a, row_scale, closed)
+
+    blocks = jax.vmap(jax.jacfwd(cell))(w, geom.area)
+    if model.pin is not None:
+        blocks = blocks.at[model.pin[0], P, :].set(0.0)
+    return blocks
 
 
 # -- wall output ---------------------------------------------------------------------
@@ -717,8 +881,13 @@ def wall_temperature(model, geom, bc, w):
     return jnp.where(walls, t_c + q * dn / k, w_b[:, T])
 
 
-def cell_properties(model, w):
-    """Per-cell rho, mu, k, c_p (dict of arrays) of the state ``w``."""
+def cell_properties(model, w, geom=None):
+    """Per-cell rho, mu, k, c_p (dict of arrays) of the state ``w``.
+
+    ``geom`` is needed in a closed domain (the density of p_th(w)).
+    """
+    if model.closed_mass is not None:
+        model = closed_model(model, geom, jnp.asarray(w))
     t = jnp.asarray(w)[:, model.layout.column("T")]
     tm = model.thermo
     return {

@@ -132,6 +132,7 @@ def _boundary_coefficients(model, bc, nu_t, f1, rho, nu, b):
 @partial(jax.jit, static_argnums=0)
 def limiter(model, geom, bc, w):
     """Limiter values psi of the current state, shape (n_cells, n_var)."""
+    bc = vd.closed_boundary(vd.closed_model(model, geom, w), bc)
     w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
     return inc._limiter(model, geom, w, w_b, lsq_gradient(geom, w, w_b))
 
@@ -149,8 +150,14 @@ def residual(model, geom, bc, w, order, beta2, psi=None, gamma=None):
     """Residual R(w), shape (n_cells, n_var): net outflow minus sources.
 
     Parameters as in :func:`pyaeroflow.physics.rans_sst.residual` (``gamma``
-    is ignored).
+    is ignored). Closed domains: the density follows p_th(w).
     """
+    cell_state = _cell_state_remat
+    if model.closed_mass is not None:
+        model = vd.closed_model(model, geom, w)
+        bc = vd.closed_boundary(model, bc)
+        # the model now holds a traced p_th: close over it (not static)
+        cell_state = jax.checkpoint(partial(_cell_state, model))
     o, n, b = geom.f_owner, geom.f_neigh, geom.b_owner
     tc = t_column(w)
     w_b = boundary_state(bc, geom.b_normal, w[b])
@@ -180,7 +187,11 @@ def residual(model, geom, bc, w, order, beta2, psi=None, gamma=None):
     t_f = upwind_scalar_flux(mass_f[:, None], s_l, s_r)
     t_b = upwind_scalar_flux(mass_b[:, None], s_in, w_b[:, NK:tc])
 
-    rho, nu, strain, f1, f2, nu_t, kgw = _cell_state_remat(model, geom, w, grad)
+    rho, nu, strain, f1, f2, nu_t, kgw = (
+        cell_state(geom, w, grad)
+        if model.closed_mass is not None
+        else cell_state(model, geom, w, grad)
+    )
     g_f = interior_face_gradient(geom, w, grad, model.viscous_gradient, model.alpha)
     g_b = boundary_face_gradient(geom, w, w_b, grad, model.viscous_gradient)
     mu_tf, dc_f = _face_coefficients(model, nu_t, f1, rho, nu, o, n)
@@ -271,6 +282,8 @@ def residual_linearize(model, geom, bc, w, order, beta2, psi=None, gamma=None):
 @partial(jax.jit, static_argnums=0)
 def jacobian_coefficients(model, geom, bc, w):
     """Face mu_t and diffusion coefficients (mu_tf, dc_f, mu_tb, dc_b) of ``w``."""
+    model = vd.closed_model(model, geom, w)
+    bc = vd.closed_boundary(model, bc)
     o, n, b = geom.f_owner, geom.f_neigh, geom.b_owner
     w_b = boundary_state(bc, geom.b_normal, w[b])
     grad = lsq_gradient(geom, w, w_b)
@@ -395,6 +408,8 @@ def source_blocks(model, geom, bc, w):
     Those of :func:`pyaeroflow.physics.rans_sst.source_blocks` times the
     local density, with the local nu, and the T derivative of the buoyancy.
     """
+    model = vd.closed_model(model, geom, w)
+    bc = vd.closed_boundary(model, bc)
     w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
     grad = lsq_gradient(geom, w, w_b)
     rho, nu, strain, f1, _, _, _ = _cell_state(model, geom, w, grad)
@@ -429,6 +444,8 @@ def source_jacobian(model, geom, bc, w):
     :func:`pyaeroflow.physics.rans_sst.source_jacobian` with the local rho
     and nu, the T row and column zero.
     """
+    model = vd.closed_model(model, geom, w)
+    bc = vd.closed_boundary(model, bc)
     tc = t_column(w)
     w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
     grad = lsq_gradient(geom, w, w_b)
@@ -477,7 +494,7 @@ def time_term_blocks(model, geom, w, beta2, cfl):
     g = jnp.zeros((w.shape[0], n_var, n_var))
     g = g.at[:, idx[:, None], idx[None, :]].set(gamma)
     k = jnp.arange(NK, n_var - 1)
-    rho = th.density(model.thermo, w[:, -1])
+    rho = th.density(vd.closed_model(model, geom, w).thermo, w[:, -1])
     g = g.at[:, k, k].set(rho[:, None] * _row_scale(model)[None, :])
     return g * (lam / cfl)[:, None, None]
 
@@ -492,6 +509,8 @@ def segregated_mask(n_var):
 
 @partial(jax.jit, static_argnums=0)
 def _fields(model, geom, bc, w):
+    model = vd.closed_model(model, geom, w)
+    bc = vd.closed_boundary(model, bc)
     w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
     grad = lsq_gradient(geom, w, w_b)
     _, _, _, f1, f2, nu_t, _ = _cell_state(model, geom, w, grad)
@@ -519,6 +538,8 @@ def intermittency_field(model, geom, bc, w):
 @partial(jax.jit, static_argnums=0)
 def effective_intermittency_field(model, geom, bc, w):
     """gamma_eff = max(gamma, gamma_sep) per cell (Langtry-Menter)."""
+    model = vd.closed_model(model, geom, w)
+    bc = vd.closed_boundary(model, bc)
     w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
     grad = lsq_gradient(geom, w, w_b)
     strain = strain_rate(grad[:, U : V + 1, :])

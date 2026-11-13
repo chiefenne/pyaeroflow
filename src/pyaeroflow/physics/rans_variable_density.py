@@ -181,10 +181,14 @@ def face_distance(geom):
 
 
 def mean_time_blocks(model, geom, w, beta2):
-    """Gamma on (p, u, v, T) and the spectral radius: ((n, 4, 4), (n,))."""
+    """Gamma on (p, u, v, T) and the spectral radius: ((n, 4, 4), (n,)).
+
+    ``model`` is the static model (closed domains: p_th of ``w`` is applied
+    here).
+    """
     m = mean_state(w)
     return (
-        vd.preconditioner(model, m, beta2),
+        vd.preconditioner(vd.closed_model(model, geom, m), m, beta2),
         vd.spectral_radius(model, geom, m, beta2),
     )
 
@@ -277,8 +281,10 @@ def limiter(model, geom, bc, w):
 def residual(model, geom, bc, w, order, beta2, psi=None, gamma=None):
     """Residual R(w), shape (n_cells, n_var): net outflow minus sources.
 
-    Parameters as in :func:`pyaeroflow.physics.rans.residual`.
+    Parameters as in :func:`pyaeroflow.physics.rans.residual`. Closed
+    domains: the density follows p_th(w).
     """
+    model = vd.closed_model(model, geom, w)
     o, n, b = geom.f_owner, geom.f_neigh, geom.b_owner
     tc = t_column(w)
     w_b = boundary_state(bc, geom.b_normal, w[b])
@@ -500,6 +506,7 @@ def source_blocks(model, geom, bc, w):
     density-gradient correction and the stencil inputs frozen) and the T
     derivative of the buoyancy.
     """
+    model = vd.closed_model(model, geom, w)
     tc = t_column(w)
     d_src = jnp.diagonal(_source_parts(model, geom, bc, w), axis1=1, axis2=2)
     n_var = w.shape[1]
@@ -517,6 +524,7 @@ def source_jacobian(model, geom, bc, w):
     zero (the energy equation has no source). For the source-term
     time-step limit of the driver.
     """
+    model = vd.closed_model(model, geom, w)
     jac = -geom.area[:, None, None] * _source_parts(model, geom, bc, w)
     return jnp.pad(jac, ((0, 0), (0, 1), (0, 1)))
 
@@ -530,7 +538,7 @@ def time_term_blocks(model, geom, w, beta2, cfl):
     g = jnp.zeros((w.shape[0], n_var, n_var))
     g = g.at[:, idx[:, None], idx[None, :]].set(gamma)
     k = jnp.arange(NT, n_var - 1)
-    rho = th.density(model.thermo, w[:, -1])
+    rho = th.density(vd.closed_model(model, geom, w).thermo, w[:, -1])
     g = g.at[:, k, k].set(rho[:, None])
     return g * (lam / cfl)[:, None, None]
 
@@ -544,7 +552,11 @@ def segregated_mask(n_var):
 
 
 def eddy_viscosity(model, w):
-    """Kinematic eddy viscosity per cell (local nu)."""
+    """Kinematic eddy viscosity per cell (local nu).
+
+    Closed domains: ``model`` must carry p_th of ``w``
+    (:func:`pyaeroflow.physics.variable_density.at_pressure`).
+    """
     _, nu = cell_properties(model, w[:, -1])
     return sa.eddy_viscosity(w[:, NT], nu)
 
@@ -554,6 +566,7 @@ def intermittency_field(model, geom, bc, w):
     """Intermittency per cell for the output (ones without a transition model)."""
     if model.transition == "aft":
         return jnp.exp(w[:, NG])
+    model = vd.closed_model(model, geom, w)
     w_b = boundary_state(bc, geom.b_normal, w[geom.b_owner])
     vort = rans.vorticity(lsq_gradient(geom, w, w_b))
     _, nu = cell_properties(model, w[:, -1])
@@ -564,8 +577,11 @@ def intermittency_field(model, geom, bc, w):
 def _boundary_heat(model, geom, bc, w, coefficients):
     """Heat flux into the fluid per boundary face and the face conductivity.
 
-    ``coefficients(w, w_b)`` returns mu_t at the boundary faces.
+    ``coefficients(w, w_b)`` returns mu_t at the boundary faces. Closed
+    domains: the density follows p_th(w).
     """
+    model = vd.closed_model(model, geom, w)
+    bc = vd.closed_boundary(model, bc)
     tc = t_column(w)
     w_b = coefficients.boundary_state(bc, geom.b_normal, w[geom.b_owner])
     grad = lsq_gradient(geom, w, w_b)

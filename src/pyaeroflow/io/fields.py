@@ -148,7 +148,7 @@ class FieldContext:
         if self.problem.compressible:
             return self.w[:, 0] / (m.gas_constant * self.w[:, 3])
         if getattr(self.problem, "thermal", False):
-            return _vd().cell_properties(m, self.w)["density"]
+            return _vd().cell_properties(m, self.w, self.problem.geom)["density"]
         return np.full(self.w.shape[0], m.density)
 
     def total_pressure_nd(self):

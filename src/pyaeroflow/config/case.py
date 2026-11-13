@@ -915,19 +915,39 @@ COMPRESSIBLE_BOUNDARY_TYPES = (
 )
 
 
+def _closed_boundary(b):
+    """Return True if the boundary exchanges no mass (closed domain)."""
+    kind = b["type"]
+    if kind in ("wall", "slip-wall", "symmetry", "periodic"):
+        return True
+    return kind == "transpiration-wall" and not b.get("normal_velocity")
+
+
 def _energy_rules(data, boundaries, farfields, problems, notices):
     """Rules and defaults of the incompressible energy equation (physics.energy).
 
-    Laminar or RANS (V1, V2), steady. The reference temperature defaults to the
-    single farfield or inlet temperature; the reference density to the
-    density at that temperature (ideal gas: p_th / (R T_ref)). Walls take
-    either a temperature or a heat flux.
+    Laminar or RANS (V1, V2), steady or unsteady (V3). The reference
+    temperature defaults to the single farfield or inlet temperature; the
+    reference density to the density at that temperature (ideal gas: p_th /
+    (R T_ref)). Walls take either a temperature or a heat flux.
+    ``fluid.thermodynamic_pressure = closed`` (V3) needs an ideal gas and a
+    domain whose boundaries exchange no mass.
     """
     fluid, physics, ref = data["fluid"], data["physics"], data["reference"]
     if physics["model"] not in ("laminar", "rans"):
         problems.append("physics.energy: needs physics.model = laminar or rans")
-    if data["time"]["mode"] == "unsteady":
-        problems.append("physics.energy: time.mode = unsteady is stage V3")
+    if fluid["thermodynamic_pressure"] == "closed":
+        if fluid["density_model"] != "ideal_gas":
+            problems.append(
+                "fluid.thermodynamic_pressure = closed: needs density_model = ideal_gas"
+            )
+        open_ = [n for n, b in boundaries.items() if not _closed_boundary(b)]
+        if open_:
+            problems.append(
+                "fluid.thermodynamic_pressure = closed: boundaries "
+                f"{', '.join(open_)} exchange mass (closed domains have walls, "
+                "slip walls, symmetry and periodic boundaries only)"
+            )
     if data["solver"]["method"] != "implicit":
         problems.append("physics.energy: needs solver.method = implicit")
     for name, b in boundaries.items():
@@ -1041,6 +1061,7 @@ def _flow_rules(data, boundaries, farfields, compressible, problems, notices):
     elif not compressible:
         for key, default in (
             ("density_model", "constant"),
+            ("thermodynamic_pressure", "auto"),
             ("viscosity_parameters", None),
             ("thermal_expansion", None),
             ("specific_heat", None),

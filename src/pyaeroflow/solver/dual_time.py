@@ -6,8 +6,14 @@ step, or throughout with ``scheme="bdf1"``) and added to the steady residual:
     R*(u) = M (a0 u + a1 u^n + a2 u^(n-1)) + R(u),
 
 with a diagonal mass ``M`` (cell area times density for the momentum rows,
-zero for the continuity row of the incompressible equations). Every time
-step drives R* to zero with the steady solver (:func:`solve_steady`:
+zero for the continuity row of the incompressible equations). With a
+variable density (energy equation, stage V3) the time term is that of the
+conservative variables, d Q(u)/dt with Q(u) the cell area times (rho, rho u,
+rho v, ..., rho h - c p_th) (:class:`ConservativeMass`):
+
+    R*(u) = a0 Q(u) + a1 Q(u^n) + a2 Q(u^(n-1)) + R(u).
+
+Every time step drives R* to zero with the steady solver (:func:`solve_steady`:
 pseudo-time, SER, Newton-Krylov), starting from the extrapolated state
 2 u^n - u^(n-1).
 """
@@ -22,6 +28,27 @@ from pyaeroflow.solver.pseudo_time import (
     rms_per_variable,
     solve_steady,
 )
+
+
+class ConservativeMass(NamedTuple):
+    """Nonlinear time term d Q(u)/dt of :func:`solve_unsteady`.
+
+    Attributes
+    ----------
+    q : callable
+        ``q(u)`` -> (n_cells, n_var): cell area times the conservative
+        variables.
+    jacobian : callable
+        ``jacobian(u)`` -> sparse dQ/du for the preconditioner (cell-local
+        blocks; a global coupling such as that of a closed-domain p_th may be
+        left out).
+    linearize : callable
+        ``linearize(u)`` -> ``product(du)``, the exact dQ/du du.
+    """
+
+    q: object
+    jacobian: object
+    linearize: object
 
 
 class DualTimeSettings(NamedTuple):
@@ -94,6 +121,36 @@ def bdf_coefficients(step, dt, scheme):
     raise ValueError("scheme must be 'bdf2' or 'bdf1'")
 
 
+def _conservative_operators(
+    residual, jacobian, jvp, linearize, mass, a0, a1, a2, u_n, u_nm1
+):
+    """R*, its Jacobian, JVP and linearization with the time term d Q(u)/dt."""
+    source = a1 * np.asarray(mass.q(u_n))
+    if u_nm1 is not None and a2 != 0.0:
+        source = source + a2 * np.asarray(mass.q(u_nm1))
+
+    def res_t(u):
+        return np.asarray(residual(u)) + a0 * np.asarray(mass.q(u)) + source
+
+    def jac_t(u):
+        return jacobian(u) + a0 * mass.jacobian(u)
+
+    jvp_t = None
+    if jvp is not None:
+
+        def jvp_t(u, du):
+            return np.asarray(jvp(u, du)) + a0 * np.asarray(mass.linearize(u)(du))
+
+    lin_t = None
+    if linearize is not None:
+
+        def lin_t(u):
+            product, q_product = linearize(u), mass.linearize(u)
+            return lambda du: np.asarray(product(du)) + a0 * np.asarray(q_product(du))
+
+    return res_t, jac_t, jvp_t, lin_t
+
+
 def solve_unsteady(
     residual,
     jacobian,
@@ -107,6 +164,7 @@ def solve_unsteady(
     linearize=None,
     limit_step=None,
     resume=None,
+    limit_start=None,
 ):
     """Advance ``M du/dt + R(u) = 0`` from ``u0`` to ``settings.end_time``.
 
@@ -114,8 +172,8 @@ def solve_unsteady(
     ----------
     residual, jacobian, time_term, jvp, linearize
         As in :func:`solve_steady` (steady residual and its operators).
-    mass : array, shape (n_cells, n_var)
-        Diagonal of the mass matrix M.
+    mass : array, shape (n_cells, n_var), or ConservativeMass
+        Diagonal of the mass matrix M, or the nonlinear time term d Q(u)/dt.
     u0 : array, shape (n_cells, n_var)
     settings : DualTimeSettings
     callback : callable, optional
@@ -127,6 +185,11 @@ def solve_unsteady(
         Passed to the inner :func:`solve_steady` (per inner iteration).
     limit_step : callable, optional
         Passed to the inner :func:`solve_steady` (limits every inner update).
+    limit_start : callable, optional
+        ``limit_start(u_n, du) -> du`` limits the extrapolation
+        u_n + (u_n - u^(n-1)) of the start of a step (positive variables: a
+        wall cell whose temperature halved in one step would start the next
+        one below zero).
     resume : dict, optional
         ``step`` (the steps already done; ``u0`` is the solution after them)
         and ``u_previous`` (the solution after step - 1, or None: the first
@@ -141,8 +204,10 @@ def solve_unsteady(
     s = settings
     dt = s.time_step
     n_steps = int(round(s.end_time / dt))
-    mass = np.asarray(mass, dtype=float)
-    m_diag = sp.diags(mass.ravel())
+    conservative = isinstance(mass, ConservativeMass)
+    if not conservative:
+        mass = np.asarray(mass, dtype=float)
+        m_diag = sp.diags(mass.ravel())
     u_n = np.array(u0, dtype=float)
     resume = resume or {}
     step0 = int(resume.get("step", 0))
@@ -166,32 +231,41 @@ def solve_unsteady(
 
     for step in range(step0 + 1, n_steps + 1):
         a0, a1, a2 = bdf_coefficients(1 if u_nm1 is None else step, dt, s.scheme)
-        source = mass * (a1 * u_n + (a2 * u_nm1 if u_nm1 is not None else 0.0))
+        if conservative:
+            res_t, jac_t, jvp_t, lin_t = _conservative_operators(
+                residual, jacobian, jvp, linearize, mass, a0, a1, a2, u_n, u_nm1
+            )
+        else:
+            source = mass * (a1 * u_n + (a2 * u_nm1 if u_nm1 is not None else 0.0))
 
-        def res_t(u, a0=a0, source=source):
-            return np.asarray(residual(u)) + a0 * mass * u + source
+            def res_t(u, a0=a0, source=source):
+                return np.asarray(residual(u)) + a0 * mass * u + source
 
-        def jac_t(u, a0=a0):
-            return jacobian(u) + a0 * m_diag
+            def jac_t(u, a0=a0):
+                return jacobian(u) + a0 * m_diag
 
-        jvp_t = None
-        if jvp is not None:
+            jvp_t = None
+            if jvp is not None:
 
-            def jvp_t(u, du, a0=a0):
-                return np.asarray(jvp(u, du)) + a0 * mass * du
+                def jvp_t(u, du, a0=a0):
+                    return np.asarray(jvp(u, du)) + a0 * mass * du
 
-        lin_t = None
-        if linearize is not None:
+            lin_t = None
+            if linearize is not None:
 
-            def lin_t(u, a0=a0):
-                product = linearize(u)
-                return lambda du: np.asarray(product(du)) + a0 * mass * du
+                def lin_t(u, a0=a0):
+                    product = linearize(u)
+                    return lambda du: np.asarray(product(du)) + a0 * mass * du
 
         # The inner residual drop refers to R*(u^n): extrapolation lowers the
         # starting residual, not the accuracy required.
         start, norm_n = u_n, None
         if s.extrapolate and u_nm1 is not None:
-            start, norm_n = 2.0 * u_n - u_nm1, rms_per_variable(res_t(u_n))
+            if limit_start is None:
+                start = 2.0 * u_n - u_nm1
+            else:
+                start = u_n + limit_start(u_n, u_n - u_nm1)
+            norm_n = rms_per_variable(res_t(u_n))
         inner = solve_steady(
             res_t,
             jac_t,
