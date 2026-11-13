@@ -23,6 +23,11 @@
   energy case with its turbulence columns.
 - Validation §19: turbulent heated flat plate, St within −4 to +6 % of Kays &
   Crawford (SA and SST, two meshes); `heat_transfer.solve_turbulent_plate`.
+  More V1 cases: laminar plate with variable properties (T_w/T_∞ = 1.5, 2)
+  against the Howarth–Levy–Lees similarity solution
+  (`heat_transfer.similarity_plate`), cylinder at Re 40 (Lange et al.),
+  channel with uniform wall heat flux against Nu = 140/17
+  (`heat_transfer.solve_channel`); index row in the validation table.
 
 ## Unreleased – energy equation in the incompressible solver (stage V1)
 
