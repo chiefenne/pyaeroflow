@@ -25,6 +25,7 @@ __all__ = [
     "LIBRARY",
     "build",
     "jet_crossflow_mesh",
+    "heated_plate_mesh",
     "naca0012_shedding_mesh",
     "plate_lm_mesh",
 ]
@@ -183,12 +184,49 @@ def _cavity(n=64):
     return rectangle(n, n, cell_type="quad")
 
 
-def _cylinder_ogrid(n_surface=128, n_radial=48):
+def _cavity_clustered(n=64, beta=1.5):
+    return rectangle(
+        n, n, cell_type="quad", cluster_x="both", cluster_y="both", beta=beta
+    )
+
+
+def heated_plate_mesh(nx_plate=96, ny=48, length=1.0, height=0.3, upstream=0.25):
+    """Laminar flat plate (heated-plate validation): quads, plate at y = 0.
+
+    The plate runs from x = 0 to ``length`` with a symmetry strip of
+    ``upstream`` ahead of it; the first cell is 2e-4 ``length`` high and the
+    cells grow to ``height``. Cells along the plate are clustered towards the
+    leading edge. Markers: inlet, outlet, top, symmetry, plate.
+    """
+    y1 = 2.0e-4 * length
+    r = geometric_growth(height, y1, ny)
+    ys = np.concatenate(([0.0], np.cumsum(y1 * r ** np.arange(ny))))
+    ys[-1] = height
+    dx0 = 2.0e-3 * length
+    g = geometric_growth(length, dx0, nx_plate)
+    xp = np.concatenate(([0.0], np.cumsum(dx0 * g ** np.arange(nx_plate))))
+    xp[-1] = length
+    nxf = 16
+    gf = geometric_growth(upstream, dx0, nxf)
+    xf = -np.concatenate(([0.0], np.cumsum(dx0 * gf ** np.arange(nxf))))[::-1]
+    xf[0] = -upstream
+    mesh = structured(
+        np.concatenate((xf[:-1], xp)), ys, names=("bottom", "outlet", "top", "inlet")
+    )
+    mesh = split_boundary(
+        mesh,
+        "bottom",
+        {"symmetry": lambda x, y: x < 0.0, "plate": lambda x, y: x >= 0.0},
+    )
+    return mesh
+
+
+def _cylinder_ogrid(n_surface=128, n_radial=48, outer_radius=10.0):
     return annulus(
         n_surface,
         n_radial,
         radius=0.5,
-        outer_radius=10.0,
+        outer_radius=outer_radius,
         growth=1.0 + 6.0 / n_radial,
     )
 
@@ -219,6 +257,14 @@ LIBRARY = {
     "channel-quad": (_channel_quad, "channel 2 x 1, quads clustered at both walls"),
     "channel-tri": (_channel_tri, "channel 2 x 1, perturbed triangles"),
     "cavity": (_cavity, "unit square, quads (lid-driven cavity)"),
+    "cavity-clustered": (
+        _cavity_clustered,
+        "unit square, quads clustered at all walls (natural convection)",
+    ),
+    "plate-heated": (
+        heated_plate_mesh,
+        "laminar flat plate with a symmetry strip ahead (heated plate)",
+    ),
     "cylinder-ogrid": (_cylinder_ogrid, "O-grid around a cylinder, 10 radii"),
     "plate-rans": (
         _plate,

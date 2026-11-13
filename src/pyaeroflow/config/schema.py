@@ -199,6 +199,22 @@ SCHEMA = {
             "(dp/dx, dp/dy), applied as the body force -grad p",
             "Pa/m",
         ),
+        "energy": Opt(
+            "bool",
+            False,
+            "Incompressible: solve the energy equation, strongly coupled "
+            "(temperature column, density from fluid.density_model, mu, k and "
+            "c_p of T; laminar and steady so far). false: the constant-density "
+            "solver",
+        ),
+        "gravity": Opt(
+            "float2",
+            None,
+            "Gravitational acceleration (g_x, g_y) of the buoyancy source "
+            "(rho - rho_ref) g, rho_ref the density at reference.temperature "
+            "(physics.energy); the pressure is then p - rho_ref g.x",
+            "m/s^2",
+        ),
     },
     "fluid": {
         "density": Opt(
@@ -236,10 +252,99 @@ SCHEMA = {
         ),
         "viscosity_model": Opt(
             "string",
-            "sutherland",
-            "Compressible: mu(T) by Sutherland's law (scaled to fluid.viscosity "
-            "or reynolds_number at the reference temperature) or constant",
-            choices=("sutherland", "constant"),
+            None,
+            "mu(T): compressible sutherland (default, scaled to fluid.viscosity "
+            "or reynolds_number at the reference temperature) or constant; "
+            "incompressible with physics.energy also power-law, polynomial or "
+            "table (default constant), parameters in viscosity_parameters",
+            choices=("sutherland", "constant", "power-law", "polynomial", "table"),
+        ),
+        "viscosity_parameters": Opt(
+            "table",
+            None,
+            "Parameters of viscosity_model (physics.energy): sutherland "
+            "{temperature = S} (default sutherland_temperature), power-law "
+            "{exponent = n} (mu = mu_ref (T/T_ref)^n), polynomial {coefficients "
+            "= [a0, a1, ...]} (mu = sum a_i T^i, T in K), table {temperature = "
+            "[...], value = [...]} (linear, constant outside)",
+        ),
+        "density_model": Opt(
+            "string",
+            "constant",
+            "Incompressible with physics.energy: equation of state rho(T) at "
+            "constant thermodynamic pressure: constant (fluid.density; passive "
+            "temperature), boussinesq (fluid.density (1 - beta (T - T_ref)) in "
+            "every term) or ideal_gas (operating_pressure / (R T))",
+            choices=("constant", "boussinesq", "ideal_gas"),
+        ),
+        "thermal_expansion": Opt(
+            "float",
+            None,
+            "density_model = boussinesq: expansion coefficient beta; default "
+            "1 / reference.temperature",
+            "1/K",
+        ),
+        "operating_pressure": Opt(
+            "float",
+            101325.0,
+            "density_model = ideal_gas: thermodynamic pressure p_th (constant)",
+            "Pa",
+            minimum=0.0,
+        ),
+        "specific_heat": Opt(
+            "float",
+            None,
+            "physics.energy: c_p at the reference temperature; default "
+            "gamma R / (gamma - 1) of fluid.gamma and gas_constant",
+            "J/(kg K)",
+            minimum=0.0,
+        ),
+        "specific_heat_model": Opt(
+            "string",
+            "constant",
+            "physics.energy: c_p(T) law (as viscosity_model); the enthalpy is "
+            "its exact integral",
+            choices=("constant", "sutherland", "power-law", "polynomial", "table"),
+        ),
+        "specific_heat_parameters": Opt(
+            "table", None, "Parameters of specific_heat_model (as viscosity_parameters)"
+        ),
+        "conductivity": Opt(
+            "float",
+            None,
+            "physics.energy: thermal conductivity k at the reference temperature; "
+            "default k = mu c_p / Pr from fluid.prandtl",
+            "W/(m K)",
+            minimum=0.0,
+        ),
+        "conductivity_model": Opt(
+            "string",
+            None,
+            "physics.energy: k(T) law (as viscosity_model) or prandtl (k = "
+            "mu(T) c_p(T) / Pr); default prandtl without fluid.conductivity, "
+            "else constant",
+            choices=(
+                "constant",
+                "sutherland",
+                "power-law",
+                "polynomial",
+                "table",
+                "prandtl",
+            ),
+        ),
+        "conductivity_parameters": Opt(
+            "table", None, "Parameters of conductivity_model (as viscosity_parameters)"
+        ),
+        "prandtl_turbulent_model": Opt(
+            "string",
+            "constant",
+            "Turbulent Prandtl number law Pr_t(T, nu, nu_t, wall distance, Pe_t) "
+            "of the incompressible energy equation (RANS, stage V2): constant "
+            "(prandtl_turbulent) or a law registered with "
+            "pyaeroflow.physics.thermo.register_turbulent_prandtl",
+        ),
+        "prandtl_turbulent_parameters": Opt(
+            "table", None, "Parameters of prandtl_turbulent_model (keyword arguments)"
         ),
         "sutherland_temperature": Opt(
             "float",
@@ -265,6 +370,14 @@ SCHEMA = {
     "initial": {
         "velocity": Opt("float2", None, "Initial velocity (u, v)", "m/s"),
         "pressure": Opt("float", None, "Initial gauge pressure", "Pa"),
+        "temperature": Opt(
+            "float",
+            None,
+            "Initial temperature (physics.energy); default the temperature of "
+            "from_boundary, else reference.temperature",
+            "K",
+            minimum=0.0,
+        ),
         "from_boundary": Opt(
             "string", None, "Uniform initial field equal to this boundary's state"
         ),
@@ -315,10 +428,20 @@ SCHEMA = {
         "temperature": Opt(
             "float",
             None,
-            "Reference temperature (compressible); default: the farfield "
-            "temperature if exactly one farfield stream exists",
+            "Reference temperature (compressible; physics.energy: zero of the "
+            "enthalpy, rho_ref of the buoyancy and the fluid temperature of Nu "
+            "and St); default: the farfield temperature if exactly one farfield "
+            "stream exists (physics.energy: or a single inlet temperature)",
             "K",
             minimum=0.0,
+        ),
+        "temperature_difference": Opt(
+            "float",
+            None,
+            "physics.energy: Delta T of the wall Nusselt and Stanton numbers "
+            "Nu = q_w L / (k Delta T), St = q_w / (rho c_p U Delta T); default "
+            "the local T_w - reference.temperature",
+            "K",
         ),
         "angle_of_attack": Opt(
             "float",
@@ -1283,10 +1406,17 @@ BOUNDARY_TYPES = {
         "temperature": Opt(
             "float",
             None,
-            "Wall temperature (compressible laminar: isothermal wall; default "
-            "adiabatic)",
+            "Wall temperature (compressible laminar and physics.energy: "
+            "isothermal wall; default adiabatic)",
             "K",
             minimum=0.0,
+        ),
+        "heat_flux": Opt(
+            "float",
+            None,
+            "physics.energy: prescribed heat flux from the wall into the fluid "
+            "(instead of temperature)",
+            "W/m^2",
         ),
     },
     "symmetry": {},
@@ -1294,7 +1424,11 @@ BOUNDARY_TYPES = {
     "velocity-inlet": {
         "velocity": Opt("float2", REQUIRED, "Inlet velocity (u, v)", "m/s"),
         "temperature": Opt(
-            "float", None, "Static temperature (compressible, required)", "K"
+            "float",
+            None,
+            "Static temperature (compressible, required; physics.energy: "
+            "default reference.temperature)",
+            "K",
         ),
         "turbulence": Opt("table", None, TURBULENCE_DESCRIPTION),
     },
@@ -1330,6 +1464,20 @@ BOUNDARY_TYPES = {
             "negative = suction",
             "m/s",
         ),
+        "temperature": Opt(
+            "float",
+            None,
+            "physics.energy: wall temperature (isothermal; also the temperature "
+            "of the blown fluid); default adiabatic",
+            "K",
+            minimum=0.0,
+        ),
+        "heat_flux": Opt(
+            "float",
+            None,
+            "physics.energy: heat flux from the wall into the fluid",
+            "W/m^2",
+        ),
         "turbulence": Opt("table", None, TURBULENCE_DESCRIPTION),
     },
     "farfield": {
@@ -1356,7 +1504,8 @@ BOUNDARY_TYPES = {
         "temperature": Opt(
             "float",
             None,
-            "Freestream static temperature (compressible, default 288.15)",
+            "Freestream static temperature (compressible, default 288.15; "
+            "physics.energy: default reference.temperature)",
             "K",
             minimum=0.0,
         ),

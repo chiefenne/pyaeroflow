@@ -44,6 +44,7 @@ from pyaeroflow.numerics import (
     reconstruct,
     venkatakrishnan_wang,
 )
+from pyaeroflow.physics.layout import incompressible_layout
 from pyaeroflow.solver import divergence
 
 # Boundary-condition kinds (integer codes per boundary face).
@@ -141,6 +142,11 @@ class IncompressibleModel(NamedTuple):
     critical_amplification: float = None  # AFT N_crit; None: from Tu
     lm_positive_jacobian: bool = True  # LM: positive linearization of the gamma source
     lm_jacobian_smoothing: float = 0.0  # LM: width of the smooth switch derivatives
+
+    @property
+    def layout(self):
+        """Named state layout (:mod:`pyaeroflow.physics.layout`)."""
+        return incompressible_layout(self.turbulence, self.transition)
 
     @property
     def n_var(self):

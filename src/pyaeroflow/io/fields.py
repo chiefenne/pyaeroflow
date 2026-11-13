@@ -25,6 +25,7 @@ class Capabilities(NamedTuple):
     walls: bool  # output.force_boundaries is not empty
     turbulence: str = "sa-neg"  # "sa-neg" or "sst" (only meaningful with rans)
     flow: str = "incompressible"  # or "compressible" (L1)
+    energy: bool = False  # incompressible energy equation (variable density)
 
     @classmethod
     def from_config(cls, data):
@@ -40,6 +41,8 @@ class Capabilities(NamedTuple):
             bool(data["output"]["force_boundaries"]),
             physics["turbulence"] if rans else "none",
             physics.get("flow", "incompressible"),
+            bool(physics.get("energy", False))
+            and physics.get("flow", "incompressible") == "incompressible",
         )
 
 
@@ -144,6 +147,8 @@ class FieldContext:
         m = self.problem.model
         if self.problem.compressible:
             return self.w[:, 0] / (m.gas_constant * self.w[:, 3])
+        if getattr(self.problem, "thermal", False):
+            return _vd().cell_properties(m, self.w)["density"]
         return np.full(self.w.shape[0], m.density)
 
     def total_pressure_nd(self):
@@ -209,6 +214,12 @@ def _fz():
     return forces
 
 
+def _vd():
+    from pyaeroflow.physics import variable_density
+
+    return variable_density
+
+
 # -- compute functions --------------------------------------------------------
 
 
@@ -225,8 +236,7 @@ def _speed(c):
 
 
 def _density(c):
-    m = c.problem.model
-    return np.asarray(c.w[:, 0] / (m.gas_constant * c.w[:, 3])) * c.scaling.density
+    return c.density_nd() * c.scaling.density
 
 
 def _temperature(c):
@@ -308,6 +318,9 @@ def _pressure_gradient_magnitude(c):
 
 
 def _kinematic_viscosity(c):
+    if getattr(c.problem, "thermal", False):  # mu(T) / rho(T) per cell
+        nu = c.problem.kinematic_viscosity(c.w)
+        return nu * c.scaling.viscosity / c.scaling.density
     if c.problem.compressible:  # mu(T) / rho per cell
         from pyaeroflow.physics import compressible as comp
 
@@ -453,6 +466,11 @@ def _compressible(caps):
     return caps.flow == "compressible"
 
 
+def _thermal(caps):
+    """Compressible flow or the incompressible energy equation (a T column)."""
+    return caps.flow == "compressible" or caps.energy
+
+
 def _implicit_incompressible(caps):
     return caps.implicit and caps.flow != "compressible"
 
@@ -492,17 +510,18 @@ FIELDS = (
     Field(
         "density",
         "kg/m^3",
-        "Density p / (R T)",
-        "compressible",
-        _compressible,
+        "Density p / (R T) (incompressible energy equation: rho(T) of "
+        "fluid.density_model)",
+        "compressible or physics.energy",
+        _thermal,
         _density,
     ),
     Field(
         "temperature",
         "K",
         "Static temperature",
-        "compressible",
-        _compressible,
+        "compressible or physics.energy",
+        _thermal,
         _temperature,
     ),
     Field(
@@ -900,8 +919,14 @@ def available(caps):
 
 
 def default_fields(caps):
-    """Default selection: pressure, velocity, speed and the turbulence fields."""
-    return [n for n in DEFAULT_NAMES if BY_NAME[n].available(caps)]
+    """Default selection: pressure, velocity, speed and the turbulence fields.
+
+    The incompressible energy equation adds the temperature.
+    """
+    names = [n for n in DEFAULT_NAMES if BY_NAME[n].available(caps)]
+    if caps.energy:
+        names.insert(names.index("density") + 1, "temperature")
+    return names
 
 
 def resolve_fields(requested, caps):
@@ -966,6 +991,12 @@ def catalogue_table():
         (
             "compressible laminar",
             Capabilities("laminar", "none", True, True, True, "none", "compressible"),
+        ),
+        (
+            "laminar + energy",
+            Capabilities(
+                "laminar", "none", True, True, True, "none", "incompressible", True
+            ),
         ),
         ("SA", Capabilities("rans", "none", True, True, True)),
         (
