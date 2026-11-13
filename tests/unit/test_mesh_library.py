@@ -21,6 +21,7 @@ SMALL = {
     "naca0012-euler-ogrid": {"n_surface": 48, "n_radial": 40},
     "naca0012-shedding": {"n_surface": 64},
     "jet-crossflow": {"ny": 20},
+    "rayleigh-benard": {"nx": 8, "ny": 6},
 }
 
 

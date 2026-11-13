@@ -1,6 +1,6 @@
 # Case catalogue
 
-The case files in `examples/cases/` (48) with what each one is, the mesh it
+The case files in `examples/cases/` (50) with what each one is, the mesh it
 needs and where it is discussed. Start a case with the command in the last
 column; a case with a template or a library mesh runs after a plain
 `pip install`, the others need a clone of the repository (their meshes are
@@ -28,6 +28,8 @@ Validation sections are in [Validation](validation.md), pictures in the
 | `poiseuille.toml` | laminar | template `poiseuille` | plane Poiseuille flow on perturbed triangles | validation §2 |
 | `cavity_re100.toml` | laminar | template `cavity` | lid-driven cavity, Re 100, against Ghia et al. | validation §2 |
 | `cavity_heated_ra1e5.toml` | laminar, energy | template `cavity-heated` | natural convection at Ra 1e5, mean Nu against de Vahl Davis (recipe 19) | validation §19 |
+| `rayleigh_benard_ra1e4.toml` | laminar, energy | library `rayleigh-benard` | Rayleigh–Bénard rolls at Ra 1e4, mean Nu against Clever and Busse | validation §19 |
+| `rayleigh_benard_ra1e5.toml` | laminar, energy | template `rayleigh-benard` | Rayleigh–Bénard convection at Ra 1e5, periodic box | gallery 10 |
 
 ## Flat plates
 

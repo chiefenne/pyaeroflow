@@ -20,6 +20,7 @@ Case files are in `examples/cases/`, meshes in `examples/meshes/`
 | 7 | [Refinement band around a NACA 0012](#band) | incompressible, steady | SA-neg |
 | 8 | [Airfoil polar in minutes with the viscous panel method](#foil) | incompressible, steady | panels + integral boundary layer |
 | 9 | [Heated cylinder: the thermal wake at Re 40](#heated-cylinder) | incompressible with energy equation, steady | laminar |
+| 10 | [Rayleigh–Bénard convection between two plates](#rayleigh-benard) | incompressible with energy equation, steady, periodic | laminar |
 
 ---
 
@@ -329,5 +330,46 @@ The last script needs `pip install matplotlib meshio`; in ParaView open
 is in the log Summary, the local one in the wall file
 `heated_cylinder_re40.wall_cylinder.csv` (columns `T`, `q_w`, `nu`; recipe
 [heated walls](recipes.md#heated-walls)).
+
+[↑ back to top](#example-gallery)
+
+---
+
+<a id="rayleigh-benard"></a>
+## 10. Rayleigh–Bénard convection between two plates
+
+![Temperature, isotherms and streamlines of Rayleigh–Bénard convection at Ra 1e5](figures/gallery/rayleigh_benard_ra1e5.png)
+
+Air between a hot plate below and a cold plate above (3 K apart in total),
+heated from below until the layer goes unstable. The box is periodic left
+and right (`type = "periodic"`) and one critical wavelength wide, 2.016
+plate distances; the picture shows it twice side by side. At Ra = 10⁵ and
+Pr = 0.71 the warm air rises in thin plumes, the cold air sinks between
+them, and the interior is nearly isothermal; the box holds two roll pairs,
+not one, because the plumes are narrower than the critical wavelength. The
+run solves the energy equation strongly coupled with the momentum equations
+(`physics.energy = true`, ideal gas) and converges from rest in 619
+iterations and about 30 s.
+
+| | |
+|---|---|
+| Mesh | 64 × 32 quadrilaterals clustered at the plates, interior nodes moved by 30 % of the cell size (`make-mesh rayleigh-benard`) |
+| Flow | Ra = 10⁵, Pr = 0.71, air at 300 K, ΔT = 3 K (ΔT/T = 1 %, the Boussinesq limit) |
+| Case file | `rayleigh_benard_ra1e5.toml` (template `rayleigh-benard`) |
+| Result | mean Nu 5.14 (4.99 on 128 × 64: a picture, not a validation) |
+| Validation | the same box at Ra 5·10³ and 10⁴ against Clever and Busse (1974): Nu −0.14 % and −0.006 % on 128 × 64; [§19](validation.md#sec-19-rayleigh-benard) |
+
+```
+pyaeroflow init rayleigh-benard -o rb
+pyaeroflow run rb/rayleigh_benard_ra1e5.toml
+python examples/cases/plot_rayleigh_benard.py rb/output/rayleigh_benard_ra1e5/rayleigh_benard_ra1e5.vtu rayleigh_benard.png
+```
+
+The last script needs `pip install matplotlib meshio`; in ParaView open
+`rb/output/rayleigh_benard_ra1e5/rayleigh_benard_ra1e5.vtu` and colour by `temperature`. The mesh is
+deliberately irregular: the conduction state (Nu = 1) is also a steady
+solution, so a perfectly regular mesh keeps it, while the discretisation
+error of the perturbed mesh starts the rolls. A run that ends after a few
+iterations with Nu = 1 has not started them.
 
 [↑ back to top](#example-gallery)

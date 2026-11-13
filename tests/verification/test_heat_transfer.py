@@ -129,3 +129,33 @@ def test_heated_cylinder_re40_lange():
     k = 1.0 / (40.0 * 0.71)
     nu = float(np.sum(q * length) / (k * delta * length.sum()))
     assert nu == pytest.approx(ht.lange_cylinder_nusselt(40.0), rel=0.02)
+
+
+@pytest.mark.slow
+def test_rayleigh_benard_clever_busse(tmp_path):
+    """Rayleigh-Benard rolls at Ra 1e4, Pr 0.71, one critical wavelength: Nu 2.652.
+
+    Clever and Busse (1974) as tabulated by the Nektar++ tutorial (2.65179); the
+    64 x 32 case file is within 0.3 % (about 800 iterations).
+    """
+    import re
+    import shutil
+    from pathlib import Path
+
+    from pyaeroflow.config import load_case
+    from pyaeroflow.mesh import library, write_su2
+    from pyaeroflow.run import run_case
+
+    case = tmp_path / "rb.toml"
+    shutil.copy(
+        Path(__file__).parents[2] / "examples" / "cases" / "rayleigh_benard_ra1e4.toml",
+        case,
+    )
+    write_su2(tmp_path / "rayleigh_benard_64x32.su2", library.build("rayleigh-benard"))
+    config = load_case(case)
+    config.data["solver"]["max_iterations"] = 3000
+    result = run_case(config, console=False)
+    assert result.converged
+    text = (result.output_dir / "rayleigh_benard_ra1e4.log").read_text()
+    nu = float(re.search(r"heat 'bottom'.*mean Nu = ([0-9.]+)", text).group(1))
+    assert abs(nu / 2.65179 - 1.0) < 0.005

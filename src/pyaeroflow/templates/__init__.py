@@ -62,6 +62,13 @@ TEMPLATES = {
         {"n": 64},
         "cavity_clustered_64.su2",
     ),
+    "rayleigh-benard": Template(
+        "channel",
+        "rayleigh_benard_ra1e5.toml",
+        "rayleigh-benard",
+        {},
+        "rayleigh_benard_64x32.su2",
+    ),
     "plate-heated-sa": Template(
         "plate",
         "plate_heated_sa.toml",
