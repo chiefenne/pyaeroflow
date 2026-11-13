@@ -1326,6 +1326,43 @@ count is in [recipe 15](recipes.md#ibl-start).
 
 [↑ back to table](#stage-table)
 
+## 19. Incompressible energy equation (variable density, stage V1)
+
+`physics.energy = true` (configuration: [Energy equation](configuration.md#energy-equation-incompressible)).
+Script: `pyaeroflow.cases.heat_transfer`; tests
+`tests/verification/test_heat_transfer.py` (the Ra 1e4–1e6 cases are
+`slow`); case files in the project folder `cases/variable_density_v1/`.
+
+**Natural convection in a square cavity** (de Vahl Davis 1983). Hot left and
+cold right wall, adiabatic top and bottom, Pr = 0.71, ideal-gas density at
+ΔT/T = 1 % (the Boussinesq limit), meshes clustered at all walls (tanh,
+β = 1.5), start from rest. Mean Nusselt number of the hot wall (the cold wall
+agrees to 10⁻⁹, the energy balance), iterations of the case files
+(start-up CFL 1000), 7–17 s each:
+
+| Ra | mesh | Nu | reference | iterations |
+|----|------|----|-----------|------------|
+| 1e3 | 32² | 1.1167 | 1.118 | 18 |
+| 1e4 | 48² | 2.2443 | 2.243 | 22 |
+| 1e5 | 64² | 4.5246 | 4.519 | 35 |
+| 1e6 | 96² | 8.8357 | 8.800 (Le Quéré 1991: 8.825) | 67 |
+
+Boussinesq and ideal-gas density give the same Nu to 0.2 % at this ΔT.
+
+**Heated laminar flat plate** (Pohlhausen). Re_L = 5·10⁴, Pr = 0.71,
+isothermal plate 3 K above the freestream, 5376 cells (`make-mesh
+plate-heated`). The similarity solution gives Nu_x = 0.29416 Re_x^½
+(computed by `heat_transfer.pohlhausen`; 0.33206 at Pr = 1). Computed
+Nu_x/Re_x^½: 0.2939 (x = 0.05), 0.2943 (0.1), 0.2947 (0.25), 0.2957 (0.5),
+0.2970 (0.75), 0.2992 (0.95); mean Nu_L 132.0 against 131.5. C_D 0.00610
+(Blasius 0.00594, leading-edge and outlet effects). 38 iterations.
+
+**Heated cylinder in cross flow**, Re_D = 20, Pr = 0.71, wall 3 K above the
+freestream, O-grid 128 × 72 with the farfield at 60 radii. Mean Nu 2.443
+against 2.409 of the correlation of Lange, Durst & Breuer (1998) (+1.4 %),
+C_D 2.006, 16 iterations. With the farfield at 10 radii (`cylinder-ogrid` default) the
+blockage gives Nu 2.477 and C_D 2.134.
+
 ## References
 
 - Ghia, U., Ghia, K. N., Shin, C. T. (1982): High-Re solutions for

@@ -11,6 +11,8 @@ SMALL = {
     "channel-quad": {},
     "channel-tri": {},
     "cavity": {"n": 8},
+    "cavity-clustered": {"n": 8},
+    "plate-heated": {"nx_plate": 16, "ny": 12},
     "cylinder-ogrid": {"n_surface": 32, "n_radial": 8},
     "plate-rans": {"nx_plate": 16, "ny": 12},
     "plate-lm": {"nx_plate": 20, "ny": 12},

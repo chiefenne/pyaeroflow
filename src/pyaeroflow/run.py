@@ -59,6 +59,8 @@ from pyaeroflow.physics import forces as fz
 from pyaeroflow.physics import incompressible as inc
 from pyaeroflow.physics import lm, rans, rans_sst
 from pyaeroflow.physics import spalart_allmaras as sa
+from pyaeroflow.physics import thermo as th
+from pyaeroflow.physics import variable_density as vd
 from pyaeroflow.reload import LIVE_STEADY, LIVE_UNSTEADY, reload_case
 from pyaeroflow.solver import DualTimeSettings, LinearSettings, PseudoTimeSettings
 from pyaeroflow.solver.convergence import CauchyCriterion, WindowedCauchyCriterion
@@ -71,7 +73,25 @@ class Scaling(NamedTuple):
     density: float
     velocity: float
     length: float
-    temperature: float = 1.0  # compressible flow; 1 otherwise
+    temperature: float = 1.0  # compressible flow and physics.energy; 1 otherwise
+    # physics.energy: c_p at the reference temperature (J/(kg K)); None otherwise
+    specific_heat: float = None
+
+    @property
+    def heat_flux(self):
+        """SI value of a non-dimensional heat flux.
+
+        physics.energy: rho_ref U_ref c_p,ref T_ref; compressible (c_p
+        non-dimensional by U_ref^2 / T_ref): rho_ref U_ref^3.
+        """
+        if self.specific_heat is None:
+            return self.pressure * self.velocity
+        return self.density * self.velocity * self.specific_heat * self.temperature
+
+    @property
+    def conductivity(self):
+        """SI value of a non-dimensional conductivity (physics.energy)."""
+        return self.viscosity * self.specific_heat
 
     @property
     def pressure(self):
@@ -231,19 +251,28 @@ def setup(config, mesh=None):
     if cfg["physics"]["flow"] == "compressible":
         return _setup_compressible(config, mesh)
     fluid, ref, physics = cfg["fluid"], cfg["reference"], cfg["physics"]
+    energy = bool(physics["energy"])
     scaling = Scaling(
         float(ref["density"]), float(ref["velocity"]), float(ref["length"])
     )
-    if physics["model"] == "euler":
+    if energy:
+        scaling = scaling._replace(
+            temperature=float(ref["temperature"]),
+            specific_heat=_reference_specific_heat(fluid, float(ref["temperature"])),
+        )
+    if energy and fluid["viscosity_model"] in ("polynomial", "table"):
+        law = _property_law(fluid, "viscosity", None, scaling, scaling.viscosity)
+        mu_nd = law.value
+    elif physics["model"] == "euler":
         mu_nd = 0.0
     elif fluid["viscosity"] is not None:
         mu_nd = fluid["viscosity"] / scaling.viscosity
     else:
         mu_nd = 1.0 / fluid["reynolds_number"]
-    rho_nd = fluid["density"] / scaling.density
+    rho_nd = fluid["density"] / scaling.density if fluid["density"] is not None else 1.0
     rans = physics["model"] == "rans"
     turb_model = physics["turbulence"] if rans else "none"
-    nu_si = mu_nd * scaling.viscosity / fluid["density"]  # m^2/s
+    nu_si = mu_nd * scaling.viscosity / (rho_nd * scaling.density)  # m^2/s
     turbulence = {}  # reported values per inflow boundary and "initial"
 
     conditions = {}
@@ -287,6 +316,8 @@ def setup(config, mesh=None):
         g = physics["mean_pressure_gradient"]
         force = tuple(-gi * scaling.length / scaling.pressure for gi in g)
     tr_cfg = physics["transition"]
+    if energy:
+        _thermal_conditions(cfg, conditions, scaling)
     model = inc.IncompressibleModel(
         density=rho_nd,
         viscosity=mu_nd,
@@ -314,6 +345,13 @@ def setup(config, mesh=None):
             else 0.0
         ),
     )
+    if energy:
+        model = _energy_model(cfg, model, mu_nd, scaling)
+        rho_nd = model.density
+        config.restart_extra = {
+            **(getattr(config, "restart_extra", None) or {}),
+            "columns": np.array(model.layout.names),
+        }
     regions = None
     if rans and physics["transition"]["mode"] == "prescribed":
         regions = [
@@ -356,6 +394,12 @@ def setup(config, mesh=None):
         pressure = init["pressure"] / scaling.pressure
     else:  # restart without an explicit initial state: freestream of 1
         velocity, pressure = (1.0, 0.0), init["pressure"] / scaling.pressure
+    temperature = 1.0
+    if energy:
+        if init["temperature"] is not None:
+            temperature = init["temperature"] / scaling.temperature
+        elif init["from_boundary"] is not None:
+            temperature = conditions[init["from_boundary"]].get("temperature", 1.0)
     if rans and "initial" not in turbulence:
         speed = math.hypot(*velocity) * scaling.velocity
         tv = turbulence_values(init["turbulence"], nu_si, speed, turb_model)
@@ -363,11 +407,15 @@ def setup(config, mesh=None):
         entry = _turbulence_entry(tv, mu_nd, rho_nd, scaling)
         nu_tilde = entry.get("nu_tilde")
         k_omega = (entry["k"], entry["omega"]) if "k" in entry else None
-    w0 = problem.initial_state(velocity, pressure, nu_tilde, k_omega)
+    w0 = problem.initial_state(
+        velocity, pressure, nu_tilde, k_omega, temperature=temperature
+    )
     w0 = _boundary_layer_start(config, problem, w0, velocity)
     if init["restart"] is not None:
         restart = config.resolve_path(init["restart"])
-        w0, n_read = load_restart(restart, mesh, w0, flow=problem.flow.FLOW)
+        w0, n_read = load_restart(
+            restart, mesh, w0, flow=problem.flow.FLOW, columns=model.layout.names
+        )
         source = (
             f"boundary '{init['from_boundary']}'"
             if init["from_boundary"] is not None
@@ -379,6 +427,111 @@ def setup(config, mesh=None):
         config.notices.append(note)
     problem.turbulence_values = turbulence
     return problem, scaling, w0, mesh
+
+
+def _reference_specific_heat(fluid, t_ref):
+    """c_p at the reference temperature in J/(kg K) (physics.energy)."""
+    kind = fluid["specific_heat_model"]
+    if kind in ("polynomial", "table"):
+        law = th.property_law(
+            kind, None, fluid["specific_heat_parameters"], t_ref=t_ref, scale=1.0
+        )
+        return float(law.value)
+    if fluid["specific_heat"] is not None:
+        return float(fluid["specific_heat"])
+    gamma = fluid["gamma"]
+    return gamma * fluid["gas_constant"] / (gamma - 1.0)
+
+
+def _property_law(fluid, prop, value_si, scaling, scale):
+    """Non-dimensional property law of ``fluid.<prop>_model``."""
+    kind = fluid[f"{prop}_model"]
+    params = dict(fluid[f"{prop}_parameters"] or {})
+    if kind == "sutherland" and "temperature" not in params:
+        params["temperature"] = fluid["sutherland_temperature"]
+    return th.property_law(
+        kind, value_si, params, t_ref=scaling.temperature, scale=scale
+    )
+
+
+def _thermal_conditions(cfg, conditions, scaling):
+    """Add the non-dimensional temperatures and heat fluxes (physics.energy)."""
+    for name, b in cfg["boundary"].items():
+        entry = conditions[name]
+        kind = entry["type"]
+        if kind in vd.WALL_TYPES:
+            if b.get("temperature") is not None:
+                entry["temperature"] = b["temperature"] / scaling.temperature
+            elif b.get("heat_flux") is not None:
+                entry["heat_flux"] = b["heat_flux"] / scaling.heat_flux
+        elif kind in ("farfield", "velocity-inlet", "pressure-outlet"):
+            t = b.get("temperature")
+            entry["temperature"] = 1.0 if t is None else t / scaling.temperature
+        elif kind == "total-pressure-inlet":
+            t = b.get("total_temperature")
+            entry["temperature"] = 1.0 if t is None else t / scaling.temperature
+
+
+def _energy_model(cfg, base, mu_nd, scaling):
+    """VariableDensityModel of the incompressible energy equation (V1).
+
+    The property laws are built from the SI input; mu(T_ref) is the
+    non-dimensional viscosity of the case (fluid.viscosity or
+    reynolds_number).
+    """
+    fluid, physics = cfg["fluid"], cfg["physics"]
+    t_ref = scaling.temperature
+    kind = fluid["density_model"]
+    if kind == "ideal_gas":
+        dens = th.DensityModel(
+            kind,
+            pressure=fluid["operating_pressure"]
+            / (fluid["gas_constant"] * t_ref * scaling.density),
+        )
+    else:
+        dens = th.DensityModel(
+            kind,
+            density=fluid["density"] / scaling.density,
+            expansion=(fluid["thermal_expansion"] or 0.0) * t_ref,
+            temperature=1.0,
+        )
+    viscosity = _property_law(
+        fluid, "viscosity", mu_nd * scaling.viscosity, scaling, scaling.viscosity
+    )
+    specific_heat = _property_law(
+        fluid, "specific_heat", scaling.specific_heat, scaling, scaling.specific_heat
+    )
+    if fluid["conductivity_model"] == "prandtl":
+        conductivity = th.PropertyLaw("prandtl", float(fluid["prandtl"]))
+    else:
+        conductivity = _property_law(
+            fluid,
+            "conductivity",
+            fluid["conductivity"],
+            scaling,
+            scaling.conductivity,
+        )
+    thermo = th.Thermo(dens, viscosity, conductivity, specific_heat)
+    g = physics["gravity"] or (0.0, 0.0)
+    gravity = tuple(gi * scaling.length / scaling.velocity**2 for gi in g)
+    prt_params = dict(fluid["prandtl_turbulent_parameters"] or {})
+    if fluid["prandtl_turbulent_model"] == "constant":
+        prt_params.setdefault("value", fluid["prandtl_turbulent"])
+    return vd.VariableDensityModel(
+        density=float(th.density(thermo, np.array(1.0))),
+        thermo=thermo,
+        gravity=gravity,
+        turbulent_prandtl=th.TurbulentPrandtl(
+            fluid["prandtl_turbulent_model"], tuple(sorted(prt_params.items()))
+        ),
+        beta_factor=base.beta_factor,
+        spatial_order=base.spatial_order,
+        limiter=base.limiter,
+        limiter_threshold=base.limiter_threshold,
+        viscous_gradient=base.viscous_gradient,
+        alpha=base.alpha,
+        body_force=base.body_force,
+    )
 
 
 def _boundary_layer_start(config, problem, w0, velocity):
@@ -657,6 +810,8 @@ def state_scale(problem, scaling):
     elif problem.turbulent:
         scale.append(scaling.viscosity / scaling.density)
     scale += [1.0] * (problem.model.n_var - len(scale))  # AFT, LM: dimensionless
+    if getattr(problem, "thermal", False):
+        scale[problem.model.layout.column("T")] = scaling.temperature
     return np.array(scale)
 
 
@@ -953,8 +1108,13 @@ def _field_rows(cfg, mesh):
     return rows
 
 
-def load_restart(path, mesh, w_default, flow="incompressible"):
+def load_restart(path, mesh, w_default, flow="incompressible", columns=None):
     """Read a restart file for ``mesh``; missing variables keep ``w_default``.
+
+    ``columns`` names the columns of ``w_default`` (the state layout). A file
+    that stores its column names (``columns``, written by runs with the
+    energy equation) is matched by name; for other files the rules below
+    apply, and a case with the energy equation takes only p, u, v from them.
 
     The file must hold a state of the same flow family (``flow``; files
     without the entry are incompressible).
@@ -975,7 +1135,22 @@ def load_restart(path, mesh, w_default, flow="incompressible"):
                 f"restart file {path} holds a {stored} state, the case is {flow}"
             )
         w = np.array(data["w"], dtype=float)
+        stored_names = (
+            [str(c) for c in data["columns"]] if "columns" in data.files else None
+        )
+    if stored_names is not None and columns is not None:
+        from pyaeroflow.physics.layout import map_columns
+
+        w0 = np.array(w_default, dtype=float)
+        pairs = map_columns(stored_names, columns)
+        for i, j in pairs:
+            w0[:, j] = w[:, i]
+        return w0, len(pairs)
+    if stored_names is not None and "T" in stored_names:
+        w = np.delete(w, stored_names.index("T"), axis=1)  # into a case without T
     n = min(w.shape[1], w_default.shape[1])
+    if columns is not None and "T" in columns:
+        n = min(n, 3)  # older file without names: p, u, v only
     sst_family = (5, 7)
     if flow == "incompressible" and (
         (w.shape[1] in sst_family) != (w_default.shape[1] in sst_family)
@@ -1589,6 +1764,7 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
                 ("Cx, Cy", f"{c.cx:.6f}, {c.cy:.6f}"),
             ]
             + _transition_rows(monitor, result.u)
+            + _heat_rows(monitor, problem, result.u, force_boundaries)
         )
         for bname in force_boundaries:
             path = out_dir / f"{name}.wall_{bname}.csv"
@@ -1607,6 +1783,16 @@ def _run_steady(log, config, problem, scaling, w0, mesh, out_dir, resume=None):
     log.table(rows)
     _log_timing(log, log.elapsed - offset)
     return result, coefficients
+
+
+def _heat_rows(monitor, problem, w, boundaries):
+    """Summary rows: heat into the fluid and mean Nu per wall (physics.energy)."""
+    if not getattr(problem, "thermal", False):
+        return []
+    return [
+        (f"heat '{b}'", f"Q = {q:.6g} W/m into the fluid, mean Nu = {nu:.6g}")
+        for b, (q, nu) in monitor.heat_summary(w, boundaries).items()
+    ]
 
 
 def _probe_writer(log, cfg, problem, scaling, out_dir, name, unsteady, after):
@@ -2050,6 +2236,7 @@ class Monitor:
             b["pressure"] for b in cfg["boundary"].values() if b["type"] == "farfield"
         }
         self.p_ref = pressures.pop() / scaling.pressure if len(pressures) == 1 else 0.0
+        self.temperature_difference = cfg["reference"].get("temperature_difference")
 
     def coefficients(self, w):
         """(CL, CD, CM) of the state ``w``."""
@@ -2122,6 +2309,8 @@ class Monitor:
             columns["q_w"] = (
                 self.problem.wall_heat_flux(w)[faces] * s.pressure * s.velocity
             )
+        if getattr(self.problem, "thermal", False):
+            columns.update(self.heat_transfer(w, faces))
         if self.problem.turbulent:
             # y+ of the first cell centre: d sqrt(|tau_w| / rho) / nu (non-dim.).
             tau_w = np.hypot(d["tau_x"], d["tau_y"])
@@ -2140,6 +2329,59 @@ class Monitor:
         header = ",".join(columns)
         rows = np.column_stack(list(columns.values()))
         np.savetxt(path, rows, delimiter=",", header=header, comments="", fmt="%.10e")
+
+    def heat_transfer(self, w, faces):
+        """Wall T, q_w, Nu and St per face (physics.energy), SI and dimensionless.
+
+        Nu = q_w L_ref / (k_ref Delta T), St = q_w / (rho_ref c_p,ref U_ref
+        Delta T) with k_ref, c_p,ref at the reference temperature and Delta T =
+        ``reference.temperature_difference``, default the local T_w - T_ref
+        (non-dimensional: Nu = q / (k Delta T), St = q / (rho Delta T)).
+        """
+        s = self.scaling
+        model = self.problem.model
+        t_w = self.problem.wall_temperature(w)[faces]
+        q = self.problem.wall_heat_flux(w)[faces]
+        if self.temperature_difference is not None:
+            dt = np.full_like(t_w, self.temperature_difference / s.temperature)
+        else:
+            dt = t_w - 1.0
+        k_ref = float(th.conductivity(model.thermo, np.array(1.0)))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            nu = np.where(dt != 0.0, q / (k_ref * dt), np.nan)
+            st = np.where(dt != 0.0, q / (model.density * dt), np.nan)
+        return {
+            "T": t_w * s.temperature,
+            "q_w": q * s.heat_flux,
+            "nu": nu,
+            "st": st,
+        }
+
+    def heat_summary(self, w, boundaries):
+        """Per boundary: heat into the fluid (W/m) and mean Nu (physics.energy).
+
+        The mean Nu is Q L_ref / (k_ref Delta T A) with the boundary length A
+        and Delta T = ``reference.temperature_difference``, default the
+        length-weighted mean of T_w - T_ref.
+        """
+        s = self.scaling
+        model = self.problem.model
+        q = self.problem.wall_heat_flux(w)
+        t_w = self.problem.wall_temperature(w)
+        k_ref = float(th.conductivity(model.thermo, np.array(1.0)))
+        out = {}
+        for name in boundaries:
+            faces = self.problem.boundary_faces([name])
+            length = np.asarray(self.problem.geom.b_length)[faces]
+            total = float(np.sum(q[faces] * length))
+            area = float(length.sum())
+            if self.temperature_difference is not None:
+                dt = self.temperature_difference / s.temperature
+            else:
+                dt = float(np.sum((t_w[faces] - 1.0) * length) / area)
+            nu = total / (k_ref * dt * area) if dt != 0.0 else float("nan")
+            out[name] = (total * s.heat_flux * s.length, nu)
+        return out
 
     def _contour_order(self, boundary, d):
         """Face order along the wall contour (PyAero's airfoil direction), or None."""
@@ -2353,6 +2595,11 @@ def _log_setup(log, config, problem, scaling, mesh):
         ("model", cfg["physics"]["model"]),
         ("density", f"{cfg['fluid']['density']} kg/m^3"),
     ]
+    if getattr(problem, "thermal", False):
+        rows = [
+            ("model", f"{cfg['physics']['model']} with the energy equation"),
+            *_energy_rows(cfg, problem, scaling),
+        ]
     if cfg["fluid"]["viscosity"] is not None:
         rows.append(("viscosity", f"{cfg['fluid']['viscosity']} Pa s"))
     if cfg["fluid"]["reynolds_number"] is not None:
@@ -2575,10 +2822,50 @@ def _log_setup_compressible(log, config, problem, scaling, mesh):
             log.write("  - " + note)
 
 
+def _energy_rows(cfg, problem, scaling):
+    """Return the configuration rows of the incompressible energy equation."""
+    fluid, m = cfg["fluid"], problem.model
+    dens = m.thermo.density
+    if dens.kind == "ideal_gas":
+        text = (
+            f"ideal gas, p_th {fluid['operating_pressure']:g} Pa, R "
+            f"{fluid['gas_constant']:g} J/(kg K)"
+        )
+    elif dens.kind == "boussinesq":
+        text = (
+            f"Boussinesq, rho_0 {fluid['density']:g} kg/m^3, beta "
+            f"{fluid['thermal_expansion']:.4g} 1/K"
+        )
+    else:
+        text = f"constant {fluid['density']:g} kg/m^3 (passive temperature)"
+    conductivity = (
+        f"prandtl (Pr {fluid['prandtl']:g})"
+        if fluid["conductivity_model"] == "prandtl"
+        else fluid["conductivity_model"]
+    )
+    rows = [
+        ("density model", text),
+        (
+            "rho at T_ref",
+            f"{m.density * scaling.density:.6g} kg/m^3 (T_ref "
+            f"{scaling.temperature:g} K)",
+        ),
+        (
+            "properties",
+            f"mu {fluid['viscosity_model']}, k {conductivity}, c_p "
+            f"{fluid['specific_heat_model']} ({scaling.specific_heat:.6g} J/(kg K) "
+            "at T_ref)",
+        ),
+    ]
+    if any(m.gravity):
+        rows.append(("gravity", f"{tuple(cfg['physics']['gravity'])} m/s^2"))
+    return rows
+
+
 def _describe_boundary(b):
     parts = [b["type"]]
     for key, value in b.items():
-        if key != "type":
+        if key != "type" and value is not None:
             parts.append(f"{key} = {value}")
     return ", ".join(parts)
 

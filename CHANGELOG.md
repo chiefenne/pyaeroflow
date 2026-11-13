@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased – energy equation in the incompressible solver (stage V1)
+
+- `physics.energy = true`: the incompressible solver gets a strongly coupled
+  energy equation (unknowns p, u, v, T), laminar and steady. The density is
+  an equation of state at constant thermodynamic pressure
+  (`fluid.density_model = "constant" | "boussinesq" | "ideal_gas"`), so the
+  temperature acts on the flow; `physics.gravity` adds the buoyancy
+  (ρ − ρ_ref) g. Energy in conservative enthalpy form with h = ∫ c_p dT.
+- μ(T), k(T) and c_p(T) each with their own law: constant, Sutherland, power
+  law, polynomial or table (k also by the Prandtl number), keys
+  `fluid.<property>_model` and `fluid.<property>_parameters`.
+- Thermal walls: adiabatic (default), isothermal (`temperature`) or a heat
+  flux into the fluid (`heat_flux`); inlets and farfields take `temperature`.
+  Wall CSV columns `T`, `q_w`, `nu`, `st`; heat and mean Nu per wall in the
+  log; `temperature` and `density` fields. `reference.temperature_difference`
+  sets ΔT of Nu and St.
+- Preconditioner Γ = ∂U/∂V with ∂ρ/∂p = 1/β² (Economon 2020); the 4×4
+  |Γ⁻¹A| is the 3×3 block of the constant-density solver plus |v_n| for T.
+  β² has a floor from the buoyancy velocity. Start-up CFL 1000 by default
+  for energy cases.
+- One interface for the turbulent Prandtl number,
+  `pyaeroflow.physics.thermo.turbulent_prandtl` (JAX, inputs T, ν, ν_t, wall
+  distance, Pe_t; constant 0.9 built in, own laws by
+  `register_turbulent_prandtl`), for stage V2.
+- Named state layout (`pyaeroflow.physics.layout`): blocks flow, turbulence,
+  transition, energy, species; energy restart files store their column
+  names and are matched by name.
+- Validation §19: de Vahl Davis cavity Ra 1e3–1e6, Pohlhausen plate, heated
+  cylinder. New library meshes `cavity-clustered` and `plate-heated`;
+  `cylinder-ogrid` takes `outer_radius`.
+- `fluid.density_model = "constant"` without `physics.energy` is the
+  unchanged constant-density solver.
+
 ## 1.7.1 – foil validation, continuation, warm start and speed (2026-11-12)
 
 - Validation of the viscous panel method `pyaeroflow foil` (validation §18):

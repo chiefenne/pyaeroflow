@@ -392,6 +392,8 @@ def _check_value(dotted, opt, value, problems):
 
 # Defaults that replace the schema defaults when physics.transition.model =
 # "lm" and the case file does not set the key (configuration.md, LM section).
+# Start-up CFL of cases with the incompressible energy equation.
+ENERGY_CFL_START = 1000.0
 LM_DEFAULTS = {
     "solver.newton_krylov.cfl_adapt_iterations": 150,
     "solver.newton_krylov.variable_scaling": True,
@@ -422,6 +424,17 @@ def _consistency(data, explicit, problems, notices, path):
         farfields = farfields[:1]
     compressible = physics["flow"] == "compressible"
     _flow_rules(data, boundaries, farfields, compressible, problems, notices)
+    if physics["energy"] and not compressible:
+        # Energy equation: a start-up CFL of 1000. Small pseudo-time steps
+        # trade the temperature residual for momentum residual (buoyancy) and
+        # the line search cuts them: de Vahl Davis Ra 1e4 48^2 49 -> 22
+        # iterations, Ra 1e6 96^2 90 -> 67, heated plate 43 -> 38, cylinder
+        # 19 -> 14. Explicit values win.
+        if "solver.cfl.start" not in explicit:
+            data["solver"]["cfl"]["start"] = ENERGY_CFL_START
+            notices.append(
+                f"physics.energy default: solver.cfl.start = {ENERGY_CFL_START:g}"
+            )
 
     # Periodic pairs: partner exists and has no own condition.
     for name, b in boundaries.items():
@@ -560,7 +573,18 @@ def _consistency(data, explicit, problems, notices, path):
         fluid["viscosity"] is not None,
         fluid["reynolds_number"] is not None,
     )
-    if physics["model"] == "euler":
+    mu_from_law = (
+        physics["energy"]
+        and not compressible
+        and fluid["viscosity_model"] in ("polynomial", "table")
+    )
+    if mu_from_law:
+        if has_mu or has_re:
+            problems.append(
+                f"fluid: viscosity_model = {fluid['viscosity_model']} gives mu(T); "
+                "do not set viscosity or reynolds_number"
+            )
+    elif physics["model"] == "euler":
         if has_mu or has_re:
             notices.append("physics.model = euler: fluid viscosity ignored")
     elif compressible and not (has_mu or has_re):
@@ -891,6 +915,87 @@ COMPRESSIBLE_BOUNDARY_TYPES = (
 )
 
 
+def _energy_rules(data, boundaries, farfields, problems, notices):
+    """Rules and defaults of the incompressible energy equation (physics.energy).
+
+    Laminar and steady (V1). The reference temperature defaults to the
+    single farfield or inlet temperature; the reference density to the
+    density at that temperature (ideal gas: p_th / (R T_ref)). Walls take
+    either a temperature or a heat flux.
+    """
+    fluid, physics, ref = data["fluid"], data["physics"], data["reference"]
+    if physics["model"] != "laminar":
+        problems.append(
+            "physics.energy: needs physics.model = laminar (RANS with the energy "
+            "equation is stage V2)"
+        )
+    if data["time"]["mode"] == "unsteady":
+        problems.append("physics.energy: time.mode = unsteady is stage V3")
+    if data["solver"]["method"] != "implicit":
+        problems.append("physics.energy: needs solver.method = implicit")
+    for name, b in boundaries.items():
+        prefix = f"boundary.{name}"
+        if b.get("heat_flux") is not None and b.get("temperature") is not None:
+            problems.append(f"{prefix}: give temperature or heat_flux, not both")
+    if ref["temperature"] is None:
+        temps = {
+            boundaries[n].get("temperature")
+            for n in farfields
+            if boundaries[n].get("temperature") is not None
+        } or {
+            b.get("temperature")
+            for b in boundaries.values()
+            if b["type"] == "velocity-inlet" and b.get("temperature") is not None
+        }
+        if len(temps) == 1:
+            ref["temperature"] = float(temps.pop())
+            notices.append(
+                f"reference.temperature = {ref['temperature']:g} K from the inflow"
+            )
+        else:
+            problems.append(
+                "reference.temperature is required with physics.energy (no single "
+                "farfield or inlet temperature to take it from)"
+            )
+    model = fluid["density_model"]
+    if model == "ideal_gas":
+        if fluid["density"] is not None:
+            notices.append(
+                "fluid.density ignored: density_model = ideal_gas (p_th / (R T))"
+            )
+        if ref["density"] is None and ref["temperature"]:
+            ref["density"] = fluid["operating_pressure"] / (
+                fluid["gas_constant"] * ref["temperature"]
+            )
+    elif fluid["thermal_expansion"] is not None and model != "boussinesq":
+        notices.append("fluid.thermal_expansion ignored: density_model != boussinesq")
+    if model == "boussinesq" and fluid["thermal_expansion"] is None:
+        if ref["temperature"]:
+            fluid["thermal_expansion"] = 1.0 / ref["temperature"]
+    if fluid["conductivity_model"] is None:
+        fluid["conductivity_model"] = (
+            "prandtl" if fluid["conductivity"] is None else "constant"
+        )
+    tabulated = ("polynomial", "table")
+    for prop in ("viscosity", "specific_heat", "conductivity"):
+        law = fluid[f"{prop}_model"]
+        params = fluid[f"{prop}_parameters"] or {}
+        if law in tabulated:
+            key = "coefficients" if law == "polynomial" else "value"
+            if not params.get(key):
+                problems.append(f"fluid.{prop}_parameters.{key} is required ({law})")
+        elif law == "power-law" and "exponent" not in params:
+            problems.append(f"fluid.{prop}_parameters.exponent is required (power-law)")
+    if (
+        fluid["conductivity_model"] not in ("prandtl",) + tabulated
+        and fluid["conductivity"] is None
+    ):
+        problems.append(
+            f"fluid.conductivity is required with conductivity_model = "
+            f"{fluid['conductivity_model']}"
+        )
+
+
 def _flow_rules(data, boundaries, farfields, compressible, problems, notices):
     """Rules and defaults that depend on physics.flow (L1).
 
@@ -924,22 +1029,56 @@ def _flow_rules(data, boundaries, farfields, compressible, problems, notices):
         notices.append(
             "numerics.low_mach_correction ignored: slau2 is an all-speed flux"
         )
+    if fluid["viscosity_model"] is None:
+        fluid["viscosity_model"] = "sutherland" if compressible else "constant"
+    if compressible and fluid["viscosity_model"] not in ("sutherland", "constant"):
+        problems.append(
+            f"fluid.viscosity_model = {fluid['viscosity_model']}: compressible "
+            "flow takes sutherland or constant"
+        )
+    energy = bool(physics["energy"]) and not compressible
+    if physics["energy"] and compressible:
+        notices.append("physics.energy ignored: compressible flow has its energy")
+    if energy:
+        _energy_rules(data, boundaries, farfields, problems, notices)
+    elif not compressible:
+        for key, default in (
+            ("density_model", "constant"),
+            ("viscosity_parameters", None),
+            ("thermal_expansion", None),
+            ("specific_heat", None),
+            ("conductivity", None),
+            ("conductivity_model", None),
+        ):
+            if fluid[key] != default:
+                problems.append(f"fluid.{key}: needs physics.energy = true")
+        if fluid["viscosity_model"] != "constant":
+            notices.append(
+                "fluid.viscosity_model ignored: constant viscosity without "
+                "physics.energy"
+            )
+    if physics["gravity"] is not None and not energy:
+        problems.append("physics.gravity: needs physics.energy = true")
     if not compressible:
-        if fluid["density"] is None:
+        if fluid["density"] is None and not (
+            energy and fluid["density_model"] == "ideal_gas"
+        ):
             problems.append("fluid.density is required")
         if num["low_mach_correction"]:
             problems.append(
                 "numerics.low_mach_correction: needs physics.flow = compressible"
             )
-        if ref["temperature"] is not None:
+        if ref["temperature"] is not None and not energy:
             notices.append("reference.temperature ignored: incompressible flow")
         for name, b in boundaries.items():
             kind = b["type"]
             prefix = f"boundary.{name}"
-            for key in ("mach", "temperature", "total_temperature"):
+            thermal_keys = ("temperature", "total_temperature", "heat_flux")
+            for key in ("mach",) + (() if energy else thermal_keys):
                 if b.get(key) is not None:
                     problems.append(
                         f"{prefix}.{key}: needs physics.flow = compressible"
+                        + ("" if key == "mach" else " or physics.energy = true")
                     )
             if kind == "farfield" and b.get("velocity") is None:
                 problems.append(f"{prefix}.velocity is required")
@@ -992,6 +1131,11 @@ def _flow_rules(data, boundaries, farfields, compressible, problems, notices):
             problems.append(f"{prefix}.temperature is required")
         elif kind == "wall" and any(b.get("velocity") or ()):
             problems.append(f"{prefix}.velocity: moving walls are incompressible only")
+        if b.get("heat_flux") is not None:
+            problems.append(
+                f"{prefix}.heat_flux: prescribed heat flux walls need "
+                "physics.flow = incompressible with physics.energy = true"
+            )
         if kind == "wall" and b.get("temperature") is not None:
             if physics["model"] == "euler":
                 notices.append(f"{prefix}.temperature ignored: Euler (slip wall)")

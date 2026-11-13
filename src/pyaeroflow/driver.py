@@ -37,6 +37,7 @@ from pyaeroflow.physics import (
     rans_sst_compressible,
     sst,
 )
+from pyaeroflow.physics import variable_density as vd
 from pyaeroflow.solver import (
     JacobianPattern,
     PseudoTimeSettings,
@@ -75,8 +76,17 @@ def sst_default_values(nu, speed):
 
 
 def flow_module(model):
-    """Physics module of the model's flow family (incompressible or compressible)."""
-    return comp if isinstance(model, comp.CompressibleModel) else inc
+    """Physics module of the model's flow family.
+
+    Compressible, incompressible with the energy equation
+    (:class:`~pyaeroflow.physics.variable_density.VariableDensityModel`) or
+    incompressible at constant density (the unchanged solver).
+    """
+    if isinstance(model, comp.CompressibleModel):
+        return comp
+    if isinstance(model, vd.VariableDensityModel):
+        return vd
+    return inc
 
 
 def _inflow_speed(bc):
@@ -239,7 +249,14 @@ class FlowProblem:
         self.mesh = mesh
         self.flow = flow_module(model)
         self.compressible = self.flow is comp
+        # Energy equation of the incompressible solver (variable density, V1).
+        self.thermal = self.flow is vd
         self.turbulent = model.turbulence != "none"
+        if self.thermal and (self.turbulent or model.transition != "none"):
+            raise ValueError(
+                "the incompressible energy equation is laminar so far (RANS is "
+                "stage V2)"
+            )
         self.source_limited_cells = 0  # cells capped by the source-term dt limit
         if self.compressible and self.turbulent:
             if model.transition != "none":
@@ -335,6 +352,11 @@ class FlowProblem:
             "previous_fell_back": False,
             "disabled": False,
         }
+        # Cell-local source Jacobian in the first-order Jacobian: turbulence
+        # sources, or the buoyancy of the energy equation.
+        self._cell_sources = self.turbulent or getattr(
+            self.physics, "CELL_SOURCES", False
+        )
         self._fi = partial(self.physics.interior_flux, model)
         self._fb = partial(self.physics.boundary_flux, model)
 
@@ -615,7 +637,11 @@ class FlowProblem:
         blocks are dropped (D34).
         """
         w = jnp.asarray(w)
-        b_args = (self.bc.kind, self.bc.value)
+        b_args = (
+            self.physics.jacobian_boundary_args(self.bc)
+            if hasattr(self.physics, "jacobian_boundary_args")
+            else (self.bc.kind, self.bc.value)
+        )
         f_args = ()
         mask = None
         if self.model.turbulence == "sst":
@@ -633,7 +659,7 @@ class FlowProblem:
                 else None
             )
         src = None
-        if self.turbulent:
+        if self._cell_sources:
             src = np.asarray(
                 self.physics.source_blocks(self.model, self.geom, self.bc, w)
             )
@@ -690,7 +716,7 @@ class FlowProblem:
                     )
                 )
             )
-            if self.turbulent:
+            if self._cell_sources:
                 diag.append(
                     np.asarray(
                         self.physics.source_blocks(self.model, self.geom, self.bc, xj)
@@ -791,7 +817,10 @@ class FlowProblem:
         )
 
     def wall_heat_flux(self, w):
-        """Wall heat flux into the fluid per boundary face (compressible only)."""
+        """Wall heat flux into the fluid per boundary face.
+
+        Compressible flow and the incompressible energy equation.
+        """
         return np.asarray(
             self.physics.wall_heat_flux(self.model, self.geom, self.bc, jnp.asarray(w))
         )
@@ -850,8 +879,19 @@ class FlowProblem:
         np.maximum.at(column, nearest[valid], ratio[valid])
         return np.where(np.isfinite(column[face_ids]), column[face_ids], 0.0)
 
+    def wall_temperature(self, w):
+        """Temperature per boundary face (incompressible energy equation)."""
+        return np.asarray(
+            self.physics.wall_temperature(
+                self.model, self.geom, self.bc, jnp.asarray(w)
+            )
+        )
+
     def kinematic_viscosity(self, w):
         """Molecular kinematic viscosity per cell (compressible: mu(T) / rho)."""
+        if self.thermal:
+            props = vd.cell_properties(self.model, w)
+            return props["viscosity"] / props["density"]
         if self.compressible:
             return np.asarray(
                 rans_compressible.kinematic_viscosity(self.model, jnp.asarray(w))
@@ -1013,6 +1053,8 @@ class FlowProblem:
         w[:, inc.V] = velocity[1]
         if self.compressible:
             w[:, comp.T] = temperature
+        if self.thermal:
+            w[:, self.model.layout.column("T")] = temperature
         if self.turbulent:
             nu = self.model.viscosity / self.model.density
             if self.model.turbulence == "sst":
@@ -1309,6 +1351,8 @@ class FlowProblem:
                 return positivity(u, cap(u, du), r, tau)
 
             return limit_step
+        if self.thermal:
+            return self._positivity_limiter()  # T > 0
         if self.model.turbulence == "sst":
             return self._sst_limiter(
                 clip=clip, guard=gamma_guard, stats=guard_stats, whole_cell=whole_cell
@@ -1501,6 +1545,10 @@ class FlowProblem:
         """Diagonal of the mass matrix: rho * area on u, v; area on turbulence."""
         if self.compressible:
             raise NotImplementedError("unsteady compressible flow is planned")
+        if self.thermal:
+            raise NotImplementedError(
+                "unsteady flow with the energy equation is planned (stage V3)"
+            )
         area = np.asarray(self.geom.area)
         rho = self.model.density
         diag = [0.0, rho, rho] + [1.0] * (self.model.n_var - 3)
