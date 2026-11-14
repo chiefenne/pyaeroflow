@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased – species: multicomponent diffusion (stage S2)
+
+- `fluid.diffusion_model = "hirschfelder-curtiss"`: multicomponent
+  diffusion with mole-fraction gradients, mixture-averaged D_k,m = (1 − X_k)/
+  Σ X_j/D_jk over all species (bulk included) and a correction velocity; exact
+  Fick's law for two species. Binary coefficients D_jk from
+  `[[fluid.binary_diffusion]]` or Chapman-Enskog (Neufeld) with the
+  Lennard-Jones data `lennard_jones_sigma`/`lennard_jones_epsilon` of the fluid
+  and the species. RANS: μ_t/Sc_t,k added as before.
+- `fluid.mixture_viscosity = "wilke"` and `fluid.mixture_conductivity =
+  "mathur"`: mixture μ and k from the species viscosity (`viscosity`, or
+  Chapman-Enskog from the Lennard-Jones data) and conductivity (`conductivity`,
+  else μ_i c_p,i/Pr). Used in the momentum, energy, Newton Jacobian and
+  the turbulence models.
+- Defaults (`fick`, `bulk`) keep every S1 and energy-only result unchanged
+  (Stefan tube log identical to the last digit).
+- Case log: "mixture rules" row. Case files `cases/species_s2/`.
+- Validation §20: ternary Stefan tube with equal D_jk within 0.003 % of the
+  exact solution; H₂–CO₂–N₂ tube with kinetic theory within 0.01 % of its 1D
+  boundary value problem (`cases.mass_transfer.multicomponent_tube_reference`).
+
 ## Unreleased – species: mixtures and mass transfer (stages S1, S1b)
 
 Stage S1b (turbulence and evaporation):

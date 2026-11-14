@@ -105,6 +105,13 @@ TEMPLATES = {
     "jet-crossflow-inclined": Template(
         "jet", "jet_crossflow_inclined.toml", "jet-crossflow", {}, "jet_crossflow.su2"
     ),
+    "jet-crossflow-species": Template(
+        "jet",
+        "jet_crossflow_species.toml",
+        "jet-crossflow",
+        {"x_down": 40.0, "n_slot": 16, "dy1": 0.02, "ny": 60},
+        "jet_crossflow_species.su2",
+    ),
     "cylinder-euler": Template(
         "bluff body",
         "cylinder_euler.toml",

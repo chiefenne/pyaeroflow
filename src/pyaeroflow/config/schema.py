@@ -292,7 +292,65 @@ SCHEMA = {
             "saturation_model = antoine (antoine_a, antoine_b, antoine_c: "
             "log10(p_sat / bar) = A - B / (T + C), T in K, as the NIST WebBook) "
             "or clausius-clapeyron (saturation_pressure in Pa at "
-            "saturation_temperature in K, with latent_heat and molar_mass)",
+            "saturation_temperature in K, with latent_heat and molar_mass); "
+            "mixture rules (stage S2): viscosity (Pa s at the reference "
+            "temperature, optional viscosity_exponent) and conductivity (W/(m K), "
+            "optional conductivity_exponent) of the pure species, and the "
+            "Lennard-Jones data lennard_jones_sigma (Angstrom) and "
+            "lennard_jones_epsilon (epsilon / k in K) for the Chapman-Enskog "
+            "viscosity and D_jk",
+        ),
+        "diffusion_model": Opt(
+            "string",
+            "fick",
+            "fluid.species diffusion model: fick (rho D_k from each species' "
+            "diffusivity or Schmidt number, Fick's law with a correction velocity) "
+            "or hirschfelder-curtiss (multicomponent, stage S2: mixture-averaged "
+            "D_k,m from the binary coefficients D_jk of all pairs, mole-fraction "
+            "gradient form, correction velocity; the D_jk from binary_diffusion "
+            "or Chapman-Enskog with the Lennard-Jones data of the species)",
+            choices=("fick", "hirschfelder-curtiss"),
+        ),
+        "mixture_viscosity": Opt(
+            "string",
+            "bulk",
+            "fluid.species viscosity of the mixture: bulk (that of the fluid) or "
+            "wilke (Wilke's rule with the viscosity of every species: viscosity "
+            "or the Lennard-Jones data of the species)",
+            choices=("bulk", "wilke"),
+        ),
+        "mixture_conductivity": Opt(
+            "string",
+            "bulk",
+            "fluid.species conductivity of the mixture: bulk (that of the fluid) "
+            "or mathur (Mathur's rule with the conductivity of every species: "
+            "conductivity, else mu_i c_p,i / Pr of the fluid's Prandtl number)",
+            choices=("bulk", "mathur"),
+        ),
+        "lennard_jones_sigma": Opt(
+            "float",
+            None,
+            "Lennard-Jones collision diameter sigma of the fluid (the bulk "
+            "species), for the Chapman-Enskog D_jk of diffusion_model = "
+            "hirschfelder-curtiss",
+            "Angstrom",
+            minimum=0.0,
+        ),
+        "lennard_jones_epsilon": Opt(
+            "float",
+            None,
+            "Lennard-Jones well depth epsilon / k of the fluid (the bulk species)",
+            "K",
+            minimum=0.0,
+        ),
+        "binary_diffusion": Opt(
+            "table_list",
+            None,
+            "diffusion_model = hirschfelder-curtiss: explicit binary diffusion "
+            "coefficients D_jk. One table per pair: species = [name, name] (the "
+            'fluid is "bulk"), diffusivity (m^2/s at the reference temperature '
+            "and operating pressure), optional exponent n (D ~ T^n). Pairs without "
+            "an entry use Chapman-Enskog with the Lennard-Jones data",
         ),
         "molar_mass": Opt(
             "float",

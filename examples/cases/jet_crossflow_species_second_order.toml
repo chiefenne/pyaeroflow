@@ -1,0 +1,107 @@
+# Jet in crossflow with three gases (gallery example 11, stage S2), phase 2 of 2:
+# a CO2-rich jet leaves the slot at 60 deg to the wall into a nitrogen crossflow
+# that carries 3 % hydrogen by mass (the "bulk" gas is N2). The light H2
+# diffuses much faster than the heavy CO2 (Chapman-Enskog D(H2-N2) = 0.78,
+# D(N2-CO2) = 0.16, D(H2-CO2) = 0.65 cm^2/s), which the multicomponent diffusion
+# model of Hirschfelder and Curtiss shows in the differential-diffusion picture
+# (plot_jet_species.py). Mixture viscosity (Wilke) and conductivity (Mathur) follow
+# from Lennard-Jones data. A demonstration case, not a validation case (the
+# mixture-averaged diffusion errs by tens of percent for H2 mixtures with unequal
+# D_jk, see validation section 20).
+# Same geometry as jet_crossflow.toml, whose lengths are in slot widths: the slot
+# is 1 m wide here, so the velocities are scaled to keep the physics of a 1 mm
+# slot: crossflow U = 1.56e-3 m/s gives Re_d = 100 in N2 at 300 K, the jet
+# |V_j| = 3.12e-3 m/s (V_j/U = 2); the Schmidt numbers are those of the gases.
+# Isothermal, no gravity, so only the Reynolds and Schmidt numbers matter.
+# Mesh (15k quads, 16 faces across the slot, outflow at 40 d):
+#   pyaeroflow make-mesh jet-crossflow --set x_down=40 --set n_slot=16 --set dy1=0.02 --set ny=60 -o jet_crossflow_species.su2
+# Phase 2 restarts from the first-order solution of jet_crossflow_species.toml
+# (set initial.restart to its last backup, pyaeroflow restart-info FILE) and runs
+# the limited second-order scheme (100 iterations, 65 of them Newton-Krylov). Starting second order from
+# the freestream stalls on this case. Unknowns p, u, v, T, Y_H2, Y_CO2: with the default
+# SuperLU ordering the first iterations take minutes, hence ordering = "colamd"
+# (not needed with PARDISO).
+
+[case]
+name = "jet_crossflow_species_second_order"
+
+[mesh]
+file = "jet_crossflow_species.su2"   # boundary faces: inlet, outlet, top, plate, slot
+
+[physics]
+model = "laminar"
+energy = true
+
+[fluid]
+density_model = "ideal_gas"
+gas_constant = 296.8              # J/(kg K), N2 (the bulk gas)
+molar_mass = 28.0134              # kg/kmol
+viscosity = 1.78e-5               # Pa s, N2 at 300 K
+specific_heat = 1040.0
+prandtl = 0.72
+diffusion_model = "hirschfelder-curtiss"
+mixture_viscosity = "wilke"
+mixture_conductivity = "mathur"
+lennard_jones_sigma = 3.798       # Angstrom, N2
+lennard_jones_epsilon = 71.4      # K
+
+[[fluid.species]]
+name = "h2"
+molar_mass = 2.016
+lennard_jones_sigma = 2.827
+lennard_jones_epsilon = 59.7
+
+[[fluid.species]]
+name = "co2"
+molar_mass = 44.01
+lennard_jones_sigma = 3.941
+lennard_jones_epsilon = 195.2
+
+[reference]
+velocity = 1.56e-3                # m/s, crossflow
+length = 1.0                      # m, slot width d (mesh unit)
+temperature = 300.0
+
+[initial]
+restart = "output/jet_crossflow_species/jet_crossflow_species.backup_000035.npz"   # last backup of phase 1
+
+[boundary.inlet]
+type = "velocity-inlet"
+velocity = [1.56e-3, 0.0]
+temperature = 300.0
+mass_fraction = [0.03, 0.0]       # H2, CO2
+
+[boundary.slot]
+type = "velocity-inlet"
+velocity = [1.56e-3, 2.702e-3]    # jet at 60 deg to the wall, |V_j|/U = 2
+temperature = 300.0
+mass_fraction = [0.0, 0.5]
+
+[boundary.plate]
+type = "wall"
+
+[boundary.top]
+type = "farfield"
+velocity = 1.56e-3
+pressure = 0.0
+temperature = 300.0
+mass_fraction = [0.03, 0.0]
+
+[boundary.outlet]
+type = "pressure-outlet"
+pressure = 0.0
+
+[numerics]
+limiter = "venkatakrishnan-wang"  # second order, limited (the default scheme)
+
+[solver]
+residual_drop = 8.0
+max_iterations = 200
+
+[solver.linear_solver]
+ordering = "colamd"
+
+[output]
+directory = "output/jet_crossflow_species_second_order"
+force_boundaries = ["plate"]
+fields = ["velocity_magnitude", "pressure", "velocity", "mass_fraction_1", "mass_fraction_2", "density"]

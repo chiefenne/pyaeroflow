@@ -369,3 +369,61 @@ def solve_evaporating_plate(
     t_s, _, b = wet_bulb(species)
     out = _evaporation_result(problem, result, ["plate"], t_s, b, None)
     return out._replace(reference=kays_crawford_stanton(reynolds * out.x, prandtl))
+
+
+def multicomponent_tube_reference(path, length=1.0):
+    """Species fluxes of a multicomponent Stefan tube from its 1D equations.
+
+    Reads the case file ``path`` (a Stefan-flow wall at y = 0 with the mass
+    fractions ``Y_0`` of the transported species, a farfield at rest at y =
+    ``length`` with ``Y_L``; isothermal, bulk gas does not cross the surface)
+    and integrates the steady 1D equations with the thermodynamics of the
+    case: m_k = m Y_k + J_k(Y, dY/dx) constant for all species with
+    m = sum m_k (the bulk species has no net flux), by a boundary value
+    problem with the constants m_k as unknowns. It tests the discretisation,
+    the boundary conditions and the non-dimensionalisation of the solver
+    with any diffusion model and mixture rule, not the model itself.
+
+    Returns the mass fluxes m_k into the fluid in kg/(s m).
+    """
+    import jax
+    import jax.numpy as jnp
+    from scipy.integrate import solve_bvp
+
+    from pyaeroflow.config import load_case
+    from pyaeroflow.run import setup
+
+    config = load_case(path)
+    problem, scaling, _, _ = setup(config)
+    thermo = problem.model.thermo
+    b = config.data["boundary"]
+    y0 = np.asarray(b["bottom"]["mass_fraction"], dtype=float)
+    y1 = np.asarray(b["top"]["mass_fraction"], dtype=float)
+    t = jnp.asarray(1.0)
+    n = y0.size
+
+    def gradient(y, m_k):
+        """dY/dx with J_k(Y, g) = m_k - m Y_k; J is linear in the gradient."""
+        y = jnp.asarray(y)
+        j0 = th.diffusion_flux(thermo, t, y, jnp.zeros(n))
+        matrix = jax.jacfwd(lambda g: th.diffusion_flux(thermo, t, y, g))(jnp.zeros(n))
+        m = jnp.sum(m_k)
+        return jnp.linalg.solve(matrix, m_k - m * y - j0)
+
+    rhs_one = jax.jit(gradient)
+
+    def rhs(x, y, p):
+        out = [np.asarray(rhs_one(y[:, i], p)) for i in range(y.shape[1])]
+        return np.stack(out, axis=1)
+
+    def bc(ya, yb, p):
+        return np.concatenate((ya - y0, yb - y1))
+
+    # flux of the Stefan tube of the total vapour as the starting guess
+    x = np.linspace(0.0, length / scaling.length, 41)
+    m0 = float(np.sum(y0)) * 0.1
+    guess = np.array([y0[k] + (y1[k] - y0[k]) * x / x[-1] for k in range(n)])
+    sol = solve_bvp(rhs, bc, x, guess, p=np.full(n, m0 * 0.1), tol=1e-9, max_nodes=4000)
+    if not sol.success:
+        raise RuntimeError(f"reference boundary value problem failed: {sol.message}")
+    return np.asarray(sol.p) * scaling.density * scaling.velocity

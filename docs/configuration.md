@@ -251,8 +251,13 @@ file (either byte order). Formats 1 and 3 are rejected; export the mesh as
 | `operating_pressure` | float | `101325` | `density_model = "ideal_gas"`: thermodynamic pressure p_th in Pa (constant, or the fill pressure of a closed domain) | |
 | `thermodynamic_pressure` | `"auto"` \| `"constant"` \| `"closed"` | `"auto"` | `density_model = "ideal_gas"`: `"constant"` keeps p_th = `operating_pressure`; `"closed"`: closed domain, p_th follows from the total mass of the gas filled at `operating_pressure` and `initial.temperature` (default `reference.temperature`), so that the mass is conserved (stage V3); `"auto"`: `"closed"` when no boundary exchanges mass (walls, slip walls, symmetry, periodic, transpiration walls at zero velocity), else `"constant"` | |
 | `thermal_expansion` | float | 1/`reference.temperature` | `density_model = "boussinesq"`: β in 1/K | |
-| `species` | array of tables | – | Energy equation, laminar: transported species of a mixture, one `[[fluid.species]]` table each; the fluid of the case is the bulk species. Keys: `name`; `molar_mass` (kg/kmol, default that of the fluid); `diffusivity` (m²/s in the fluid at the reference temperature and operating pressure) with the optional `diffusivity_exponent` n (D ∝ Tⁿ), or `schmidt` (ρD = μ/Sc); optional `specific_heat` (J/(kg K), default that of the fluid), `formation_enthalpy` (J/kg, relative to the fluid) and `expansion` (`boussinesq`: β_Y = −(1/ρ) ∂ρ/∂Y). See [Species](#species-mixtures-and-mass-transfer) | S1 |
+| `species` | array of tables | – | Energy equation, laminar: transported species of a mixture, one `[[fluid.species]]` table each; the fluid of the case is the bulk species. Keys: `name`; `molar_mass` (kg/kmol, default that of the fluid); `diffusivity` (m²/s in the fluid at the reference temperature and operating pressure) with the optional `diffusivity_exponent` n (D ∝ Tⁿ), or `schmidt` (ρD = μ/Sc); optional `specific_heat` (J/(kg K), default that of the fluid), `formation_enthalpy` (J/kg, relative to the fluid) and `expansion` (`boussinesq`: β_Y = −(1/ρ) ∂ρ/∂Y); mixture rules (S2): `viscosity` (Pa s at the reference temperature, optional `viscosity_exponent`), `conductivity` (W/(m K), optional `conductivity_exponent`), `lennard_jones_sigma` (Å) and `lennard_jones_epsilon` (ε/k in K) for the Chapman-Enskog viscosity and D_jk. See [Species](#species-mixtures-and-mass-transfer) | S1 |
 | `molar_mass` | float | 8314.46/`gas_constant` | Molar mass of the fluid (the bulk species) in kg/kmol | S1 |
+| `diffusion_model` | `"fick"` \| `"hirschfelder-curtiss"` | `"fick"` | `fluid.species`: `"fick"` (each species' `diffusivity` or `schmidt`, correction velocity) or `"hirschfelder-curtiss"` (multicomponent, mole-fraction gradients, mixture-averaged D_k,m from the binary coefficients D_jk of all pairs). See [Species](#species-mixtures-and-mass-transfer) | S2 |
+| `mixture_viscosity` | `"bulk"` \| `"wilke"` | `"bulk"` | `fluid.species`: μ of the fluid, or Wilke's rule with the viscosity of every species (`viscosity` or Lennard-Jones data) | S2 |
+| `mixture_conductivity` | `"bulk"` \| `"mathur"` | `"bulk"` | `fluid.species`: k of the fluid, or Mathur's rule with the conductivity of every species (`conductivity`, else μ_i c_p,i / Pr of the fluid) | S2 |
+| `lennard_jones_sigma`, `lennard_jones_epsilon` | float | – | Lennard-Jones collision diameter σ (Å) and well depth ε/k (K) of the fluid (the bulk species) for the Chapman-Enskog coefficients | S2 |
+| `binary_diffusion` | array of tables | – | `hirschfelder-curtiss`: explicit D_jk, one `[[fluid.binary_diffusion]]` per pair: `species = ["bulk", "water"]` (the fluid is `"bulk"`), `diffusivity` (m²/s at the reference temperature and operating pressure), optional `exponent` n (D ∝ Tⁿ). Pairs without an entry use Chapman-Enskog | S2 |
 | `viscosity_model` | string | `"sutherland"` (compressible), `"constant"` | μ(T). Compressible flow: `"sutherland"` or `"constant"`. Energy equation also `"power-law"`, `"polynomial"`, `"table"`; parameters in `viscosity_parameters` | |
 | `viscosity_parameters` | table | – | `sutherland`: `{ temperature = S }` (K, default `sutherland_temperature`); `power-law`: `{ exponent = n }`, μ = μ_ref (T/T_ref)^n; `polynomial`: `{ coefficients = [a0, a1, …] }`, μ = Σ a_i T^i with T in K (μ_ref follows, `viscosity` must not be set); `table`: `{ temperature = […], value = […] }`, linear in between, constant outside | |
 | `specific_heat` | float | γ R/(γ − 1) | Energy equation: c_p at the reference temperature in J/(kg K) | |
@@ -565,8 +570,8 @@ and has the mass fraction 1 − Σ Y_k.
   for species with the c_p of the fluid.
 - Density: `ideal_gas` ρ = p_th W/(R T) with 1/W = Σ Y_k/W_k (R is the gas
   constant of the fluid); `boussinesq` ρ₀(1 − β(T − T_ref) − Σ β_Y,k Y_k);
-  `constant`: passive species. μ and k are those of the fluid (mixture rules
-  are stage S2).
+  `constant`: passive species. μ and k are those of the fluid unless the
+  mixture rules of stage S2 are selected (below).
 - Diffusion: Fick's law with a correction velocity, J_k = −ρ D_k ∇Y_k +
   Y_k Σ_j ρ D_j ∇Y_j (sum over all species with the bulk), so that the fluxes
   sum to zero. With one species this is Fick's law of a binary mixture,
@@ -616,9 +621,36 @@ and has the mass fraction 1 − Σ Y_k.
   (m L, W/m²); at an evaporating wall `T` is the surface temperature and
   `q_w` the heat conducted into the gas; the log Summary gives the mass flow
   of every species into the fluid per force boundary in kg/(s m).
-- Not yet (stage S2 and later): mixture rules for μ and k, mole-fraction
-  driven multicomponent diffusion, evaporation of several species at one
-  surface, chemistry. The mass fractions are not clipped to [0, 1].
+- Multicomponent diffusion (stage S2), `fluid.diffusion_model =
+  "hirschfelder-curtiss"`. The flux is driven by the mole-fraction gradients
+  of Hirschfelder and Curtiss, j_k = −ρ D_k,m (∇Y_k + Y_k ∇ln W) (W the molar
+  mass of the mixture; this is −ρ D_k,m (W_k/W) ∇X_k) with the
+  mixture-averaged D_k,m = (1 − X_k)/Σ_{j≠k} X_j/D_jk over all species
+  including the bulk, and a correction velocity, J_k = j_k − Y_k Σ_j j_j, so
+  that the fluxes sum to zero. RANS adds μ_t/Sc_t,k as before. With two species
+  this is Fick's law with D_12 exactly; with equal D_jk it is Fick's law with
+  that D and equals the Stefan-Maxwell solution; with unequal D_jk it is an
+  approximation of the Stefan-Maxwell equations (errors of several percent,
+  larger for light species such as H₂; thermal and pressure diffusion are
+  not included). Every pair (j, k) needs D_jk: an entry of `fluid.binary_diffusion`
+  or the Chapman-Enskog value D = 0.00266 T^1.5/(p M_jk^0.5 σ_jk² Ω_D) (Poling,
+  Prausnitz and O'Connell; σ_jk = (σ_j + σ_k)/2, ε_jk = √(ε_j ε_k), Ω_D of
+  Neufeld, Janzen and Aziz) from the `lennard_jones_*` data of the two
+  species (those of the fluid are `fluid.lennard_jones_*`). The species
+  need no `diffusivity` or `schmidt`.
+- Mixture μ and k (stage S2): `mixture_viscosity = "wilke"` (μ = Σ X_i μ_i /
+  Σ_j X_j Φ_ij) needs μ_i(T) of all species: `viscosity` (with the optional
+  `viscosity_exponent`) or the Chapman-Enskog viscosity of the Lennard-Jones
+  data (the bulk has that of the fluid). `mixture_conductivity = "mathur"` (k
+  = ½ (Σ X_i k_i + 1/Σ X_i/k_i)) takes `conductivity` of the species, else
+  μ_i c_p,i/Pr with the Prandtl number of the fluid (and mixture c_p in the
+  turbulent conductivity). The mole fractions of the rules and of D_k,m are
+  taken from mass fractions limited to ≥ 0 (the mass fractions themselves are
+  not clipped).
+- Not yet (stage S3 and later): evaporation of several species at one
+  surface, thermal diffusion (Soret), chemistry. The mass fractions are not
+  clipped to [0, 1].
+
 
 Validation (`docs/validation.md` §20): Stefan tube evaporation rate within
 0.004 % of the exact value, thermosolutal cavity Sh = Nu = 4.521 (de Vahl

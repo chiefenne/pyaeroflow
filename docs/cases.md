@@ -48,6 +48,8 @@ Validation sections are in [Validation](validation.md), pictures in the
 |---|---|---|---|---|
 | `jet_crossflow.toml` | laminar | template `jet-crossflow` | normal jet in crossflow, Re_d 100, velocity ratio 2 | gallery 5 |
 | `jet_crossflow_inclined.toml` | laminar | template `jet-crossflow-inclined` | the same jet inclined at 60° | gallery 5 |
+| `jet_crossflow_species.toml` | laminar, energy, 3 species | template `jet-crossflow-species` (15k cells) | phase 1 (first order) of the CO₂ jet into an H₂–N₂ crossflow, multicomponent diffusion | gallery 11, recipe 22 |
+| `jet_crossflow_species_second_order.toml` | laminar, energy, 3 species | library `jet-crossflow` (as phase 1) | phase 2: restart from phase 1 with the limited second-order scheme | gallery 11 |
 | `heated_cylinder_re40.toml` | laminar, energy | library `cylinder-ogrid` (n_radial 72, 60 radii) | heated cylinder at Re 40, mean Nu against Lange et al. | gallery 9, validation §19 |
 | `cylinder_euler.toml` | Euler | template `cylinder-euler` | inviscid cylinder, pressure against the potential solution | validation §3 |
 | `naca0012_re1000_a20_spinup.toml` | laminar, unsteady | template `naca0012-shedding` | NACA 0012 at Re 1000, α 20°: vortex shedding, first phase | gallery 1 |

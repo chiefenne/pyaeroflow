@@ -787,14 +787,15 @@ def fds_flux(model, w_l, w_r, normal, beta2):
     return central - 0.5 * dissipation(model, w_m, w_r - w_l, normal, beta2)
 
 
-def viscous_flux(model, grad, t_f, normal, heat=True):
+def viscous_flux(model, grad, t_f, normal, heat=True, y_f=None):
     """-(0, tau.n, k grad T.n) for face gradients grad (n, 4, 2) and face T.
 
-    ``heat`` (bool or bool array) False drops the conduction.
+    ``heat`` (bool or bool array) False drops the conduction. ``y_f``: face
+    mass fractions of the mixture rules of mu and k (stage S2).
     """
-    mu = th.viscosity(model.thermo, t_f)
+    mu = th.viscosity(model.thermo, t_f, y_f)
     flow = inc.viscous_flux(model, grad[:, U : V + 1], normal, mu)
-    k = th.conductivity(model.thermo, t_f)
+    k = th.conductivity(model.thermo, t_f, y_f)
     q = k * jnp.einsum("nk,nk->n", grad[:, T, :], normal)
     q = jnp.where(heat, q, 0.0)
     return jnp.concatenate((flow, -q[:, None]), axis=1)
@@ -824,7 +825,8 @@ def boundary_viscous_flux(model, bc, grad, w_b, normal, details=False):
     k = bc.kind
     wall = k == WALL
     conduct = ~((wall & (bc.thermal != ISOTHERMAL)) | (k == SYMMETRY))
-    flux = viscous_flux(model, grad, w_b[:, T], normal, heat=conduct)
+    y_b = w_b[:, T + 1 :] if model.thermo.species else None
+    flux = viscous_flux(model, grad, w_b[:, T], normal, heat=conduct, y_f=y_b)
     prescribed = wall & (bc.thermal == HEAT_FLUX)
     flux = flux.at[:, T].set(jnp.where(prescribed, -bc.heat_flux, flux[:, T]))
     if bc.species is None:
@@ -922,7 +924,7 @@ def boundary_species_flux(
         rho_d = th.density_diffusivity(tm, t_b, y_b)[:, 0]
         if turbulent is not None:
             rho_d = rho_d + turbulent[:, 0]
-        k_eff = th.conductivity(tm, t_b) if conductivity is None else conductivity
+        k_eff = th.conductivity(tm, t_b, y_b) if conductivity is None else conductivity
         t_e, y_e, j_e, m_e = evaporation_state(model, bc, t_b, y_b, rho_d, k_eff)
         # j above is J.n with n out of the fluid: the flux into it is -J.n.
         j = jnp.where(evaporating[:, None], -j_e[:, None], j)
@@ -1024,9 +1026,11 @@ def residual(model, geom, bc, w, order, beta2, psi=None):
     g_f = interior_face_gradient(geom, w, grad, model.viscous_gradient, model.alpha)
     g_b = boundary_face_gradient(geom, w, w_b, grad, model.viscous_gradient)
     t_f = 0.5 * (w[geom.f_owner, T] + w[geom.f_neigh, T])
-    v_flux = viscous_flux(model, g_f, t_f, geom.f_normal)
+    y_f = None
     if model.thermo.species:
         y_f = 0.5 * (w[geom.f_owner, T + 1 :] + w[geom.f_neigh, T + 1 :])
+    v_flux = viscous_flux(model, g_f, t_f, geom.f_normal, y_f=y_f)
+    if model.thermo.species:
         j_f = species_flux(model, g_f, t_f, y_f, geom.f_normal)
         v_flux = _with_species(model, v_flux, j_f, t_f)
     f_flux = f_flux + v_flux
@@ -1089,9 +1093,13 @@ def interior_flux(model, beta2, w_o, w_n, normal, delta):
         coeff = dn / jnp.dot(delta, delta)
     g = (coeff * (w_n - w_o))[:, None] * normal[None, :]
     t_f = 0.5 * (w_o[T] + w_n[T])
-    flux = viscous_flux(model, g[None], t_f[None], normal[None])
+    y_f = None
     if model.thermo.species:
         y_f = 0.5 * (w_o[T + 1 :] + w_n[T + 1 :])
+    flux = viscous_flux(
+        model, g[None], t_f[None], normal[None], y_f=None if y_f is None else y_f[None]
+    )
+    if model.thermo.species:
         j = species_flux(model, g[None], t_f[None], y_f[None], normal[None])
         flux = _with_species(model, flux, j, t_f[None])
     return conv + flux[0]
@@ -1131,8 +1139,8 @@ def _diffusivity(model, t, y=None):
         kappa = th.conductivity(tm, t) / (rho * th.specific_heat(tm, t))
         return jnp.maximum(nu, kappa)
     rho = th.density(tm, t, y)
-    nu = th.viscosity(tm, t) / rho
-    kappa = th.conductivity(tm, t) / (rho * th.specific_heat(tm, t, y))
+    nu = th.viscosity(tm, t, y) / rho
+    kappa = th.conductivity(tm, t, y) / (rho * th.specific_heat(tm, t, y))
     d = jnp.max(th.density_diffusivity(tm, t, y), axis=-1) / rho
     return jnp.maximum(jnp.maximum(nu, kappa), d)
 
@@ -1249,7 +1257,8 @@ def conservative_blocks(model, geom, w, row_scale):
 
 def wall_traction(model, grad, w_b, normal):
     """tau.n on boundary faces (n, 2) with mu of the boundary temperature."""
-    mu = th.viscosity(model.thermo, w_b[:, T])
+    y_b = w_b[:, T + 1 :] if model.thermo.species else None
+    mu = th.viscosity(model.thermo, w_b[:, T], y_b)
     return -inc.viscous_flux(model, grad[:, U : V + 1], normal, mu)[:, 1:]
 
 
@@ -1289,7 +1298,8 @@ def wall_temperature(model, geom, bc, w):
     q = details["conduction"]
     t_c = w[geom.b_owner, T]
     dn = jnp.einsum("fk,fk->f", geom.b_delta, geom.b_normal)
-    k = th.conductivity(model.thermo, t_c)
+    y_c = w[geom.b_owner, T + 1 :] if model.thermo.species else None
+    k = th.conductivity(model.thermo, t_c, y_c)
     walls = (bc.kind == WALL) & (bc.thermal != ISOTHERMAL)
     return jnp.where(walls, t_c + q * dn / k, w_b[:, T])
 
@@ -1351,7 +1361,7 @@ def cell_properties(model, w, geom=None):
     rho, _, _, cp = _properties(model, t, y)
     return {
         "density": np.asarray(rho),
-        "viscosity": np.asarray(th.viscosity(tm, t)),
-        "conductivity": np.asarray(th.conductivity(tm, t)),
+        "viscosity": np.asarray(th.viscosity(tm, t, y)),
+        "conductivity": np.asarray(th.conductivity(tm, t, y)),
         "specific_heat": np.asarray(cp),
     }

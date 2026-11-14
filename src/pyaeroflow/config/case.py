@@ -1,6 +1,7 @@
 """Reading, validating and resolving a TOML case file (D27-D33, D38, D39)."""
 
 import difflib
+import itertools
 import math
 import tomllib
 from pathlib import Path
@@ -941,6 +942,12 @@ SPECIES_KEYS = (
     "antoine_c",
     "saturation_pressure",
     "saturation_temperature",
+    "viscosity",
+    "viscosity_exponent",
+    "conductivity",
+    "conductivity_exponent",
+    "lennard_jones_sigma",
+    "lennard_jones_epsilon",
 )
 SATURATION_KEYS = {
     "antoine": ("antoine_a", "antoine_b", "antoine_c"),
@@ -967,6 +974,13 @@ def _species_rules(data, boundaries, energy, problems):
                     problems.append(f"boundary.{name}.{key}: needs fluid.species")
         if data["initial"]["mass_fraction"] is not None:
             problems.append("initial.mass_fraction: needs fluid.species")
+        for key, default in (
+            ("diffusion_model", "fick"),
+            ("mixture_viscosity", "bulk"),
+            ("mixture_conductivity", "bulk"),
+        ):
+            if fluid[key] != default:
+                problems.append(f"fluid.{key}: needs fluid.species")
         return
     if not energy:
         problems.append(
@@ -995,9 +1009,19 @@ def _species_rules(data, boundaries, energy, problems):
             ):
                 problems.append(f"{dotted}.{key}: expected a number, got {value!r}")
                 sp[key] = None
-        if (sp.get("diffusivity") is None) == (sp.get("schmidt") is None):
+        hc = fluid["diffusion_model"] == "hirschfelder-curtiss"
+        if not hc and (sp.get("diffusivity") is None) == (sp.get("schmidt") is None):
             problems.append(f"{dotted}: give either diffusivity or schmidt")
-        for key in ("molar_mass", "diffusivity", "schmidt", "specific_heat"):
+        for key in (
+            "molar_mass",
+            "diffusivity",
+            "schmidt",
+            "specific_heat",
+            "viscosity",
+            "conductivity",
+            "lennard_jones_sigma",
+            "lennard_jones_epsilon",
+        ):
             if sp.get(key) is not None and sp[key] <= 0.0:
                 problems.append(f"{dotted}.{key}: must be > 0")
         sp.setdefault("molar_mass", fluid["molar_mass"])
@@ -1017,6 +1041,7 @@ def _species_rules(data, boundaries, energy, problems):
                 for key in ("saturation_pressure", "saturation_temperature"):
                     if sp.get(key) is not None and sp[key] <= 0.0:
                         problems.append(f"{dotted}.{key}: must be > 0")
+    _mixture_rules(fluid, species, names, problems)
     n = len(species)
     entries = [(f"boundary.{name}", b) for name, b in boundaries.items()]
     entries.append(("initial", data["initial"]))
@@ -1054,6 +1079,85 @@ def _species_rules(data, boundaries, energy, problems):
         problems.append(
             "fluid.thermodynamic_pressure = closed: evaporating walls add mass"
         )
+
+
+def _has_lennard_jones(entry):
+    return (
+        entry.get("lennard_jones_sigma") is not None
+        and entry.get("lennard_jones_epsilon") is not None
+    )
+
+
+def _mixture_rules(fluid, species, names, problems):
+    """Rules of the multicomponent models (stage S2) of fluid.species.
+
+    hirschfelder-curtiss needs the binary coefficient of every pair of
+    species (the fluid is "bulk"): an entry of fluid.binary_diffusion or the
+    Lennard-Jones data of both; wilke every species' viscosity (viscosity or
+    Lennard-Jones data); mathur a conductivity of every species (or the
+    viscosity and the Prandtl law of the fluid).
+    """
+    bulk = {
+        "lennard_jones_sigma": fluid["lennard_jones_sigma"],
+        "lennard_jones_epsilon": fluid["lennard_jones_epsilon"],
+    }
+    pairs = {}
+    for i, entry in enumerate(fluid["binary_diffusion"] or []):
+        dotted = f"fluid.binary_diffusion[{i}]"
+        pair = entry.get("species")
+        if (
+            not isinstance(pair, list)
+            or len(pair) != 2
+            or pair[0] == pair[1]
+            or any(p != "bulk" and p not in names for p in pair)
+        ):
+            problems.append(
+                f"{dotted}.species: expected two different names of fluid.species "
+                'or "bulk"'
+            )
+            continue
+        if not isinstance(entry.get("diffusivity"), int | float) or not (
+            entry["diffusivity"] > 0.0
+        ):
+            problems.append(f"{dotted}.diffusivity: a number > 0 is required")
+        pairs[frozenset(pair)] = entry
+    if fluid["diffusion_model"] == "hirschfelder-curtiss":
+        everyone = {"bulk": bulk} | {sp.get("name"): sp for sp in species}
+        for a, b in itertools.combinations(everyone, 2):
+            if frozenset((a, b)) in pairs:
+                continue
+            if not all(_has_lennard_jones(everyone[x]) for x in (a, b)):
+                problems.append(
+                    f"fluid.diffusion_model = hirschfelder-curtiss: pair ({a}, {b}) "
+                    "needs a fluid.binary_diffusion entry or lennard_jones_sigma "
+                    "and lennard_jones_epsilon of both (the fluid's are "
+                    "fluid.lennard_jones_*)"
+                )
+    elif pairs:
+        problems.append(
+            "fluid.binary_diffusion: needs diffusion_model = hirschfelder-curtiss"
+        )
+    wilke = fluid["mixture_viscosity"] == "wilke"
+    mathur = fluid["mixture_conductivity"] == "mathur"
+    for i, sp in enumerate(species):
+        dotted = f"fluid.species[{i}]"
+        has_mu = sp.get("viscosity") is not None or _has_lennard_jones(sp)
+        if (wilke or mathur) and not has_mu and sp.get("conductivity") is None:
+            problems.append(
+                f"{dotted}: the mixture rules need viscosity (or lennard_jones_sigma "
+                "and lennard_jones_epsilon)" + (" or conductivity" if mathur else "")
+            )
+        elif wilke and not has_mu:
+            problems.append(f"{dotted}: mixture_viscosity wilke needs a viscosity")
+        elif (
+            mathur
+            and sp.get("conductivity") is None
+            and fluid["conductivity_model"] != "prandtl"
+        ):
+            problems.append(
+                f"{dotted}: mixture_conductivity mathur needs a conductivity "
+                "(or fluid.conductivity_model = prandtl)"
+            )
 
 
 def _energy_rules(data, boundaries, farfields, problems, notices):
