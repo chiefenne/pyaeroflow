@@ -40,7 +40,7 @@ Click a case to jump to its section; each section ends with a link back here.
 | L1 C4 | [Compressible SST: TMR flat plate M 0.2, NACA 0012 M 0.15](#sec-15) | verification/validation | NASA TMR SST (CFL3D) | `pyaeroflow run examples/cases/naca0012_sst_m015.toml` |
 | IBL (1.7) | [Viscous panel method `pyaeroflow foil`: mfoil, E387, SD7003](#sec-18) | verification/validation | mfoil (corrected copy), NASA TM 4062, Penn State 2007, XFOIL | `python examples/ibl_validation.py` |
 | V1 / V2 / V3 (1.8) | [Incompressible energy equation: cavity, heated plates (laminar, variable properties, turbulent), cylinder, channel, non-Boussinesq closed cavity](#sec-19) | verification/validation | de Vahl Davis 1983, Pohlhausen and Howarth–Levy–Lees similarity, Lange et al. 1998, Shah & London, Kays & Crawford, Le Quéré et al. 2005 | `pyaeroflow.cases.heat_transfer`, `tests/verification/test_heat_transfer.py`, `tests/unit/test_closed_domain.py` (case files: `examples/cases/` and the project folder `cases/variable_density_v1/`, `variable_density_v2/`, `closed_domain_v3/`) |
-| S1, S1b | [Species in the energy solver: Stefan tube, thermosolutal cavity, mass-transfer plate, evaporating surfaces with RANS](#sec-20) | verification/validation | exact solution of the Stefan tube, de Vahl Davis 1983 (Lewis number 1), Pohlhausen similarity with Sc, exact wet-bulb temperature (Le = 1), Kays & Crawford | `pyaeroflow.cases.mass_transfer`, `tests/verification/test_mass_transfer.py`, `tests/unit/test_species.py` (case files: project folder `cases/species_s1/`, `cases/species_s1b/`) |
+| S1, S1b, S2 | [Species in the energy solver: Stefan tube, thermosolutal cavity, mass-transfer plate, evaporating surfaces with RANS, multicomponent diffusion](#sec-20) | verification/validation | exact solution of the Stefan tube, de Vahl Davis 1983 (Lewis number 1), Pohlhausen similarity with Sc, exact wet-bulb temperature (Le = 1), Kays & Crawford, exact ternary Stefan tube (equal D_jk), 1D boundary value problem of the kinetic-theory mixture | `pyaeroflow.cases.mass_transfer`, `tests/verification/test_mass_transfer.py`, `tests/unit/test_species.py`, `tests/unit/test_multicomponent.py` (case files: project folder `cases/species_s1/`, `cases/species_s1b/`, `cases/species_s2/`) |
 
 The figures are committed under `docs/figures/`; `examples/output/` (where
 the scripts write) is not tracked.
@@ -1570,7 +1570,7 @@ including the global p_th coupling (`tests/unit/test_closed_domain.py`).
 
 <a id="sec-20"></a>
 
-## 20. Species: mixtures and mass transfer (stages S1, S1b)
+## 20. Species: mixtures and mass transfer (stages S1, S1b, S2)
 
 `[[fluid.species]]` (configuration: [Species](configuration.md#species-mixtures-and-mass-transfer)).
 Script: `pyaeroflow.cases.mass_transfer`; tests
@@ -1586,6 +1586,8 @@ and `tests/unit/test_species.py`; case files in the project folder
 | laminar plate with mass transfer, Sc = 0.6 | fixed-Y wall, convection and diffusion | Pohlhausen similarity with Sc | Sh_x +0.3 to +1.5 % |
 | evaporating Stefan tube, Le = 1 | saturation law, latent heat in the surface balance, Stefan flow | exact (wet-bulb B, ln(1 + B)) | T_s exact to round-off, m −1.9·10⁻⁶ (16²) |
 | turbulent evaporating plate, SA and SST, Le = Le_t = 1 | Sc_t eddy diffusivity, evaporation under RANS | exact wet-bulb T_s; Kays & Crawford St_m | T_s exact to round-off; St_m −1…+8 % (SA), 0…+5 % (SST) |
+| ternary Stefan tube, equal D_jk (S2) | Hirschfelder-Curtiss with unequal molar masses, correction velocity, wall flux split | exact: N = (p/R_u T)(D/L) ln(1/(1 − X₀)), m_k = W_k N X_k0/X₀ (equal D_jk makes HC equal Stefan-Maxwell) | water +0.003 %, CO₂ +0.003 % (32²) |
+| H₂–CO₂–N₂ tube, kinetic theory (S2) | Chapman-Enskog D_jk, Wilke μ, Mathur k, Stefan flow | 1D boundary value problem of the same thermodynamics | H₂ −0.006 %, CO₂ −0.009 % (32²) |
 
 **Stefan tube.** A species evaporates from a surface at the bottom of a
 tube (Y₀ = 0.5, `stefan_flow = true`: the gas does not cross the surface)
@@ -1653,6 +1655,36 @@ transfer St_m = g/(ρ_∞ U), compared with Kays and Crawford's
 St_m is 1.5 % above the Stanton number of the heated SA plate of §19
 (the cooler surface, 0.94 T_∞, raises the density next to it); the rise
 towards the trailing edge is that of the heated plate.
+
+**Multicomponent diffusion (S2).** Both cases are Stefan tubes (a wall
+at the bottom with fixed mass fractions the bulk gas does not cross,
+a farfield at rest at the top, 32 × 32 cells, isothermal, 300 K, 1 atm,
+bulk N₂). *Ternary tube, equal D_jk*: water (Y = 0.15) and CO₂ (0.25)
+with D_jk = 2·10⁻⁵ m²/s for all three pairs. The Hirschfelder-Curtiss
+flux then equals Fick's law with D, which equals the Stefan-Maxwell
+solution, and the tube has the exact solution N = (p/R_u T)(D/L) ln(1/(1 −
+X₀)) (molar flux of both vapours, X₀ their summed mole fraction), split
+as m_k = W_k N X_k0/X₀: 4.37785·10⁻⁶ and 7.29642·10⁻⁶ kg/(s m); the
+solver gives 4.37798·10⁻⁶ and 7.29663·10⁻⁶ (+0.003 %). The molar
+masses differ by a factor of 2.4, so the −Y_k ∇ln W term and the
+correction velocity are tested. *H₂–CO₂–N₂ tube with kinetic theory*:
+Lennard-Jones data only (D_jk by Chapman-Enskog, Wilke μ, Mathur k),
+Y_H₂ = 0.03, Y_CO₂ = 0.40. There is no exact solution (the
+mixture-averaged diffusion is a model); the reference is the same 1D
+equations, m_k = m Y_k + J_k(Y, dY/dx) with a constant m_k, solved as a
+boundary value problem with the same thermodynamics
+(`pyaeroflow.cases.mass_transfer.multicomponent_tube_reference`):
+2.31254·10⁻⁶ and 1.17097·10⁻⁵ kg/(s m) against 2.3124·10⁻⁶ and
+1.17087·10⁻⁵ of the solver (−0.006 %, −0.009 %); 15 iterations (7
+Newton-Krylov). This checks the discretisation, the boundary conditions and
+the non-dimensionalisation, not the model. Unit tests: the Chapman-Enskog
+coefficients (N₂–O₂ 0.20 cm²/s, H₂–N₂ 0.78 cm²/s at 300 K, 1 atm) and
+viscosities (N₂, O₂, H₂) against tabulated values within 8 %, Wilke air
+at 18.6·10⁻⁶ Pa s, the binary limit equal to Fick's law, equal D_jk
+equal to the Stefan-Maxwell fluxes to 10⁻⁸, and the Stefan-Maxwell error of
+the mixture average for unequal D_jk (25 % for 5 % H₂ by mass; 35 %
+bound in the test). The S1 binary cases are unchanged to the last digit
+(the Stefan tube of this section gives the same log, 27 iterations).
 
 Not validated yet: more than one transported species in a flow (the unit
 tests check the fluxes and the Jacobian), species with different c_p

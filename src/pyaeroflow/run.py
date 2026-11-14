@@ -507,6 +507,9 @@ def _species(cfg, scaling):
     for sp in fluid["species"] or []:
         if sp.get("schmidt") is not None:
             diffusivity = th.PropertyLaw("schmidt", float(sp["schmidt"]))
+        elif sp.get("diffusivity") is None:
+            # hirschfelder-curtiss: the binary coefficients D_jk are used.
+            diffusivity = th.PropertyLaw("schmidt", 1.0)
         else:
             d = sp["diffusivity"] / (scaling.velocity * scaling.length)
             n = sp.get("diffusivity_exponent")
@@ -516,6 +519,7 @@ def _species(cfg, scaling):
                 else th.PropertyLaw("power-law", d, (float(n),))
             )
         cp = sp.get("specific_heat")
+        mu_law, k_law = _species_transport_laws(sp, fluid, scaling)
         out.append(
             th.Species(
                 name=sp["name"],
@@ -532,8 +536,98 @@ def _species(cfg, scaling):
                 latent_heat=(sp.get("latent_heat") or 0.0)
                 / (scaling.specific_heat * scaling.temperature),
                 saturation=_saturation(sp, fluid, scaling),
+                viscosity=mu_law,
+                conductivity=k_law,
             )
         )
+    return tuple(out)
+
+
+def _species_transport_laws(sp, fluid, scaling):
+    """Non-dimensional (viscosity, conductivity) laws of a species, or None.
+
+    Viscosity: ``viscosity`` (Pa s at the reference temperature, with the
+    optional ``viscosity_exponent``) or Chapman-Enskog from the Lennard-Jones
+    data; conductivity: ``conductivity`` (W/(m K), optional exponent) or None
+    (the Mathur rule then uses mu_i c_p,i / Pr).
+    """
+    t_ref = scaling.temperature
+    mu_law = k_law = None
+    if sp.get("viscosity") is not None:
+        n = sp.get("viscosity_exponent")
+        mu = sp["viscosity"] / scaling.viscosity
+        mu_law = (
+            th.PropertyLaw("constant", mu)
+            if n is None
+            else th.PropertyLaw("power-law", mu, (float(n),))
+        )
+    elif sp.get("lennard_jones_sigma") is not None and (
+        sp.get("lennard_jones_epsilon") is not None
+    ):
+        mu = th.kinetic_viscosity(
+            sp["molar_mass"],
+            sp["lennard_jones_sigma"],
+            sp["lennard_jones_epsilon"],
+            t_ref,
+        )
+        mu_law = th.PropertyLaw(
+            "kinetic-viscosity",
+            mu / scaling.viscosity,
+            (sp["lennard_jones_epsilon"] / t_ref,),
+        )
+    if sp.get("conductivity") is not None:
+        n = sp.get("conductivity_exponent")
+        k = sp["conductivity"] / scaling.conductivity
+        k_law = (
+            th.PropertyLaw("constant", k)
+            if n is None
+            else th.PropertyLaw("power-law", k, (float(n),))
+        )
+    return mu_law, k_law
+
+
+def _pair_diffusivities(cfg, scaling):
+    """Non-dimensional D_jk laws of all pairs of species (bulk = index 0).
+
+    Explicit ``fluid.binary_diffusion`` entries, else Chapman-Enskog from the
+    Lennard-Jones data (sigma_jk = (sigma_j + sigma_k) / 2, eps_jk =
+    sqrt(eps_j eps_k)) at the operating pressure; scaled by U_ref L_ref.
+    """
+    fluid = cfg["fluid"]
+    if fluid["diffusion_model"] != "hirschfelder-curtiss":
+        return ()
+    t_ref, p_op = scaling.temperature, fluid["operating_pressure"]
+    scale = scaling.velocity * scaling.length
+    bulk = {
+        "name": "bulk",
+        "molar_mass": fluid["molar_mass"],
+        "lennard_jones_sigma": fluid["lennard_jones_sigma"],
+        "lennard_jones_epsilon": fluid["lennard_jones_epsilon"],
+    }
+    everyone = [bulk] + list(fluid["species"])
+    explicit = {frozenset(e["species"]): e for e in fluid["binary_diffusion"] or []}
+    out = []
+    for j in range(len(everyone)):
+        for k in range(j + 1, len(everyone)):
+            a, b = everyone[j], everyone[k]
+            entry = explicit.get(frozenset((a["name"], b["name"])))
+            if entry is not None:
+                n = entry.get("exponent")
+                d = entry["diffusivity"] / scale
+                out.append(
+                    th.PropertyLaw("constant", d)
+                    if n is None
+                    else th.PropertyLaw("power-law", d, (float(n),))
+                )
+                continue
+            sigma = 0.5 * (a["lennard_jones_sigma"] + b["lennard_jones_sigma"])
+            eps = float(
+                np.sqrt(a["lennard_jones_epsilon"] * b["lennard_jones_epsilon"])
+            )
+            d = th.kinetic_diffusivity(
+                a["molar_mass"], b["molar_mass"], sigma, eps, t_ref, p_op
+            )
+            out.append(th.PropertyLaw("kinetic-diffusion", d / scale, (eps / t_ref,)))
     return tuple(out)
 
 
@@ -627,7 +721,15 @@ def _energy_model(cfg, base, mu_nd, scaling):
             scaling.conductivity,
         )
     thermo = th.Thermo(
-        dens, viscosity, conductivity, specific_heat, _species(cfg, scaling)
+        dens,
+        viscosity,
+        conductivity,
+        specific_heat,
+        _species(cfg, scaling),
+        diffusion_model=fluid["diffusion_model"],
+        mixture_viscosity=fluid["mixture_viscosity"],
+        mixture_conductivity=fluid["mixture_conductivity"],
+        pair_diffusivity=_pair_diffusivities(cfg, scaling),
     )
     g = physics["gravity"] or (0.0, 0.0)
     gravity = tuple(gi * scaling.length / scaling.velocity**2 for gi in g)
@@ -3101,16 +3203,16 @@ def _energy_rows(cfg, problem, scaling):
         ),
     ]
     for sp, nd in zip(fluid["species"] or [], m.thermo.species, strict=True):
-        diffusion = (
-            f"Sc {sp['schmidt']:g}"
-            if sp.get("schmidt") is not None
-            else f"D {sp['diffusivity']:g} m^2/s"
-            + (
+        if sp.get("schmidt") is not None:
+            diffusion = f"Sc {sp['schmidt']:g}"
+        elif sp.get("diffusivity") is None:
+            diffusion = "D_jk of the pairs"
+        else:
+            diffusion = f"D {sp['diffusivity']:g} m^2/s" + (
                 f" T^{sp['diffusivity_exponent']:g}"
                 if sp.get("diffusivity_exponent") is not None
                 else ""
             )
-        )
         rows.append(
             (
                 f"species '{sp['name']}'",
@@ -3119,6 +3221,15 @@ def _energy_rows(cfg, problem, scaling):
                 + (
                     "" if nd.specific_heat is None else f", c_p {sp['specific_heat']:g}"
                 ),
+            )
+        )
+    if fluid["species"]:
+        rows.append(
+            (
+                "mixture rules",
+                f"diffusion {fluid['diffusion_model']}, viscosity "
+                f"{fluid['mixture_viscosity']}, conductivity "
+                f"{fluid['mixture_conductivity']}",
             )
         )
     if any(m.gravity):

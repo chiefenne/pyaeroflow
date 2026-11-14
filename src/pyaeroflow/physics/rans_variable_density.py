@@ -131,7 +131,7 @@ def mean_index(n_var, ns=0):
 def cell_properties(model, t, y=None):
     """Density rho and nu = mu / rho at temperatures ``t`` (mass fractions ``y``)."""
     rho = th.density(model.thermo, t, y)
-    return rho, th.viscosity(model.thermo, t) / rho
+    return rho, th.viscosity(model.thermo, t, y) / rho
 
 
 def state_properties(model, w, ns=0):
@@ -164,7 +164,13 @@ def inflow_mask(bc, normal, w_b4):
 def _effective_conductivity(model, t_f, y_f, mu_t, distance):
     tm = model.thermo
     return th.effective_conductivity(
-        tm, model.turbulent_prandtl, t_f, th.density(tm, t_f, y_f), mu_t, distance
+        tm,
+        model.turbulent_prandtl,
+        t_f,
+        th.density(tm, t_f, y_f),
+        mu_t,
+        distance,
+        y_f,
     )
 
 
@@ -197,7 +203,7 @@ def energy_viscous_flux(
     enthalpy flux are appended.
     """
     tm = model.thermo
-    mu = th.viscosity(tm, t_f) + mu_t
+    mu = th.viscosity(tm, t_f, y_f) + mu_t
     flow = inc.viscous_flux(model, grad_v, normal, mu)
     k = _effective_conductivity(model, t_f, y_f, mu_t, distance)
     q = k * (grad_t[:, 0] * normal[:, 0] + grad_t[:, 1] * normal[:, 1])
@@ -309,7 +315,9 @@ def buoyancy_blocks(model, geom, w, blocks):
 
 def wall_traction(model, grad, w_b, normal):
     """tau.n on boundary faces (n, 2) with mu of the boundary temperature."""
-    mu = th.viscosity(model.thermo, w_b[:, t_column(w_b, n_species(model))])
+    tc = t_column(w_b, n_species(model))
+    y_b = w_b[:, tc + 1 :] if n_species(model) else None
+    mu = th.viscosity(model.thermo, w_b[:, tc], y_b)
     return -inc.viscous_flux(model, grad[:, U : V + 1], normal, mu)[:, 1:]
 
 

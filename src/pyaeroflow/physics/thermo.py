@@ -13,6 +13,8 @@ Property laws (:class:`PropertyLaw`), selectable per property (mu, k, c_p):
     polynomial    phi = sum_i a_i T^i                           (a_i scaled)
     table         phi linear between (T_j, phi_j), constant outside
     prandtl       k = mu(T) c_p(T) / Pr                         (conductivity only)
+    kinetic-viscosity  mu ~ sqrt(T) / Omega_mu(T / eps)    (Chapman-Enskog)
+    kinetic-diffusion  D ~ T^1.5 / Omega_D(T / eps_jk)     (Chapman-Enskog)
 
 The enthalpy h(T) = int_{T_ref}^{T} c_p dT is the exact integral of the
 c_p law (Gauss-Legendre quadrature for Sutherland's form), so that
@@ -44,6 +46,18 @@ functions take the mass fractions as the optional last argument ``y``
 
 D_k(T) is a property law at the operating pressure (rho D_k does not depend
 on the thermodynamic pressure) or ``schmidt``: rho D_k = mu / Sc_k.
+
+Multicomponent mixtures (stage S2, ``Thermo.diffusion_model`` etc.):
+
+    diffusion     ``hirschfelder-curtiss``: J_k = -rho D_k,m (dY_k + Y_k dln(W))
+                  - mu_t / Sc_t dY_k - Y_k sum_j (...) with the mixture-averaged
+                  D_k,m = (1 - X_k) / sum_{j != k} X_j / D_jk
+                  (the mole-fraction gradient form of Hirschfelder and Curtiss,
+                  a correction velocity makes the fluxes of all species sum to
+                  zero; the bulk species is index 0), D_jk binary coefficients
+                  (explicit laws or Chapman-Enskog from Lennard-Jones data)
+    mu            ``wilke``: sum_i X_i mu_i / sum_j X_j Phi_ij
+    k             ``mathur``: (sum_i X_i k_i + 1 / sum_i X_i / k_i) / 2
 
 Turbulent Prandtl number: one interface, :func:`turbulent_prandtl`, a JAX
 function of the local state (:class:`TurbulentPrandtlInputs`); built in is
@@ -148,6 +162,8 @@ class Species(NamedTuple):
     expansion: float = 0.0
     latent_heat: float = 0.0
     saturation: tuple = None
+    viscosity: PropertyLaw = None
+    conductivity: PropertyLaw = None
 
 
 class Thermo(NamedTuple):
@@ -156,6 +172,13 @@ class Thermo(NamedTuple):
     ``species`` are the transported species of a mixture (the fluid is then
     the bulk species); ``pressure_ratio`` is p_th / p_op of a closed domain
     with species (D_k is given at the operating pressure).
+
+    Stage S2: ``diffusion_model`` (``fick`` or ``hirschfelder-curtiss``),
+    ``mixture_viscosity`` (``bulk`` or ``wilke``) and ``mixture_conductivity``
+    (``bulk`` or ``mathur``); ``pair_diffusivity`` holds the binary
+    coefficients D_jk as :class:`PropertyLaw` of the pairs (j < k) of all
+    species, the bulk species being index 0, in the order (0,1), (0,2), ...,
+    (1,2), ... (rho D is evaluated at the operating pressure).
     """
 
     density: DensityModel = DensityModel()
@@ -164,6 +187,10 @@ class Thermo(NamedTuple):
     specific_heat: PropertyLaw = PropertyLaw("constant", 1.0)
     species: tuple = ()
     pressure_ratio: float = 1.0
+    diffusion_model: str = "fick"
+    mixture_viscosity: str = "bulk"
+    mixture_conductivity: str = "bulk"
+    pair_diffusivity: tuple = ()
 
 
 @jax.tree_util.register_static
@@ -251,7 +278,71 @@ def evaluate(law, t):
     if law.kind == "table":
         ts, vs = law.parameters
         return jnp.interp(t, jnp.asarray(ts), jnp.asarray(vs))
+    if law.kind in KINETIC_LAWS:
+        # Chapman-Enskog: value at T = 1, parameter eps / (k T_ref).
+        (eps,) = law.parameters
+        tp = jnp.maximum(t, 1e-12)
+        if law.kind == "kinetic-viscosity":
+            return (
+                law.value
+                * jnp.sqrt(tp)
+                * collision_integral_viscosity(1.0 / eps)
+                / collision_integral_viscosity(tp / eps)
+            )
+        return (
+            law.value
+            * tp**1.5
+            * collision_integral_diffusion(1.0 / eps)
+            / collision_integral_diffusion(tp / eps)
+        )
     raise ValueError(f"law '{law.kind}' has no direct evaluation")
+
+
+KINETIC_LAWS = ("kinetic-viscosity", "kinetic-diffusion")
+
+
+def collision_integral_diffusion(t_star):
+    """Omega_D(T*) of Neufeld, Janzen and Aziz (1972), Lennard-Jones 12-6."""
+    return (
+        1.06036 / t_star**0.15610
+        + 0.19300 * jnp.exp(-0.47635 * t_star)
+        + 1.03587 * jnp.exp(-1.52996 * t_star)
+        + 1.76474 * jnp.exp(-3.89411 * t_star)
+    )
+
+
+def collision_integral_viscosity(t_star):
+    """Omega_mu(T*) = Omega_(2,2)* of Neufeld, Janzen and Aziz (1972)."""
+    return (
+        1.16145 / t_star**0.14874
+        + 0.52487 * jnp.exp(-0.77320 * t_star)
+        + 2.16178 * jnp.exp(-2.43787 * t_star)
+    )
+
+
+def kinetic_viscosity(molar_mass, sigma, eps_over_k, t):
+    """Chapman-Enskog viscosity in Pa s: 2.6693e-6 sqrt(M T) / (sigma^2 Omega).
+
+    ``molar_mass`` in kg/kmol, ``sigma`` in Angstrom, ``eps_over_k`` and
+    ``t`` in K (numpy or float).
+    """
+    t_star = t / eps_over_k
+    omega = float(collision_integral_viscosity(t_star))
+    return 2.6693e-6 * np.sqrt(molar_mass * t) / (sigma**2 * omega)
+
+
+def kinetic_diffusivity(m1, m2, sigma, eps_over_k, t, pressure):
+    """Chapman-Enskog binary diffusion coefficient D_12 in m^2/s.
+
+    D = 0.00266 T^1.5 / (p sqrt(M_12) sigma_12^2 Omega_D) in cm^2/s with p in
+    bar and M_12 = 2 / (1 / M_1 + 1 / M_2) (Poling, Prausnitz, O'Connell);
+    ``sigma`` is sigma_12 in Angstrom, ``eps_over_k`` is eps_12 / k in K, ``t``
+    in K, ``pressure`` in Pa.
+    """
+    m12 = 2.0 / (1.0 / m1 + 1.0 / m2)
+    omega = float(collision_integral_diffusion(t / eps_over_k))
+    d_cm2 = 0.00266 * t**1.5 / (pressure / 1.0e5 * np.sqrt(m12) * sigma**2 * omega)
+    return d_cm2 * 1.0e-4
 
 
 def integral(law, t):
@@ -356,9 +447,85 @@ def density_species_derivative(thermo, t, y):
     raise ValueError(f"unknown density model '{d.kind}'")
 
 
-def viscosity(thermo, t):
-    """Dynamic viscosity mu(T)."""
-    return evaluate(thermo.viscosity, t)
+def mole_fractions(thermo, y, bounded=False):
+    """Mole fractions X of all species, (..., n + 1); index 0 is the bulk.
+
+    ``bounded``: mass fractions limited to >= 0 (the mixture rules and
+    D_k,m of the transient overshoots of Y, which is not clipped itself).
+    """
+    y = jnp.asarray(y)
+    yy = jnp.concatenate((1.0 - jnp.sum(y, axis=-1, keepdims=True), y), axis=-1)
+    if bounded:
+        yy = jnp.maximum(yy, 0.0)
+    inv_w = jnp.asarray([1.0] + [1.0 / s.molar_mass for s in thermo.species])
+    x = yy * inv_w
+    return x / jnp.maximum(jnp.sum(x, axis=-1, keepdims=True), 1e-30)
+
+
+def _molar_masses(thermo):
+    return jnp.asarray([1.0] + [s.molar_mass for s in thermo.species])
+
+
+def _pair_matrix(thermo, t):
+    """D_jk(T) of all pairs, shape t.shape + (n + 1, n + 1), the diagonal 1."""
+    n = len(thermo.species) + 1
+    t = jnp.asarray(t)
+    if len(thermo.pair_diffusivity) != n * (n - 1) // 2:
+        raise ValueError(
+            "diffusion_model hirschfelder-curtiss needs the binary diffusion "
+            f"coefficients of all {n * (n - 1) // 2} pairs (Thermo.pair_diffusivity)"
+        )
+    one = jnp.ones_like(t)
+    rows = [[one] * n for _ in range(n)]
+    pair = iter(thermo.pair_diffusivity)
+    for j in range(n):
+        for k in range(j + 1, n):
+            rows[j][k] = rows[k][j] = evaluate(next(pair), t)
+    return jnp.stack([jnp.stack(r, axis=-1) for r in rows], axis=-2)
+
+
+def mixture_diffusivity(thermo, t, y):
+    """D_k,m of all species (bulk first), shape t.shape + (n + 1,), at p_op.
+
+    D_k,m = sum_{j != k} X_j / sum_{j != k} X_j / D_jk = (1 - X_k) / sum_{j != k}
+    X_j / D_jk (Hirschfelder and Curtiss; Bird, Stewart, Lightfoot). For two
+    species it is the binary coefficient, for equal D_jk that coefficient. X_j
+    gets a floor of 1e-12 so that a pure species has a finite limit.
+    """
+    t = jnp.asarray(t)
+    x = mole_fractions(thermo, y, bounded=True) + 1e-12
+    n = x.shape[-1]
+    d = _pair_matrix(thermo, t)
+    off = 1.0 - jnp.eye(n)
+    den = jnp.einsum("...j,...kj->...k", x, off / d)
+    num = jnp.sum(x, axis=-1, keepdims=True) - x
+    return num / den
+
+
+def _species_viscosities(thermo, t):
+    """mu_i(T) of all species (bulk first), shape t.shape + (n + 1,)."""
+    laws = [thermo.viscosity] + [s.viscosity for s in thermo.species]
+    if any(law is None for law in laws):
+        raise ValueError("mixture viscosity wilke needs a viscosity of every species")
+    return jnp.stack([evaluate(law, t) for law in laws], axis=-1)
+
+
+def _wilke_matrix(mu, w):
+    """Phi_ij of Wilke's mixing rule for viscosities mu (..., N) and molar masses w."""
+    ratio = jnp.sqrt(mu[..., :, None] / mu[..., None, :])
+    wr = w[None, :] / w[:, None]  # W_j / W_i
+    return (1.0 + ratio * wr**0.25) ** 2 / jnp.sqrt(8.0 * (1.0 + 1.0 / wr))
+
+
+def viscosity(thermo, t, y=None):
+    """Dynamic viscosity mu(T) (``wilke``: of the mixture of composition ``y``)."""
+    if y is None or thermo.mixture_viscosity == "bulk" or not thermo.species:
+        return evaluate(thermo.viscosity, t)
+    t = jnp.asarray(t)
+    mu = _species_viscosities(thermo, t)
+    x = mole_fractions(thermo, y, bounded=True)
+    phi = _wilke_matrix(mu, _molar_masses(thermo))
+    return jnp.sum(x * mu / jnp.einsum("...j,...ij->...i", x, phi), axis=-1)
 
 
 def specific_heat(thermo, t, y=None):
@@ -423,7 +590,9 @@ def density_diffusivity(thermo, t, y):
     """
     t = jnp.asarray(t)
     rho = density(thermo, t, y) / thermo.pressure_ratio
-    mu = viscosity(thermo, t)
+    if thermo.diffusion_model == "hirschfelder-curtiss":
+        return rho[..., None] * mixture_diffusivity(thermo, t, y)[..., 1:]
+    mu = viscosity(thermo, t, y)
     return jnp.stack(
         [
             mu / s.diffusivity.value
@@ -472,7 +641,7 @@ def turbulent_schmidt_coefficients(thermo, sct_law, t, y, mu_t, wall_distance=No
     the molecular Schmidt number mu / (rho D_k) of the species.
     """
     rho = density(thermo, t, y)
-    mu = viscosity(thermo, t)
+    mu = viscosity(thermo, t, y)
     rho_d = density_diffusivity(thermo, t, y)
     nu = mu / rho
     d = jnp.zeros_like(t) if wall_distance is None else wall_distance
@@ -497,6 +666,8 @@ def diffusion_flux(thermo, t, y, grad_n, turbulent=None):
     added to rho D_k (RANS: mu_t / Sc_t,k).
     """
     y = jnp.asarray(y)
+    if thermo.diffusion_model == "hirschfelder-curtiss":
+        return _hirschfelder_curtiss_flux(thermo, t, y, grad_n, turbulent)
     rho_d = density_diffusivity(thermo, t, y)
     if turbulent is not None:
         rho_d = rho_d + turbulent
@@ -509,12 +680,63 @@ def diffusion_flux(thermo, t, y, grad_n, turbulent=None):
     return -fick + y * correction[..., None]
 
 
-def conductivity(thermo, t):
-    """Thermal conductivity k(T); ``prandtl``: mu(T) c_p(T) / Pr."""
+def _hirschfelder_curtiss_flux(thermo, t, y, grad_n, turbulent):
+    """J_k.n with the mole-fraction gradient form and a correction velocity.
+
+    j_k = -rho D_k,m (dY_k + Y_k dln W) - (mu_t / Sc_t,k) dY_k for all species
+    (the bulk: dY_0 = -sum dY_k, D_0,m, and the Y-weighted mu_t / Sc_t), the
+    flux J_k = j_k - Y_k sum_j j_j, so that the fluxes of all species sum to
+    zero. dln W = -d(1 / W) W, 1 / W = sum_j Y_j / W_j: the gradient of the
+    mole fractions is the gradient of the mass fractions plus the molar-mass
+    term. For two species this is Fick's law with D_12 exactly.
+    """
+    rho = density(thermo, t, y) / thermo.pressure_ratio
+    d_m = mixture_diffusivity(thermo, t, y)
+    rho_d = rho[..., None] * d_m  # (..., n + 1), bulk first
+    c = jnp.asarray([1.0 / s.molar_mass - 1.0 for s in thermo.species])
+    inv_w = 1.0 + jnp.sum(y * c, axis=-1)
+    dln_w = -jnp.sum(grad_n * c, axis=-1) / jnp.maximum(inv_w, 1e-12)
+    y0 = 1.0 - jnp.sum(y, axis=-1)
+    g0 = -jnp.sum(grad_n, axis=-1)
+    yy = jnp.concatenate((y0[..., None], y), axis=-1)
+    gg = jnp.concatenate((g0[..., None], grad_n), axis=-1)
+    j = -rho_d * (gg + yy * dln_w[..., None])
+    if turbulent is not None:
+        ay = jnp.abs(y)
+        t0 = jnp.sum(ay * turbulent, axis=-1) / (jnp.sum(ay, axis=-1) + 1e-30)
+        tt = jnp.concatenate((t0[..., None], turbulent), axis=-1)
+        j = j - tt * gg
+    return j[..., 1:] - y * jnp.sum(j, axis=-1, keepdims=True)
+
+
+def conductivity(thermo, t, y=None):
+    """Thermal conductivity k(T); ``prandtl``: mu(T) c_p(T) / Pr.
+
+    ``mathur`` with ``y``: (sum_i X_i k_i + 1 / sum_i X_i / k_i) / 2 of the
+    species conductivities (``Species.conductivity``, default mu_i c_p,i / Pr
+    of the fluid's Prandtl law).
+    """
     law = thermo.conductivity
-    if law.kind == "prandtl":
-        return viscosity(thermo, t) * specific_heat(thermo, t) / law.value
-    return evaluate(law, t)
+    if y is None or thermo.mixture_conductivity == "bulk" or not thermo.species:
+        if law.kind == "prandtl":
+            return viscosity(thermo, t) * specific_heat(thermo, t) / law.value
+        return evaluate(law, t)
+    t = jnp.asarray(t)
+    cp = specific_heat(thermo, t)
+    cps = [cp] + [cp + d for d in jnp.moveaxis(species_specific_heat(thermo, t), -1, 0)]
+    ks = [conductivity(thermo, t)]
+    for sp, c in zip(thermo.species, cps[1:], strict=True):
+        if sp.conductivity is not None:
+            ks.append(evaluate(sp.conductivity, t))
+        elif law.kind == "prandtl" and sp.viscosity is not None:
+            ks.append(evaluate(sp.viscosity, t) * c / law.value)
+        else:
+            raise ValueError(
+                f"mixture conductivity mathur needs a conductivity of species {sp.name}"
+            )
+    k = jnp.stack(ks, axis=-1)
+    x = mole_fractions(thermo, y, bounded=True)
+    return 0.5 * (jnp.sum(x * k, axis=-1) + 1.0 / jnp.sum(x / k, axis=-1))
 
 
 # -- turbulent Prandtl number --------------------------------------------------------
@@ -603,13 +825,16 @@ def turbulent_schmidt(law, inputs):
     return function(inputs, **dict(law.parameters))
 
 
-def effective_conductivity(thermo, prt_law, t, rho, mu_t=None, wall_distance=None):
+def effective_conductivity(
+    thermo, prt_law, t, rho, mu_t=None, wall_distance=None, y=None
+):
     """Effective conductivity k + c_p mu_t / Pr_t at the faces (k without mu_t)."""
-    k = conductivity(thermo, t)
+    k = conductivity(thermo, t, y)
     if mu_t is None:
         return k
-    mu = viscosity(thermo, t)
-    cp = specific_heat(thermo, t)
+    mu = viscosity(thermo, t, y)
+    # (the bulk-fluid c_p stays in the S1 mixture rules; mixture c_p with mathur)
+    cp = specific_heat(thermo, t, None if thermo.mixture_conductivity == "bulk" else y)
     nu = mu / rho
     inputs = TurbulentPrandtlInputs(
         t,
