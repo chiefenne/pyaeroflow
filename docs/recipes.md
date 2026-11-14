@@ -25,6 +25,7 @@ Pictures of complete cases are in the [Example gallery](gallery.md).
 19. [Heated walls: Nusselt and Stanton number](#heated-walls)
 20. [Your own turbulent Prandtl number](#prandtl-turbulent)
 21. [Temperature-dependent fluid properties](#properties)
+22. [Mixtures of three or more gases](#mixtures)
 
 ---
 
@@ -651,5 +652,55 @@ The enthalpy is the exact integral of the c_p law. A 600 K wall in air
 (`ideal_gas`, Sutherland) is a case where the properties matter: the
 Stanton number falls to 0.8 of the 3 K case. A laminar example with the
 similarity solution as reference: [validation §19](validation.md#sec-19-plate).
+
+[↑ back to top](#recipes)
+
+---
+
+<a id="mixtures"></a>
+## 22. Mixtures of three or more gases
+
+```
+pyaeroflow init jet-crossflow-species -o my_jet
+pyaeroflow run my_jet/jet_crossflow_species.toml
+```
+
+The fluid of the case is the carrier (the bulk gas, here N₂); every
+`[[fluid.species]]` table adds a transported gas with its mass fraction.
+For more than two gases (or for light gases such as H₂) switch on the
+multicomponent model and give each species its Lennard-Jones data:
+
+```toml
+[fluid]
+diffusion_model = "hirschfelder-curtiss"   # default "fick"
+mixture_viscosity = "wilke"                # default "bulk" = viscosity of the fluid
+mixture_conductivity = "mathur"            # default "bulk"
+lennard_jones_sigma = 3.798                # the fluid (bulk gas): Angstrom
+lennard_jones_epsilon = 71.4               # epsilon/k in K
+
+[[fluid.species]]
+name = "h2"
+molar_mass = 2.016
+lennard_jones_sigma = 2.827
+lennard_jones_epsilon = 59.7
+```
+
+The binary coefficients D_jk then come from Chapman-Enskog theory. Give a
+measured value for a pair instead with
+`[[fluid.binary_diffusion]]` (`species = ["bulk", "h2"]`, `diffusivity` in
+m²/s at the reference temperature and pressure, optional `exponent`). A
+species needs no `diffusivity` or `schmidt` in this model. Boundary and
+initial mass fractions (`mass_fraction = [h2, co2]`) have one value per
+species in the order of the tables; the rest is the carrier. The log lists the
+mixture rules, the wall CSV has `Y_<name>` and `j_<name>`. Exact solutions
+of the two Stefan tubes and the model error: [validation §20](validation.md#sec-20).
+For many species the default SuperLU ordering is slow; set
+
+```toml
+[solver.linear_solver]
+ordering = "colamd"
+```
+
+All keys: [Species](configuration.md#species-mixtures-and-mass-transfer).
 
 [↑ back to top](#recipes)

@@ -21,6 +21,7 @@ Case files are in `examples/cases/`, meshes in `examples/meshes/`
 | 8 | [Airfoil polar in minutes with the viscous panel method](#foil) | incompressible, steady | panels + integral boundary layer |
 | 9 | [Heated cylinder: the thermal wake at Re 40](#heated-cylinder) | incompressible with energy equation, steady | laminar |
 | 10 | [Rayleigh–Bénard convection between two plates](#rayleigh-benard) | incompressible with energy equation, steady, periodic | laminar |
+| 11 | [Three gases in a jet in crossflow: differential diffusion](#jet-species) | incompressible, energy and species, steady | laminar, multicomponent diffusion |
 
 ---
 
@@ -371,5 +372,52 @@ deliberately irregular: the conduction state (Nu = 1) is also a steady
 solution, so a perfectly regular mesh keeps it, while the discretisation
 error of the perturbed mesh starts the rolls. A run that ends after a few
 iterations with Nu = 1 has not started them.
+
+[↑ back to top](#example-gallery)
+
+---
+
+<a id="jet-species"></a>
+## 11. Three gases in a jet in crossflow: differential diffusion
+
+![CO2 mass fraction and the differential diffusion of H2 in a jet in crossflow](figures/gallery/jet_crossflow_species.png)
+
+A jet of CO₂-rich gas (50 % CO₂ by mass, the rest N₂) leaves a slot at 60°
+to the wall into a nitrogen crossflow that carries 3 % hydrogen. Three gases
+with very different molar masses (2, 28 and 44 kg/kmol) and diffusivities mix
+in the same flow. The top panel is the CO₂ the jet carries into the wake. The
+bottom panel shows what a model with one diffusivity per gas would never
+see: the H₂ relative to a passive tracer that moves with the jet fluid. H₂ is
+the fastest diffuser, so it leaves the edge of the jet where it meets the
+crossflow (blue band) and fills the jet and its wake (red, up to 20 % of the
+inflow value) before the flow has time to carry it. The long reversed-flow
+region behind the jet is the 2D blockage of §5 and depends on the domain size.
+The model is the multicomponent diffusion of Hirschfelder and Curtiss with
+Chapman-Enskog diffusion coefficients, Wilke viscosity and Mathur
+conductivity from Lennard-Jones data: only the molecules, no fitted numbers.
+
+| | |
+|---|---|
+| Mesh | structured quads, 15.4k cells, 16 faces across the slot, outflow at 40 slot widths (library `jet-crossflow`) |
+| Flow | Re_d = 100 in N₂, V_j/U = 2, isothermal 300 K, 1 atm, Sc ≈ 0.2 (H₂), 1 (CO₂) |
+| Case files | `jet_crossflow_species.toml` (phase 1, first order), `jet_crossflow_species_second_order.toml` (phase 2, restart); template `jet-crossflow-species` |
+| Run time | phase 1: 35 iterations, 55 s; phase 2: 100 iterations (65 Newton-Krylov), 4 min, laptop-class machine without PARDISO |
+| Validation | the diffusion model: ternary Stefan tubes and the Duncan–Toor reverse diffusion of Taylor and Krishna, [§20](validation.md#sec-20) |
+
+```
+pyaeroflow init jet-crossflow-species -o jet
+cp examples/cases/jet_crossflow_species_second_order.toml jet/
+cd jet
+pyaeroflow run jet_crossflow_species.toml
+pyaeroflow run jet_crossflow_species_second_order.toml
+python ../examples/cases/plot_jet_species.py output/jet_crossflow_species_second_order/jet_crossflow_species_second_order.vtu jet.png
+```
+
+The last script needs `pip install matplotlib meshio`; in ParaView colour the
+`.vtu` by `mass_fraction_2` (CO₂) and `mass_fraction_1` (H₂). The second case
+restarts from the last backup of the first (`initial.restart`, see
+`pyaeroflow restart-info`); starting the second-order scheme from the
+freestream stalls on this case. The recipe for your own mixtures is
+[recipe 22](recipes.md#mixtures).
 
 [↑ back to top](#example-gallery)
