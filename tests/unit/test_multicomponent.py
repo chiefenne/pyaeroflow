@@ -434,3 +434,48 @@ def test_rans_multicomponent_linearization(turbulence):
     )[1]
     np.testing.assert_allclose(jv, fd, atol=1e-7 * np.abs(jv).max())
     assert p.jacobian(w, beta2).shape == (w.size, w.size)
+
+
+def test_duncan_toor_reverse_diffusion():
+    """H2-N2-CO2 of Duncan and Toor (Taylor and Krishna, 1993, p. 21): at the
+    middle of the tube the N2 gradient vanishes, yet N2 diffuses (reverse
+    diffusion). Mixture-averaged diffusion with the correction velocity has the
+    sign and the size of the Stefan-Maxwell flux (within 30 %)."""
+    w = {"n2": 28.0134, "h2": 2.016, "co2": 44.01}
+    species = (
+        th.Species("h2", w["h2"] / w["n2"], th.PropertyLaw("schmidt", 1.0)),
+        th.Species("co2", w["co2"] / w["n2"], th.PropertyLaw("schmidt", 1.0)),
+    )
+    thermo = th.Thermo(
+        th.DensityModel("ideal_gas", pressure=101325.0 * w["n2"] / (8314.46 * 308.15)),
+        th.PropertyLaw("constant", 1.8e-5),
+        th.PropertyLaw("prandtl", 0.72),
+        th.PropertyLaw("constant", 1.0),
+        species,
+        diffusion_model="hirschfelder-curtiss",
+        pair_diffusivity=(
+            th.PropertyLaw("constant", 8.33e-5),  # N2-H2
+            th.PropertyLaw("constant", 1.68e-5),  # N2-CO2
+            th.PropertyLaw("constant", 6.8e-5),  # H2-CO2
+        ),
+    )
+    masses = np.array([w["n2"], w["h2"], w["co2"]])
+
+    def y_of(x):
+        m = np.asarray(x) * masses
+        return m / m.sum()
+
+    x1, x2 = [0.50086, 0.0, 0.49914], [0.49879, 0.50121, 0.0]
+    xm = 0.5 * (np.array(x1) + np.array(x2))
+    y = jnp.asarray(y_of(xm)[1:])
+    g = jnp.asarray(y_of(x2)[1:] - y_of(x1)[1:])
+    t = jnp.array(1.0)
+    hc = np.asarray(th.diffusion_flux(thermo, t, y, g))
+    sm = _stefan_maxwell(thermo, t, y, g, _pair_d(thermo, t))
+    dx = np.asarray(jax.jacfwd(lambda a: th.mole_fractions(thermo, a))(y)) @ np.asarray(
+        g
+    )
+    assert abs(dx[0]) < 0.01 * abs(dx[1])  # no N2 gradient ...
+    assert sm[0] * -hc.sum() > 0.0  # ... both predict the same N2 flux direction
+    np.testing.assert_allclose(-hc.sum(), sm[0], rtol=0.30)
+    np.testing.assert_allclose(hc, sm[1:], rtol=0.30)

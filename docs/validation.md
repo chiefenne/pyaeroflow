@@ -1683,7 +1683,8 @@ viscosities (N₂, O₂, H₂) against tabulated values within 8 %, Wilke air
 at 18.6·10⁻⁶ Pa s, the binary limit equal to Fick's law, equal D_jk
 equal to the Stefan-Maxwell fluxes to 10⁻⁸, and the Stefan-Maxwell error of
 the mixture average for unequal D_jk (25 % for 5 % H₂ by mass; 35 %
-bound in the test). The S1 binary cases are unchanged to the last digit
+bound in the test). *Duncan-Toor reverse diffusion* (Taylor and Krishna,
+*Multicomponent Mass Transfer*, Wiley 1993, p. 21; H₂–N₂–CO₂, 35 °C, 1 atm, D(H₂–N₂) = 8.33, D(N₂–CO₂) = 1.68, D(H₂–CO₂) = 6.8·10⁻⁵ m²/s, the two bulbs of the experiment): in the middle of the tube the N₂ mole fraction gradient vanishes (−0.2 % of that of H₂), yet N₂ diffuses. Both the exact Stefan-Maxwell fluxes and the mixture average with correction velocity give the same direction; the average is 26 % too large for N₂, 16 % too small for H₂ and 11 % too large for CO₂, i.e. the model captures the effect but not its size (a unit test, not a solver run). The S1 binary cases are unchanged to the last digit
 (the Stefan tube of this section gives the same log, 27 iterations).
 
 Not validated yet: more than one transported species in a flow (the unit
